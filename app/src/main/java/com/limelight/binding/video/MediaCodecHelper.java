@@ -40,6 +40,7 @@ public class MediaCodecHelper {
     private static final List<String> refFrameInvalidationHevcPrefixes;
     private static final List<String> useFourSlicesPrefixes;
     private static final List<String> qualcommDecoderPrefixes;
+    private static final List<String> mtkDecoderPrefixes; //ALONSOJR1980
     private static final List<String> kirinDecoderPrefixes;
     private static final List<String> exynosDecoderPrefixes;
     private static final List<String> amlogicDecoderPrefixes;
@@ -228,6 +229,13 @@ public class MediaCodecHelper {
 
         qualcommDecoderPrefixes.add("omx.qcom");
         qualcommDecoderPrefixes.add("c2.qti");
+    }
+
+    //ALONSOJR1980
+    static {
+        mtkDecoderPrefixes = new LinkedList<>();
+
+        mtkDecoderPrefixes.add("c2.mtk");
     }
 
     static {
@@ -575,6 +583,18 @@ public class MediaCodecHelper {
                     videoFormat.setInteger("vendor.qti-ext-output-fence.enable", 1); // Snapdragon 8s Gen 3 and Elite
                     videoFormat.setInteger("vendor.qti-ext-output-fence.fence_type", 1); // Snapdragon 8s Gen 3 and ELite / 0 = none, 1 = sw, 2 = hw, 3 = hybrid. Best option = 1
                     ////////////////////////////////////////////////////////////////////////////////
+
+                    setNewOption = true;
+                }
+            }
+            //ALONSOJR1980
+            else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
+                if (tryNumber < 4) {
+
+                    videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode.value", 2);
+                    videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
+                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
+                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
 
                     setNewOption = true;
                 }
