@@ -235,6 +235,7 @@ public class MediaCodecHelper {
     static {
         mtkDecoderPrefixes = new LinkedList<>();
 
+        mtkDecoderPrefixes.add("omx.mtk");
         mtkDecoderPrefixes.add("c2.mtk");
     }
 
