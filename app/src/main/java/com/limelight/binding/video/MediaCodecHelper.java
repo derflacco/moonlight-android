@@ -591,11 +591,59 @@ public class MediaCodecHelper {
             //ALONSOJR1980
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
-
-                    videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode.value", 2);
+                    videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 2);
                     videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
-                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
-                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
+                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
+                    //videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
+
+            //DERFLACCO
+
+            //  Enable general CPU boost during decoding
+                    videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 2);
+            //  Dolby Vision may use this; can also impact H.264/H.265
+                    videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
+
+            //  Minimum buffer fetch timeout
+                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
+
+            //  Limit input queue depth
+                    videoFormat.setInteger("vendor.mtk.vdec.input.max.queue.depth", 2);
+
+            //  Apply aggressive frame-drop policy
+                    videoFormat.setInteger("vendor.mtk.vdec.frame-drop.policy", 1);
+
+            //  Disable idle mode between frames to reduce latency
+                    videoFormat.setInteger("vendor.mtk.vdec.disable-idle", 1);
+
+            //  Enable official low-latency mode
+                    videoFormat.setInteger("vendor.mtk.vdec.low-latency.mode", 1);
+
+            //  TEST – set preload frame count to 0
+                    videoFormat.setInteger("vendor.mtk.vdec.preload.frame.count", 0);
+
+            //  TEST – ultra-low latency mode (not supported on all SoCs)
+                    videoFormat.setInteger("vendor.mtk.vdec.ultra-low-latency", 1);
+
+            //  Skip NVOP frames (empty frames)
+                    videoFormat.setInteger("vendor.mtk.vdec.nvop.skip", 1);
+
+            //  Skip frame policy (can improve HEVC stream playback)
+                    videoFormat.setInteger("vendor.mtk.vdec.skip.mode", 1);
+
+            //  Drop non-reference frames to optimize performance
+                    videoFormat.setInteger("vendor.mtk.vdec.drop.nonref.frame", 1);
+
+            //  Boost parser thread priority
+                    videoFormat.setInteger("vendor.mtk.vdec.parser.boost", 1);
+
+            //  Force high DVFS (Dynamic Voltage/Frequency Scaling)
+                    videoFormat.setInteger("vendor.mtk.vdec.dvfs.mode", 1);
+
+            //  Set decoding thread to high priority (99 = max for user-space)
+                    videoFormat.setInteger("vendor.mtk.vdec.thread.priority", 99);
+
+            //  Disable V-Sync correction (reduces latency, may introduce tearing)
+                    videoFormat.setInteger("vendor.mtk.vdec.vsync.adjust.enable", 0);
 
                     setNewOption = true;
                 }
