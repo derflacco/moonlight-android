@@ -372,6 +372,8 @@ public class MediaCodecHelper {
                 refFrameInvalidationHevcPrefixes.add("omx.qcom");
                 refFrameInvalidationAvcPrefixes.add("c2.qti");
                 refFrameInvalidationHevcPrefixes.add("c2.qti");
+                refFrameInvalidationAvcPrefixes.add("c2.mtk");
+                refFrameInvalidationHevcPrefixes.add("c2.mtk");
             }
 
             // Qualcomm's early HEVC decoders break hard on our HEVC stream. The best check to
@@ -488,8 +490,10 @@ public class MediaCodecHelper {
         // NB: Even on Android 10, this optimization still provides significant
         // performance gains on Pixel 2.
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                isDecoderInList(qualcommDecoderPrefixes, decoderName) &&
-                !isAdreno620;
+                (
+                        isDecoderInList(qualcommDecoderPrefixes, decoderName)
+                        || isDecoderInList(refFrameInvalidationHevcPrefixes, decoderName)
+                ) && !isAdreno620;
     }
 
     public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, boolean ultraLowLatency, int tryNumber) {
