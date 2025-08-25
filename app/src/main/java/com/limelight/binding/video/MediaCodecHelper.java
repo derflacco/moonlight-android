@@ -597,8 +597,8 @@ public class MediaCodecHelper {
                     videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
                     //  Minimum buffer fetch timeout
                     videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
-                    //  Minimum buffer fetch timeout
-                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
+                    //  Video decoder’s internal buffer queue
+                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
 
             //DERFLACCO
 
