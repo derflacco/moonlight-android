@@ -591,20 +591,16 @@ public class MediaCodecHelper {
             //ALONSOJR1980
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
+                    //  Enable general CPU boost during decoding
                     videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 2);
+                    //  Dolby Vision may use this; can also impact H.264/H.265
                     videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
+                    //  Minimum buffer fetch timeout
                     videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
-                    //videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
+                    //  Minimum buffer fetch timeout
+                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
 
             //DERFLACCO
-
-            //  Enable general CPU boost during decoding
-                    videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 2);
-            //  Dolby Vision may use this; can also impact H.264/H.265
-                    videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
-
-            //  Minimum buffer fetch timeout
-                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
 
             //  Limit input queue depth
                     videoFormat.setInteger("vendor.mtk.vdec.input.max.queue.depth", 2);
@@ -643,7 +639,7 @@ public class MediaCodecHelper {
                     videoFormat.setInteger("vendor.mtk.vdec.thread.priority", 99);
 
             //  Disable V-Sync correction (reduces latency, may introduce tearing)
-                    videoFormat.setInteger("vendor.mtk.vdec.vsync.adjust.enable", 0);
+                    //videoFormat.setInteger("vendor.mtk.vdec.vsync.adjust.enable", 0);
 
                     setNewOption = true;
                 }
