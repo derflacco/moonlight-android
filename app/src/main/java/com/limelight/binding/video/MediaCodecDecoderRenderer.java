@@ -1060,11 +1060,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread = new Thread() {
             @Override
             public void run() {
+                // Boost thread priority to reduce decoding latency
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 0);
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
