@@ -210,7 +210,7 @@ public class MediaCodecHelper {
         useFourSlicesPrefixes.add("omx.google");
         useFourSlicesPrefixes.add("AVCDecoder");
         useFourSlicesPrefixes.add("omx.ffmpeg");
-        useFourSlicesPrefixes.add("c2.android");
+        //useFourSlicesPrefixes.add("c2.android");
 
         // Old Qualcomm decoders are detected at runtime
     }
@@ -595,60 +595,97 @@ public class MediaCodecHelper {
             }
             //ALONSOJR1980
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
-                if (tryNumber < 4) {
-                    //  Enable general CPU boost during decoding
-                    videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 2);
-                    //  Dolby Vision may use this; can also impact H.264/H.265
-                    videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
-                    //  Minimum buffer fetch timeout
-                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
-                    //  Video decoder’s internal buffer queue
-                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
+                {
+                    // If the decoder supports LowLatency, we can assume it's a recent mtk cpu with decent decoding capability -DerFlacco
+                    boolean supportsLowLatency = decoderInfo.getName().toLowerCase().contains("low_latency")
+                            || decoderInfo.getName().toLowerCase().contains("c2.mtk");
 
-            //DERFLACCO
+                    if (supportsLowLatency) {
+                        // Aggressive profile for MTK low-latency decoders
 
-            //  Limit input queue depth
-                    videoFormat.setInteger("vendor.mtk.vdec.input.max.queue.depth", 2);
+                        //  Enable general CPU boost during decoding (sembra passare con logcat, su poco x6 pro funziona)
+                        videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 2);
 
-            //  Apply aggressive frame-drop policy
-                    videoFormat.setInteger("vendor.mtk.vdec.frame-drop.policy", 1);
+                        //  Dolby Vision may use this; can also impact H.264/H.265
+                        //  (non credo serva, ma magari in qualche tv android, tipo TCL)
+                        videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
 
-            //  Disable idle mode between frames to reduce latency
-                    videoFormat.setInteger("vendor.mtk.vdec.disable-idle", 1);
+                        //  Minimum buffer fetch timeout
+                        videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
 
-            //  Enable official low-latency mode
-                    videoFormat.setInteger("vendor.mtk.vdec.low-latency.mode", 1);
+                        //  Video decoder’s internal buffer queue  (senza .value)
+                        videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time", 2);
 
-            //  TEST – set preload frame count to 0
-                    videoFormat.setInteger("vendor.mtk.vdec.preload.frame.count", 0);
+                        //  Limit input queue depth
+                        videoFormat.setInteger("vendor.mtk.vdec.input.max.queue.depth", 2);
+                        videoFormat.setInteger("vendor.mtk.vdec.output.max.queue.depth", 2);
 
-            //  TEST – ultra-low latency mode (not supported on all SoCs)
-                    videoFormat.setInteger("vendor.mtk.vdec.ultra-low-latency", 1);
+                        //  Disable idle mode between frames to reduce latency
+                        videoFormat.setInteger("vendor.mtk.vdec.disable-idle", 1);
 
-            //  Skip NVOP frames (empty frames)
-                    videoFormat.setInteger("vendor.mtk.vdec.nvop.skip", 1);
+                        //  Enable official low-latency mode
+                        videoFormat.setInteger("vendor.mtk.vdec.low-latency.mode", 1);
 
-            //  Skip frame policy (can improve HEVC stream playback)
-                    videoFormat.setInteger("vendor.mtk.vdec.skip.mode", 1);
+                        //  set preload frame count to 0  (meglio 0 per evitare prebuffer)
+                        videoFormat.setInteger("vendor.mtk.vdec.preload.frame.count", 0);
 
-            //  Drop non-reference frames to optimize performance
-                    videoFormat.setInteger("vendor.mtk.vdec.drop.nonref.frame", 1);
+                        //  ultra-low latency mode (not supported on all SoCs)
+                        videoFormat.setInteger("vendor.mtk.vdec.ultra-low-latency", 1);
 
-            //  Boost parser thread priority
-                    videoFormat.setInteger("vendor.mtk.vdec.parser.boost", 1);
+                        //  Skip NVOP frames (empty frames)
+                        videoFormat.setInteger("vendor.mtk.vdec.nvop.skip", 1);
 
-            //  Force high DVFS (Dynamic Voltage/Frequency Scaling)
-                    videoFormat.setInteger("vendor.mtk.vdec.dvfs.mode", 1);
+                        //  Drop non-reference frames to optimize performance
+                        videoFormat.setInteger("vendor.mtk.vdec.drop.nonref.frame", 1);
 
-            //  Set decoding thread to high priority (99 = max for user-space)
-                    videoFormat.setInteger("vendor.mtk.vdec.thread.priority", 99);
+                        //  Boost parser thread priority
+                        videoFormat.setInteger("vendor.mtk.vdec.parser.boost", 1);
 
-            //  Disable V-Sync correction (reduces latency, may introduce tearing)
-                    //videoFormat.setInteger("vendor.mtk.vdec.vsync.adjust.enable", 0);
+                        //  Force high DVFS (Dynamic Voltage/Frequency Scaling)
+                        videoFormat.setInteger("vendor.mtk.vdec.dvfs.mode", 1);
 
+                        //  Disable V-Sync correction (reduces latency, may introduce tearing)
+                        videoFormat.setInteger("vendor.mtk.vdec.vsync.adjust.enable", 0);
+                    }
+else {
+                            // Conservative profile for MTK decoders without low-latency support (e.g., MTK G99)
+
+                            //  Give the decoder more relaxed timing to avoid stutter
+                            videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms", 5);
+                            //  (senza .value)
+                            videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time", 5);
+
+                            //  Deeper queue to avoid under-runs
+                            videoFormat.setInteger("vendor.mtk.vdec.input.max.queue.depth", 2);
+                            videoFormat.setInteger("vendor.mtk.vdec.output.max.queue.depth", 2);
+
+                            //  Keep DVFS boost but avoid ultra-low-latency flags
+                            videoFormat.setInteger("vendor.mtk.vdec.cpu.boost.mode", 1);
+                            videoFormat.setInteger("vendor.mtk.vdec.dvfs.mode", 1);
+
+                            //  Keep parser boost, but drop aggressive skipping
+                            videoFormat.setInteger("vendor.mtk.vdec.parser.boost", 1);
+
+                            //  Disable V-Sync adjust (still helps with latency)
+                            videoFormat.setInteger("vendor.mtk.vdec.vsync.adjust.enable", 0);
+
+                            //  Skip NVOP frames (empty frames)
+                            videoFormat.setInteger("vendor.mtk.vdec.nvop.skip", 1);
+
+                            //  Disable idle mode between frames to reduce latency
+                            videoFormat.setInteger("vendor.mtk.vdec.disable-idle", 1);
+
+                            // Faster catch up
+                            videoFormat.setInteger("vendor.mtk.vdec.drop.nonref.frame", 1);
+                            videoFormat.setInteger("vendor.mtk.vdec.skip.mode", 1);
+
+                            //  Fast preload
+                            videoFormat.setInteger("vendor.mtk.vdec.preload.frame.count", 0);
+                        }
                     setNewOption = true;
                 }
             }
+
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
                     // Kirin low latency options
