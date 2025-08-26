@@ -506,7 +506,8 @@ public class MediaCodecHelper {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
                 (
                         isDecoderInList(qualcommDecoderPrefixes, decoderName)
-                        || isDecoderInList(refFrameInvalidationHevcPrefixes, decoderName)
+                        || isDecoderInList(refFrameInvalidationHevcPrefixes, decoderName) ||
+                           isDecoderInList(refFrameInvalidationAvcPrefixes,  decoderName)
                 ) && !isAdreno620;
     }
 
