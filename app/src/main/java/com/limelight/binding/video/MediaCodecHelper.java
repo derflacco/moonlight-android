@@ -372,8 +372,12 @@ public class MediaCodecHelper {
                 refFrameInvalidationHevcPrefixes.add("omx.qcom");
                 refFrameInvalidationAvcPrefixes.add("c2.qti");
                 refFrameInvalidationHevcPrefixes.add("c2.qti");
+
+                //derflacco
                 refFrameInvalidationAvcPrefixes.add("c2.mtk");
                 refFrameInvalidationHevcPrefixes.add("c2.mtk");
+                refFrameInvalidationAvcPrefixes.add("omx.mtk");
+                refFrameInvalidationHevcPrefixes.add("omx.mtk");
             }
 
             // Qualcomm's early HEVC decoders break hard on our HEVC stream. The best check to
