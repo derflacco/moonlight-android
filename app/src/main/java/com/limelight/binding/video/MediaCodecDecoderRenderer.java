@@ -1066,7 +1066,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 while (!stopping) {
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 0);
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 1000);
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
