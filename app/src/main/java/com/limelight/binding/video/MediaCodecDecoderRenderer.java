@@ -1042,7 +1042,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE);
+        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY);
         choreographerHandlerThread.start();
 
         // Start the frame callbacks
