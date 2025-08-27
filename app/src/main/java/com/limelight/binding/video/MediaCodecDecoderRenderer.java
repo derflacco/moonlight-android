@@ -42,6 +42,13 @@ import android.view.Choreographer;
 import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    // Latency profile: favor minimal end-to-end delay over absolute smoothness.
+    // Set true to enable a 'latest-only' fast path in the render loop.
+    private boolean preferLowerDelays = false;
+
+    // Toggle at runtime if needed
+    public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
+
 
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
@@ -1063,6 +1070,43 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             public void run() {
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
+                /* LATEST_ONLY_LOW_LATENCY */
+                if (preferLowerDelays) {
+                    try {
+                        android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
+                        int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                        int __last = -1;
+                        // Drain non-blocking; keep only the newest buffer
+                        while (__idx >= 0) {
+                            if (__last >= 0) {
+                                try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                            }
+                            __last = __idx;
+                            __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                        }
+                        if (__last >= 0) {
+                            // Simple pacing rule:
+                            // - MTK devices → present immediate (true)
+                            // - Others     → present at "now" timestamp
+                            boolean __isMTK = false;
+                            try {
+                                String sum2 = (android.os.Build.MANUFACTURER + " " + android.os.Build.HARDWARE + " " + android.os.Build.BOARD).toLowerCase(java.util.Locale.US);
+                                __isMTK = sum2.contains("mtk") || sum2.contains("mediatek");
+                            } catch (Throwable ignored) {}
+                            if (__isMTK) {
+                                videoDecoder.releaseOutputBuffer(__last, true);
+                            } else if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                long __now = System.nanoTime();
+                                videoDecoder.releaseOutputBuffer(__last, __now);
+                            } else {
+                                videoDecoder.releaseOutputBuffer(__last, true);
+                            }
+                            continue; // handled this iteration
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                /* /LATEST_ONLY_LOW_LATENCY */
+
                     try {
                         // Try to output a frame
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
