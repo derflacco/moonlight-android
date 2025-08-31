@@ -40,6 +40,8 @@ public class MediaCodecHelper {
     private static final List<String> refFrameInvalidationHevcPrefixes;
     private static final List<String> useFourSlicesPrefixes;
     private static final List<String> qualcommDecoderPrefixes;
+    private static final List<String> tegraDecoderPrefixes;
+
     private static final List<String> mtkDecoderPrefixes; //ALONSOJR1980
     private static final List<String> kirinDecoderPrefixes;
     private static final List<String> exynosDecoderPrefixes;
@@ -229,6 +231,14 @@ public class MediaCodecHelper {
 
         qualcommDecoderPrefixes.add("omx.qcom");
         qualcommDecoderPrefixes.add("c2.qti");
+        qualcommDecoderPrefixes.add("c2.qcom");
+           }
+
+    static {
+        tegraDecoderPrefixes = new LinkedList<>();
+
+        tegraDecoderPrefixes.add("omx.nvidia");
+        tegraDecoderPrefixes.add("c2.nvidia");
     }
 
     //ALONSOJR1980
@@ -259,6 +269,16 @@ public class MediaCodecHelper {
         amlogicDecoderPrefixes.add("omx.amlogic");
         amlogicDecoderPrefixes.add("c2.amlogic"); // Unconfirmed
     }
+
+//derflacco
+    public static boolean isNvidiaDecoder(String decoderName) {
+        return isDecoderInList(tegraDecoderPrefixes, decoderName);
+    }
+
+    public static boolean isQualcommDecoder(String decoderName) {
+        return isDecoderInList(qualcommDecoderPrefixes, decoderName);
+    }
+
 
     private static boolean isPowerVR(String glRenderer) {
         return glRenderer.toLowerCase().contains("powervr");
@@ -386,6 +406,7 @@ public class MediaCodecHelper {
                 refFrameInvalidationHevcPrefixes.add("c2.mtk"); //derflacco
                 refFrameInvalidationAvcPrefixes.add("omx.mtk"); //derflacco
                 refFrameInvalidationHevcPrefixes.add("omx.mtk"); //derflacco
+                refFrameInvalidationHevcPrefixes.add("c2.qcom"); //derflacco
             }
 
             // Qualcomm's early HEVC decoders break hard on our HEVC stream. The best check to
@@ -515,7 +536,16 @@ public class MediaCodecHelper {
 
         boolean setNewOption = false;
 
-        if (tryNumber < 1) {
+//derflacco
+        // NVIDIA Tegra extra low-latency toggles
+        if (isNvidiaDecoder(decoderInfo.getName())) {
+            safeSet(videoFormat, "media.low-latency.enable", 1);
+            safeSet(videoFormat, "vendor.low-latency.enable", 1);
+            safeSet(videoFormat, "disable-output-reorder", 1);
+            safeSet(videoFormat, "vendor.nvidia.disable-output-reorder", 1);
+            setNewOption = true;
+        }
+if (tryNumber < 1) {
             // Official Android 11+ low latency option (KEY_LOW_LATENCY).
             videoFormat.setInteger("low-latency", 1);
             setNewOption = true;
@@ -1132,4 +1162,22 @@ public class MediaCodecHelper {
         }
     }
 
+//derflacco
+    public static void applyExtraVendorOptions(MediaFormat videoFormat, String decoderName) {
+        if (videoFormat == null || decoderName == null) return;
+        // NVIDIA Tegra (Shield TV): enable generic low-latency + disable frame reordering
+        if (isNvidiaDecoder(decoderName)) {
+            safeSet(videoFormat, "media.low-latency.enable", 1);
+            safeSet(videoFormat, "vendor.low-latency.enable", 1); // fallback generic vendor key
+            safeSet(videoFormat, "disable-output-reorder", 1);
+            safeSet(videoFormat, "vendor.nvidia.disable-output-reorder", 1); // in case vendor namespace is required
+        }
+        // Qualcomm: ensure vendor low latency and frame-order tweaks
+        if (isQualcommDecoder(decoderName)) {
+            safeSet(videoFormat, "vendor.qti-ext-dec-low-latency.enable", 1);
+            safeSet(videoFormat, "vendor.qti-ext-dec-picture-order.enable", 0);
+            safeSet(videoFormat, "vendor.qti-ext-dec-frame-drop.enable", 1);
+        }
+    }
+    
 }
