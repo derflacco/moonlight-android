@@ -606,7 +606,10 @@ if (tryNumber < 1) {
                 //
                 // We will first try both, then try vendor.qti-ext-dec-low-latency.enable alone if that fails
                 if (tryNumber < 4) {
-                    videoFormat.setInteger("vendor.qti-ext-dec-picture-order.enable", 1);
+                    // Adjust picture-order flag: 0 for OMX.qcom (disable reordering), 1 for C2.*
+                    boolean __isOmxQcom = decoderInfo.getName() != null &&
+                            decoderInfo.getName().toLowerCase(java.util.Locale.US).startsWith("omx.qcom");
+                    safeSet(videoFormat, "vendor.qti-ext-dec-picture-order.enable", __isOmxQcom ? 0 : 1);
                     setNewOption = true;
                 }
                 if (tryNumber < 5) {
@@ -1188,7 +1191,7 @@ if (tryNumber < 1) {
             // Reduce DPB output delay on older OMX stacks
             safeSet(videoFormat, "vendor.qti-ext-dec-dpb-output-delay.enable", 0);
             // Prefer IDR when possible
-            safeSet(videoFormat, "vendor.qti-ext-dec-picture-type.enable", 1);
+            safeSet(videoFormat, "vendor.qti-ext-dec-picture-type.enable", 0); //ignored in logs
             // Generic AOSP scheduling hints
             try { videoFormat.setInteger(android.media.MediaFormat.KEY_OPERATING_RATE, (int)Short.MAX_VALUE); } catch (Throwable ignored) {}
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
