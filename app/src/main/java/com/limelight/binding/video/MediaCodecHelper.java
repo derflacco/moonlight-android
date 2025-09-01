@@ -693,9 +693,12 @@ public class MediaCodecHelper {
                              safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 1);                     // Light skip on for backlog prevention
                              safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 1);             // Allow dropping non-ref frames
                              safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);             // Default policy; app decides pacing
+                             safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
+                             try { videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE); } catch (Throwable ignored) {}
+                             safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                             }
 
 
-                     }
                         setNewOption = true;
                     }
 
