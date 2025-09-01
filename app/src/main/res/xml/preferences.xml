@@ -465,51 +465,7 @@
             android:title="@string/title_hide_clipboard_content"
             app:iconSpaceReserved="false" />
     </PreferenceCategory>
-
-
-    <PreferenceCategory
-        android:key="category_perf_charts"
-        android:title="@string/category_perf_charts"
-        app:iconSpaceReserved="false">
-
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_enable_perf_charts"
-            android:summary="@string/summary_enable_perf_charts"
-            android:title="@string/title_enable_perf_charts"
-            android:shouldDisableView="false"
-            android:enabled="true"
-            app:iconSpaceReserved="false" />
-
-        <CheckBoxPreference
-            android:defaultValue="true"
-            android:dependency="checkbox_enable_perf_charts"
-            android:key="checkbox_perf_chart_latency"
-            android:summary="@string/summary_perf_chart_latency"
-            android:title="@string/title_perf_chart_latency"
-            android:shouldDisableView="false"
-            app:iconSpaceReserved="false" />
-
-        <CheckBoxPreference
-            android:defaultValue="true"
-            android:dependency="checkbox_enable_perf_charts"
-            android:key="checkbox_perf_chart_decode"
-            android:summary="@string/summary_perf_chart_decode"
-            android:title="@string/title_perf_chart_decode"
-            android:shouldDisableView="false"
-            app:iconSpaceReserved="false" />
-
-        <CheckBoxPreference
-            android:defaultValue="true"
-            android:dependency="checkbox_enable_perf_charts"
-            android:key="checkbox_perf_chart_fps"
-            android:summary="@string/summary_perf_chart_fps"
-            android:title="@string/title_perf_chart_fps"
-            android:shouldDisableView="false"
-            app:iconSpaceReserved="false" />
-
-    </PreferenceCategory>
-
+	
     <PreferenceCategory
         android:key="category_ui_settings"
         android:title="@string/category_ui_settings"
@@ -622,6 +578,41 @@
             android:title="@string/title_checkbox_enable_perf_overlay_bottom"
             app:iconSpaceReserved="false" />
 
+       <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_enable_perf_charts"
+            android:summary="@string/summary_enable_perf_charts"
+            android:title="@string/title_enable_perf_charts"
+            android:shouldDisableView="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="checkbox_enable_perf_charts"
+            android:key="checkbox_perf_chart_latency"
+            android:summary="@string/summary_perf_chart_latency"
+            android:title="@string/title_perf_chart_latency"
+            android:shouldDisableView="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="checkbox_enable_perf_charts"
+            android:key="checkbox_perf_chart_decode"
+            android:summary="@string/summary_perf_chart_decode"
+            android:title="@string/title_perf_chart_decode"
+            android:shouldDisableView="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="checkbox_enable_perf_charts"
+            android:key="checkbox_perf_chart_fps"
+            android:summary="@string/summary_perf_chart_fps"
+            android:title="@string/title_perf_chart_fps"
+            android:shouldDisableView="false"
+            app:iconSpaceReserved="false" />
+			
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_show_overlay_zoom_toggle_button"

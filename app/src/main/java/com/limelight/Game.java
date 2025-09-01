@@ -334,6 +334,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @SuppressLint({"MissingInflatedId", "ClickableViewAccessibility"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        normalizeChartsOverlayPrefs();
+
         super.onCreate(savedInstanceState);
 
         instance = this;
@@ -4440,6 +4442,48 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             chart.setVisibleXRangeMaximum(240); // ~4s @60fps
             chart.moveViewToX(data.getEntryCount());
             chart.invalidate();
+        } catch (Throwable ignored) {}
+    }
+
+
+    // Ensure Charts & Overlay Lite invariants:
+    // - If Charts is enabled but Overlay Lite is off, auto-enable Overlay + Overlay Lite.
+    // - If Overlay Lite is turned off, auto-disable Charts.
+    private void normalizeChartsOverlayPrefs() {
+        try {
+            android.content.SharedPreferences prefs =
+                    androidx.preference.PreferenceManager.getDefaultSharedPreferences(this);
+            boolean charts = prefs.getBoolean("checkbox_enable_perf_charts", false);
+            boolean overlay = prefs.getBoolean("checkbox_enable_perf_overlay", false);
+            boolean overlayLite = prefs.getBoolean("checkbox_enable_perf_overlay_lite", false);
+
+            android.content.SharedPreferences.Editor e = null;
+
+            if (charts && !overlayLite) {
+                if (e == null) e = prefs.edit();
+                e.putBoolean("checkbox_enable_perf_overlay", true);
+                e.putBoolean("checkbox_enable_perf_overlay_lite", true);
+                overlay = true;
+                overlayLite = true;
+            }
+
+            if (!overlayLite && charts) {
+                if (e == null) e = prefs.edit();
+                e.putBoolean("checkbox_enable_perf_charts", false);
+                charts = false;
+            }
+
+            if (e != null) e.apply();
+
+            // Reflect to in-memory config if present
+            try {
+                if (prefConfig != null) {
+                    prefConfig.enablePerfCharts = charts;
+                    prefConfig.enablePerfOverlay = overlay;
+                    prefConfig.enablePerfOverlayLite = overlayLite;
+                }
+            } catch (Throwable ignored) {}
+
         } catch (Throwable ignored) {}
     }
 
