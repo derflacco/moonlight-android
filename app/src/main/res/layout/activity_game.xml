@@ -87,7 +87,43 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"/>
 
-    </LinearLayout>
+
+
+<!-- Performance Charts (MPAndroidChart) -->
+<com.github.mikephil.charting.charts.LineChart
+    android:id="@+id/perfChartLatency"
+    android:layout_width="match_parent"
+    android:layout_height="130dp"
+    android:layout_marginStart="10dp"
+    android:layout_marginEnd="10dp"
+    android:layout_marginTop="6dp"
+    android:background="#80000000"
+    android:visibility="gone"
+    android:contentDescription="@string/desc_chart_latency"/>
+
+<com.github.mikephil.charting.charts.LineChart
+    android:id="@+id/perfChartDecode"
+    android:layout_width="match_parent"
+    android:layout_height="130dp"
+    android:layout_marginStart="10dp"
+    android:layout_marginEnd="10dp"
+    android:layout_marginTop="6dp"
+    android:background="#80000000"
+    android:visibility="gone"
+    android:contentDescription="@string/desc_chart_decode"/>
+
+<com.github.mikephil.charting.charts.LineChart
+    android:id="@+id/perfChartFps"
+    android:layout_width="match_parent"
+    android:layout_height="130dp"
+    android:layout_marginStart="10dp"
+    android:layout_marginEnd="10dp"
+    android:layout_marginTop="6dp"
+    android:layout_marginBottom="6dp"
+    android:background="#80000000"
+    android:visibility="gone"
+    android:contentDescription="@string/desc_chart_fps"/>
+</LinearLayout>
 
     <!-- Floating Menu Button -->
     <ImageButton

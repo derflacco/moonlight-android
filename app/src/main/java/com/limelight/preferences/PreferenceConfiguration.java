@@ -70,6 +70,10 @@ public class PreferenceConfiguration {
     private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
+    private static final String ENABLE_PERF_CHARTS_STRING = "checkbox_enable_perf_charts";
+    private static final String PERF_CHART_LATENCY_STRING = "checkbox_perf_chart_latency";
+    private static final String PERF_CHART_DECODE_STRING = "checkbox_perf_chart_decode";
+    private static final String PERF_CHART_FPS_STRING = "checkbox_perf_chart_fps";
     private static final String ENABLE_PERF_LOGGING = "checkbox_enable_perf_logging";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
@@ -80,7 +84,7 @@ public class PreferenceConfiguration {
     private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
     private static final String VIBRATE_FALLBACK_STRENGTH_PREF_STRING = "seekbar_vibrate_fallback_strength";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
-//    static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
+    //    static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String LOW_LATENCY_FRAME_BALANCE_PREF_STRING = "pref_low_latency_frame_balance";
@@ -220,7 +224,7 @@ public class PreferenceConfiguration {
 
     public int width, height, bitrate;
     public float fps;
-//    public String customBitrate;
+    //    public String customBitrate;
     public boolean forceTightThresholds = false; // default off
     public boolean enableUltraLowLatency;
     public String customResolution;
@@ -258,6 +262,10 @@ public class PreferenceConfiguration {
     public boolean enablePerfLogging;
     //简化版性能信息
     public boolean enablePerfOverlayLite;
+    public boolean enablePerfCharts;
+    public boolean perfChartLatency;
+    public boolean perfChartDecode;
+    public boolean perfChartFps;
 
     public boolean enablePerfOverlayLiteDialog;
 
@@ -484,22 +492,22 @@ public class PreferenceConfiguration {
         // TODO: Collect some empirical data to see if these defaults make sense.
         // We're just using the values that the Shield used, as we have for years.
         int[] pixelVals = {
-            640 * 360,
-            854 * 480,
-            1280 * 720,
-            1920 * 1080,
-            2560 * 1440,
-            3840 * 2160,
-            -1,
+                640 * 360,
+                854 * 480,
+                1280 * 720,
+                1920 * 1080,
+                2560 * 1440,
+                3840 * 2160,
+                -1,
         };
         int[] factorVals = {
-            1,
-            2,
-            5,
-            10,
-            20,
-            40,
-            -1
+                1,
+                2,
+                5,
+                10,
+                20,
+                40,
+                -1
         };
 
         // Calculate the resolution factor by linear interpolation of the resolution table
@@ -605,13 +613,13 @@ public class PreferenceConfiguration {
         return prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
     }
 
-    
+
     public static boolean getPreferLowerDelays(Context context) {
         SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
         // default true: favor lower delay unless user opts out
         return prefs.getBoolean(LOW_LATENCY_FRAME_BALANCE_PREF_STRING, false);
     }
-private static int getFramePacingValue(Context context) {
+    private static int getFramePacingValue(Context context) {
         SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
 
         // Migrate legacy never drop frames option to the new location
@@ -895,6 +903,10 @@ private static int getFramePacingValue(Context context) {
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfLogging = prefs.getBoolean(ENABLE_PERF_LOGGING, DEFAULT_ENABLE_PERF_LOGGING);
         config.enablePerfOverlayLite = prefs.getBoolean("checkbox_enable_perf_overlay_lite",DEFAULT_ENABLE_PERF_OVERLAY);
+        config.enablePerfCharts = prefs.getBoolean(ENABLE_PERF_CHARTS_STRING, false);
+        config.perfChartLatency = prefs.getBoolean(PERF_CHART_LATENCY_STRING, true);
+        config.perfChartDecode  = prefs.getBoolean(PERF_CHART_DECODE_STRING, true);
+        config.perfChartFps     = prefs.getBoolean(PERF_CHART_FPS_STRING, true);
         config.enablePerfOverlayBottom = prefs.getBoolean("checkbox_enable_perf_overlay_bottom",DEFAULT_PERF_OVERLAY_BOTTOM);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
