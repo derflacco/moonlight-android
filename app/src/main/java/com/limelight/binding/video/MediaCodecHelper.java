@@ -26,7 +26,7 @@ import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 
 public class MediaCodecHelper {
-    
+
     private static final List<String> preferredDecoders;
 
     private static final List<String> blacklistedDecoderPrefixes;
@@ -86,7 +86,7 @@ public class MediaCodecHelper {
     static {
         preferredDecoders = new LinkedList<>();
     }
-    
+
     static {
         blacklistedDecoderPrefixes = new LinkedList<>();
 
@@ -110,7 +110,7 @@ public class MediaCodecHelper {
         blacklistedDecoderPrefixes.add("OMX.qcom.video.decoder.hevcswvdec");
         blacklistedDecoderPrefixes.add("OMX.SEC.hevc.sw.dec");
     }
-    
+
     static {
         // If a decoder qualifies for reference frame invalidation,
         // these entries will be ignored for those decoders.
@@ -232,7 +232,7 @@ public class MediaCodecHelper {
         qualcommDecoderPrefixes.add("omx.qcom");
         qualcommDecoderPrefixes.add("c2.qti");
         qualcommDecoderPrefixes.add("c2.qcom");
-           }
+    }
 
     static {
         tegraDecoderPrefixes = new LinkedList<>();
@@ -270,7 +270,7 @@ public class MediaCodecHelper {
         amlogicDecoderPrefixes.add("c2.amlogic"); // Unconfirmed
     }
 
-//derflacco
+    //derflacco
     public static boolean isNvidiaDecoder(String decoderName) {
         return isDecoderInList(tegraDecoderPrefixes, decoderName);
     }
@@ -463,7 +463,7 @@ public class MediaCodecHelper {
                 }
             }
         }
-        
+
         return false;
     }
 
@@ -525,8 +525,8 @@ public class MediaCodecHelper {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
                 (
                         isDecoderInList(qualcommDecoderPrefixes, decoderName)
-                        || isDecoderInList(refFrameInvalidationHevcPrefixes, decoderName) ||
-                           isDecoderInList(refFrameInvalidationAvcPrefixes,  decoderName)
+                                || isDecoderInList(refFrameInvalidationHevcPrefixes, decoderName) ||
+                                isDecoderInList(refFrameInvalidationAvcPrefixes,  decoderName)
                 ) && !isAdreno620;
     }
 
@@ -545,7 +545,7 @@ public class MediaCodecHelper {
             safeSet(videoFormat, "vendor.nvidia.disable-output-reorder", 1);
             setNewOption = true;
         }
-if (tryNumber < 1) {
+        if (tryNumber < 1) {
             // Official Android 11+ low latency option (KEY_LOW_LATENCY).
             videoFormat.setInteger("low-latency", 1);
             setNewOption = true;
@@ -634,51 +634,70 @@ if (tryNumber < 1) {
 //                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
 //                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
-                //derflacco
-                if (ultraLowLatency) {
-                {
-                    // If the decoder supports LowLatency, we can assume it's a recent mtk cpu with decent decoding capability
-                    boolean supportsLowLatency = decoderInfo.getName().toLowerCase().contains("low_latency")
-                            || decoderInfo.getName().toLowerCase().contains("c2.mtk");
+                // If the decoder supports LowLatency, we can assume it's a recent mtk cpu with decent decoding capability
+                boolean supportsLowLatency = decoderInfo.getName().toLowerCase().contains("low_latency")
+                        || decoderInfo.getName().toLowerCase().contains("c2.mtk");
 
-                    if (supportsLowLatency) {
-                    // Aggressive profile for MTK low-latency decoders
-                        safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 2);           // Stronger CPU boost for decoder threads
-                        safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost", 1);    // Extra CPU boost when Dolby Vision paths are used
-                        safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);  // Internal buffer-fetch timeout (ms); lower can cut stalls
-                        safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 2);   // Guard interval for decoder buffer queue; smaller = tighter pacing
-                        safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 2);    // Max input queue depth; lower = less pipeline buffering
-                        safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 2);   // Max output queue depth; lower = lower display latency
-                        safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);             // Keep decoder from idling to avoid clock drop/sleep
-                        safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);         // Enable decoder low-latency path
-                        safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);      // Preload 0 frames; no prebuffering for latency
-                        safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);        // Toggle ultra-low-latency path (0=off, 1=on)
-                        safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);                // Skip NVOP/no-op frames to reduce overhead
-                        safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 0);                // Frame-skip policy (0=off/conservative)
-                        safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);        // Frame-drop policy (0=default/no forced drops)
-                        safeSet(videoFormat, "vendor.mtk.vdec.parser.boost", 1);             // Boost bitstream parser workload
-                        safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);                // DVFS bias toward performance
-                        safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);      // Disable decoder vsync pacing/adjust to avoid interference
+                         if (supportsLowLatency) {
+                             // --- PRESET: Low-Latency (tight queues, short timeouts, boost on) ---
 
-                     // Conservative profile for MTK decoders without low-latency support (e.g., G99 , Dimensity 7200)
+                             // Pipeline depth: keep queues shallow to reduce buffering latency
+                             // Aggressive profile for MTK low-latency decoders
+                             safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 2);           // Stronger CPU boost for decoder threads
+                             safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost", 1);    // Extra CPU boost when Dolby Vision paths are used
+                             safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);  // Internal buffer-fetch timeout (ms); lower can cut stalls
+                             safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 2);   // Guard interval for decoder buffer queue; smaller = tighter pacing
+                             safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 2);    // Max input queue depth; lower = less pipeline buffering
+                             safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 2);   // Max output queue depth; lower = lower display latency
+                             safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);             // Keep decoder from idling to avoid clock drop/sleep
+                             safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);         // Enable decoder low-latency path
+                             safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);      // Preload 0 frames; no prebuffering for latency
+                             safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);        // Toggle ultra-low-latency path (0=off, 1=on)
+                             safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);                // Skip NVOP/no-op frames to reduce overhead
+                             safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 0);                // Frame-skip policy (0=off/conservative)
+                             safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);        // Frame-drop policy (0=default/no forced drops)
+                             safeSet(videoFormat, "vendor.mtk.vdec.parser.boost", 1);             // Boost bitstream parser workload
+                             safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);                // DVFS bias toward performance
+                             safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);        // Default drop policy; app controls pacing
+                         } else {
+                             // --- PRESET: Conservative (deeper queues, longer timeouts, still brisk) ---
 
-                        safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 4);  // Slightly longer fetch timeout for stability
-                        safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 4);   // Wider guard interval; reduce contention
-                        safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 4);    // Deeper input queue; smoother under load
-                        safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 4);   // Deeper output queue; fewer underruns
-                        safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);           // Mild CPU boost
-                        safeSet(videoFormat, "vendor.mtk.vdec.parser.boost", 1);             // Keep parser boosted even in conservative mode
-                        safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);      // Keep vsync adjust off
-                        safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);                // Skip NVOP frames
-                        safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);             // Prevent idle to avoid wake-up penalties
-                        safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 1);        // Allow dropping non-reference frames under stress
-                        safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 1);                // Light/controlled frame skipping enabled
-                        safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);      // No preloaded frames
+                             // Pipeline depth: slightly deeper to absorb jitter
+                             safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 4);         // Input queue depth: stability > raw latency
+                             safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth.value", 4);   // Explicit *.value
+                             safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 4);        // Output queue depth: fewer underruns
+                             safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth.value", 4);  // Explicit *.value
+                             safeSet(videoFormat, "vendor.mtk.vdec.queue.depth", 4);                   // Global queue depth
+
+                             // Timeouts: a bit longer to reduce false timeouts on slower paths
+                             safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 4);       // Fetch timeout (ms): stability-focused
+                             safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 4); // Explicit *.value
+                             safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 4);        // Wider guard interval
+                             safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time.value", 4);  // Explicit *.value
+
+                             // Boost: mild but persistent performance bias
+                             safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);                // Mild decoder CPU boost
+                             safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);          // Explicit *.value
+                             safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost", 1);         // Keep DV boost available
+                             safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost.value", 1);   // Explicit *.value
+                             safeSet(videoFormat, "vendor.mtk.vdec.parser.boost", 1);                  // Keep parser boosted
+                             safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);                     // DVFS performance bias
+                             safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);                    // Minimum DVFS level
+
+                             // Preload & LL hints maintained, but with safer pacing
+                             safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 1);             // Keep ULL path on when available
+                             safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);           // No prebuffering
+
+                             // Drop/skip: enable light skip to prevent runaway latency under load
+                             safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);                     // Skip NVOP frames
+                             safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 1);                     // Light skip on for backlog prevention
+                             safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 1);             // Allow dropping non-ref frames
+                             safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);             // Default policy; app decides pacing
+
+
+                     }
+                        setNewOption = true;
                     }
-                }
-                    setNewOption = true;
-                }
-            }
 
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
@@ -754,7 +773,7 @@ if (tryNumber < 1) {
     public static boolean decoderCanDirectSubmit(String decoderName) {
         return isDecoderInList(directSubmitPrefixes, decoderName) && !isExynos4Device();
     }
-    
+
     public static boolean decoderNeedsSpsBitstreamRestrictions(String decoderName) {
         return isDecoderInList(spsFixupBitstreamFixupDecoderPrefixes, decoderName);
     }
@@ -892,7 +911,7 @@ if (tryNumber < 1) {
 
         return infoList;
     }
-    
+
     @SuppressWarnings("RedundantThrows")
     public static String dumpDecoders() throws Exception {
         String str = "";
@@ -901,12 +920,12 @@ if (tryNumber < 1) {
             if (codecInfo.isEncoder()) {
                 continue;
             }
-            
+
             str += "Decoder: "+codecInfo.getName()+"\n";
             for (String type : codecInfo.getSupportedTypes()) {
                 str += "\t"+type+"\n";
                 CodecCapabilities caps = codecInfo.getCapabilitiesForType(type);
-                
+
                 for (CodecProfileLevel profile : caps.profileLevels) {
                     str += "\t\t"+profile.profile+" "+profile.level+"\n";
                 }
@@ -914,7 +933,7 @@ if (tryNumber < 1) {
         }
         return str;
     }
-    
+
     private static MediaCodecInfo findPreferredDecoder() {
         // This is a different algorithm than the other findXXXDecoder functions,
         // because we want to evaluate the decoders in our list's order
@@ -923,14 +942,14 @@ if (tryNumber < 1) {
         if (!initialized) {
             throw new IllegalStateException("MediaCodecHelper must be initialized before use");
         }
-        
+
         for (String preferredDecoder : preferredDecoders) {
             for (MediaCodecInfo codecInfo : getMediaCodecList()) {
                 // Skip encoders
                 if (codecInfo.isEncoder()) {
                     continue;
                 }
-                
+
                 // Check for preferred decoders
                 if (preferredDecoder.equalsIgnoreCase(codecInfo.getName())) {
                     LimeLog.info("Preferred decoder choice is "+codecInfo.getName());
@@ -938,7 +957,7 @@ if (tryNumber < 1) {
                 }
             }
         }
-        
+
         return null;
     }
 
@@ -959,7 +978,7 @@ if (tryNumber < 1) {
 
         return false;
     }
-    
+
     public static MediaCodecInfo findFirstDecoder(String mimeType) {
         for (MediaCodecInfo codecInfo : getMediaCodecList()) {
             // Skip encoders
@@ -973,7 +992,7 @@ if (tryNumber < 1) {
                     continue;
                 }
             }
-            
+
             // Find a decoder that supports the specified video format
             for (String mime : codecInfo.getSupportedTypes()) {
                 if (mime.equalsIgnoreCase(mimeType)) {
@@ -987,17 +1006,17 @@ if (tryNumber < 1) {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     public static MediaCodecInfo findProbableSafeDecoder(String mimeType, int requiredProfile) {
         // First look for a preferred decoder by name
         MediaCodecInfo info = findPreferredDecoder();
         if (info != null) {
             return info;
         }
-        
+
         // Now look for decoders we know are safe
         try {
             // If this function completes, it will determine if the decoder is safe
@@ -1070,10 +1089,10 @@ if (tryNumber < 1) {
                 }
             }
         }
-        
+
         return null;
     }
-    
+
     public static String readCpuinfo() throws Exception {
         StringBuilder cpuInfo = new StringBuilder();
         try (final BufferedReader br = new BufferedReader(new FileReader(new File("/proc/cpuinfo")))) {
@@ -1087,22 +1106,22 @@ if (tryNumber < 1) {
             return cpuInfo.toString();
         }
     }
-    
+
     private static boolean stringContainsIgnoreCase(String string, String substring) {
         return string.toLowerCase(Locale.ENGLISH).contains(substring.toLowerCase(Locale.ENGLISH));
     }
-    
+
     public static boolean isExynos4Device() {
         try {
             // Try reading CPU info too look for 
             String cpuInfo = readCpuinfo();
-            
+
             // SMDK4xxx is Exynos 4 
             if (stringContainsIgnoreCase(cpuInfo, "SMDK4")) {
                 LimeLog.info("Found SMDK4 in /proc/cpuinfo");
                 return true;
             }
-            
+
             // If we see "Exynos 4" also we'll count it
             if (stringContainsIgnoreCase(cpuInfo, "Exynos 4")) {
                 LimeLog.info("Found Exynos 4 in /proc/cpuinfo");
@@ -1111,7 +1130,7 @@ if (tryNumber < 1) {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        
+
         try {
             File systemDir = new File("/sys/devices/system");
             File[] files = systemDir.listFiles();
@@ -1126,7 +1145,7 @@ if (tryNumber < 1) {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        
+
         return false;
     }
 
@@ -1165,7 +1184,7 @@ if (tryNumber < 1) {
         }
     }
 
-//derflacco
+    //derflacco
     public static void applyExtraVendorOptions(MediaFormat videoFormat, String decoderName) {
         if (videoFormat == null || decoderName == null) return;
         // NVIDIA Tegra (Shield TV): enable generic low-latency + disable frame reordering
@@ -1181,7 +1200,7 @@ if (tryNumber < 1) {
             safeSet(videoFormat, "vendor.qti-ext-dec-picture-order.enable", 0);
             safeSet(videoFormat, "vendor.qti-ext-dec-frame-drop.enable", 1);
         }
-    
+
         // Legacy Qualcomm OMX decoders: apply vendor keys + AOSP knobs
         if (decoderName != null && decoderName.toLowerCase(java.util.Locale.US).startsWith("omx.qcom")) {
             // Low latency & reordering off
@@ -1198,6 +1217,6 @@ if (tryNumber < 1) {
                 try { videoFormat.setInteger(android.media.MediaFormat.KEY_PRIORITY, 0); } catch (Throwable ignored) {}
             }
         }
-}
-    
+    }
+
 }
