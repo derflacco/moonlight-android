@@ -638,6 +638,7 @@ public class MediaCodecHelper {
                     // --- PRESET: MTK Low-Latency (safe & balanced, no duplicates) ---
 
                     // Boost/DVFS: moderate profile
+                    safeSet(videoFormat, "vdec-lowlatency", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);
