@@ -634,73 +634,42 @@ public class MediaCodecHelper {
 //                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
 //                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
-                // If the decoder supports LowLatency, we can assume it's a recent mtk cpu with decent decoding capability
-                boolean supportsLowLatency = decoderInfo.getName().toLowerCase().contains("low_latency")
-                        || decoderInfo.getName().toLowerCase().contains("c2.mtk");
+                if (tryNumber < 4) {
+                    // --- PRESET: MTK Low-Latency (safe & balanced, no duplicates) ---
 
-                         if (supportsLowLatency) {
-                             // --- PRESET: Low-Latency (tight queues, short timeouts, boost on) ---
+                    // Boost/DVFS: moderate profile
+                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);
 
-                             // Pipeline depth: keep queues shallow to reduce buffering latency
-                             // Aggressive profile for MTK low-latency decoders
-                             safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 2);           // Stronger CPU boost for decoder threads
-                             safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost", 1);    // Extra CPU boost when Dolby Vision paths are used
-                             safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);  // Internal buffer-fetch timeout (ms); lower can cut stalls
-                             safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 2);   // Guard interval for decoder buffer queue; smaller = tighter pacing
-                             safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 2);    // Max input queue depth; lower = less pipeline buffering
-                             safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 2);   // Max output queue depth; lower = lower display latency
-                             safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);             // Keep decoder from idling to avoid clock drop/sleep
-                             safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);         // Enable decoder low-latency path
-                             safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);      // Preload 0 frames; no prebuffering for latency
-                             safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);        // Toggle ultra-low-latency path (0=off, 1=on)
-                             safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);                // Skip NVOP/no-op frames to reduce overhead
-                             safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 0);                // Frame-skip policy (0=off/conservative)
-                             safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);        // Frame-drop policy (0=default/no forced drops)
-                             safeSet(videoFormat, "vendor.mtk.vdec.parser.boost", 1);             // Boost bitstream parser workload
-                             safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);                // DVFS bias toward performance
-                             safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);        // Default drop policy; app controls pacing
-                         } else {
-                             // --- PRESET: Conservative (deeper queues, longer timeouts, still brisk) ---
+                    // Pipeline / code path
+                    safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
+                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
+                    safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
+                    safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
 
-                             // Pipeline depth: slightly deeper to absorb jitter
-                             safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 4);         // Input queue depth: stability > raw latency
-                             safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth.value", 4);   // Explicit *.value
-                             safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 4);        // Output queue depth: fewer underruns
-                             safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth.value", 4);  // Explicit *.value
-                             safeSet(videoFormat, "vendor.mtk.vdec.queue.depth", 4);                   // Global queue depth
+                    // Queue / timeouts (moderate)
+                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 4);
+                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 4);
+                    safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 3);
+                    safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 3);
 
-                             // Timeouts: a bit longer to reduce false timeouts on slower paths
-                             safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 4);       // Fetch timeout (ms): stability-focused
-                             safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 4); // Explicit *.value
-                             safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 4);        // Wider guard interval
-                             safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time.value", 4);  // Explicit *.value
+                    // Pacing: controlled by the app
+                    safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);
 
-                             // Boost: mild but persistent performance bias
-                             safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);                // Mild decoder CPU boost
-                             safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);          // Explicit *.value
-                             safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost", 1);         // Keep DV boost available
-                             safeSet(videoFormat, "vendor.mtk.ext.dolby.vision.cpu-boost.value", 1);   // Explicit *.value
-                             safeSet(videoFormat, "vendor.mtk.vdec.parser.boost", 1);                  // Keep parser boosted
-                             safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);                     // DVFS performance bias
-                             safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);                    // Minimum DVFS level
+                    // Skip/drop: only NVOP
+                    safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 0);
+                    safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 0);
+                    safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);
 
-                             // Preload & LL hints maintained, but with safer pacing
-                             safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 1);             // Keep ULL path on when available
-                             safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);           // No prebuffering
-
-                             // Drop/skip: enable light skip to prevent runaway latency under load
-                             safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);                     // Skip NVOP frames
-                             safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 1);                     // Light skip on for backlog prevention
-                             safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 1);             // Allow dropping non-ref frames
-                             safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);             // Default policy; app decides pacing
-                             safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
-                             try { videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE); } catch (Throwable ignored) {}
-                             safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
-                             }
-
-
-                        setNewOption = true;
-                    }
+                    // Standard Android hints
+                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
+                    safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                }
+                setNewOption = true;
+            }
 
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
