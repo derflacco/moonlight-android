@@ -752,20 +752,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         adaptivePlayback = MediaCodecHelper.decoderSupportsAdaptivePlayback(selectedDecoderInfo, mimeType);
         fusedIdrFrame = MediaCodecHelper.decoderSupportsFusedIdrFrame(selectedDecoderInfo, mimeType);
 
-        // Disable latest-only low latency path on NVIDIA decoders (pacing is solid; LFR not needed)
-        if (MediaCodecHelper.isNvidiaDecoder(selectedDecoderInfo.getName()) && preferLowerDelays) {
-            LimeLog.info("PreferLowerDelays overridden for NVIDIA decoder");
-            preferLowerDelays = false;
-        }
-
-
         for (int tryNumber = 0;; tryNumber++) {
             LimeLog.info("Decoder configuration try: "+tryNumber);
 
             MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
-        // Apply vendor-specific extras (NVIDIA/Qualcomm)
-        MediaCodecHelper.applyExtraVendorOptions(mediaFormat, selectedDecoderInfo.getName());
-
             // This will try low latency options until we find one that works (or we give up).
             boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
             //todo 色彩格式
