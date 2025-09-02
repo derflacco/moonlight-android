@@ -1765,9 +1765,32 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping) {
-                nextInputBufferIndex = nextInputIndex(10000);
+// If we don't have an input buffer index yet, fetch one now
+            if (nextInputBufferIndex < 0 && !stopping) {
+                final boolean latestOnly = (prefs != null) && prefs.preferLowerDelays; // ULL/LFR
+                final boolean antiLag    = (prefs != null) && prefs.enableAntiLag;
+
+                if (latestOnly || antiLag) {
+                    // ULL path: micro-poll per non bloccare la RX thread
+                    final int stepUs   = 250;   // 0.25 ms
+                    final int maxWait  = 2000;  // 2.0 ms cap
+                    int waited = 0;
+
+                    while (nextInputBufferIndex < 0 && !stopping && waited < maxWait) {
+                        nextInputBufferIndex = videoDecoder.dequeueInputBuffer(stepUs);
+                        if (nextInputBufferIndex < 0) waited += stepUs;
+                    }
+
+                    // Nessun buffer? In ULL preferiamo non bloccare: il chiamante potrà droppare o chiedere IDR
+                    if (nextInputBufferIndex < 0) {
+                        return false;
+                    }
+                } else {
+                    // Balanced / Max Smoothness: comportamento classico (può bloccare fino a 10 ms)
+                    while (nextInputBufferIndex < 0 && !stopping) {
+                        nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10_000);
+                    }
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
