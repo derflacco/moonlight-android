@@ -646,7 +646,7 @@ public class MediaCodecHelper {
 
                     // Pipeline / code path
                     safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
-                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
+                   // safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
                     safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
                     safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
 
@@ -666,8 +666,10 @@ public class MediaCodecHelper {
                     safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);
 
                     // Standard Android hints
-                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
-                    safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                    try { videoFormat.setInteger(android.media.MediaFormat.KEY_OPERATING_RATE, (int)Short.MAX_VALUE); } catch (Throwable ignored) {}
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        try { videoFormat.setInteger(android.media.MediaFormat.KEY_PRIORITY, 0); } catch (Throwable ignored) {}
+                    }
                 }
                 setNewOption = true;
             }
