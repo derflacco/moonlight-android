@@ -79,7 +79,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             } catch (Throwable ignored) {}
         }
     }
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? Math.max(250, preferLowerDelaysTimeoutUs) : preferLowerDelaysTimeoutUs; }
+    private int getOutputDequeueTimeoutUs(){
+        // In ULL leave a small configurable timeout (min 250us) to avoid burning CPU spinning.
+        // In non-ULL use 0 for strict 'latest-only' rendering with no blocking.
+        return preferLowerDelays ? Math.max(250, preferLowerDelaysTimeoutUs) : 0;
+    }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
@@ -1088,38 +1092,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             Integer nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != null) {
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                         if (preferLowerDelays) {
-                            // ULL: present at next VSYNC (no scheduling)
-                            releaseWithPolicy(nextOutputBuffer, System.nanoTime());} else {
+                            // ULL: present at next VSYNC (no timestamp scheduling)
+                            releaseWithPolicy(nextOutputBuffer, java.lang.System.nanoTime());
+                        } else {
                             // Smooth/Balanced: keep timestamp scheduling
                             videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
                         }
-
+                    } else {
+                        // Pre-21: no timestamped release available
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, /* render */ true);
                     }
-                    else {
-                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                            long __ts = System.nanoTime();
-                            releaseWithPolicy(nextOutputBuffer, System.nanoTime());} else {
-                            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                long __ts = System.nanoTime();
-                                releaseWithPolicy(nextOutputBuffer, frameTimeNanos);} else {
-                                releaseWithPolicy(nextOutputBuffer, frameTimeNanos);}
-                        }
-                    }
-
-                    lastRenderedFrameTimeNanos = frameTimeNanos;
-                    activeWindowVideoStats.totalFramesRendered++;
-                } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
-                    }
-                }
+                } catch (Throwable ignored) {}
+                lastRenderedFrameTimeNanos = frameTimeNanos;
             }
         }
 
@@ -1675,7 +1661,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void cleanup() {
-        videoDecoder.release();
+        if (videoDecoder != null) {
+            try { videoDecoder.release(); } catch (Throwable ignored) {}
+            videoDecoder = null;
+        }
     }
 
     @Override
