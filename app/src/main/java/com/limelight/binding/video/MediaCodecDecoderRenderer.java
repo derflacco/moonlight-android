@@ -1527,8 +1527,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         try {
             // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping) {
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+            {
+                // Avoid blocking the network/ingest thread here. Try short polls with a tight cap.
+                // Total wait <= ~2 ms in small steps to prevent RX back-pressure.
+                final int stepUs = 250;           // 0.25 ms
+                final int maxWaitUs = 2000;       // 2.0 ms cap
+                int waitedUs = 0;
+
+                while (nextInputBufferIndex < 0 && !stopping && waitedUs < maxWaitUs) {
+                    nextInputBufferIndex = videoDecoder.dequeueInputBuffer(stepUs);
+                    if (nextInputBufferIndex < 0) {
+                        waitedUs += stepUs;
+                    }
+                }
+
+                // If we still don't have a buffer, bail out so the caller can request an IDR or drop.
+                if (nextInputBufferIndex < 0) {
+                    return false;
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
