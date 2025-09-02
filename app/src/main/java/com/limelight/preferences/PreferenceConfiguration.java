@@ -45,6 +45,7 @@ public class PreferenceConfiguration {
     private static final String BITRATE_PREF_OLD_STRING = "seekbar_bitrate";
     private static final String METERED_BITRATE_PREF_STRING = "seekbar_metered_bitrate_kbps";
     private static final String ENABLE_ULTRA_LOW_LATENCY_PREF_STRING = "checkbox_ultra_low_latency";
+    private static final String PREFER_BIG_CORES_PREF_STRING = "checkbox_prefer_big_cores";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
     private static final String AUTO_INVERT_VIDEO_RESOLUTION_PREF_STRING = "checkbox_auto_invert_video_resolution";
@@ -357,6 +358,7 @@ public class PreferenceConfiguration {
     public boolean mouseNavButtons;
     public boolean rememberMouseMode;
     public boolean unlockFps;
+    public boolean preferBigCores;
     public boolean preferLowerDelays;
 
     public boolean vibrateOsc;
@@ -857,6 +859,8 @@ private static int getFramePacingValue(Context context) {
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
         config.preferLowerDelays = getPreferLowerDelays(context);
+        // Big cores preference (non-root)
+        config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, false);
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");

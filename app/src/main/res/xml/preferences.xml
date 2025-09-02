@@ -968,7 +968,15 @@
             android:summary="@string/summary_prevent_packet_loss"
             android:title="@string/title_prevent_packet_loss"
             app:iconSpaceReserved="false" />
-    </PreferenceCategory>
+    
+
+<CheckBoxPreference
+    android:defaultValue="false"
+    android:key="checkbox_prefer_big_cores"
+    android:title="@string/title_prefer_big_cores"
+    android:summary="@string/summary_prefer_big_cores"
+    app:iconSpaceReserved="false" />
+</PreferenceCategory>
 
     <PreferenceCategory
         android:key="category_settings_misc"
