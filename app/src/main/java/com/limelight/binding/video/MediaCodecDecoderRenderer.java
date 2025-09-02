@@ -46,6 +46,7 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import com.limelight.Game;
 import android.os.Looper;
+import java.util.concurrent.locks.LockSupport;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
  //Gpu kick buffer
@@ -89,7 +90,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         } catch (Throwable ignored) {}
     }
-
+    // Input dequeue hang tracking (across calls)
+    private long inputDequeueHangStartMs = 0L;
+    private int inputTryAgainStreak = 0;
       // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
     // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
@@ -2471,6 +2474,10 @@ try {
         long startTime;
         boolean codecRecovered;
 
+        if (stopping) {
+            return false;
+        }
+
         if (nextInputBuffer != null) {
             // We already have an input buffer
             return true;
@@ -2479,8 +2486,9 @@ try {
         startTime = SystemClock.uptimeMillis();
 
         try {
-// Timeout based on target frame rate and latency policy
+            // Timeout based on target frame rate and latency policy
             int dequeueTimeoutUs;
+
             float wantedFps =
                     (targetFps > 0f)
                             ? targetFps
@@ -2488,8 +2496,8 @@ try {
 
             if (preferLowerDelays) {
                 // LFR:
-                // - PURE ULL (fast SoC, lfrMode == 0): non-blocking input, zero-timeout
-                // - SLOW_SOC mode (lfrMode == 1): small adaptive timeout, aligned with output LFR_SLOW_SOC
+                // - PURE ULL (lfrMode == 0): non-blocking input, zero-timeout
+                // - SLOW_SOC mode (lfrMode == 1): small adaptive timeout
                 if (lfrMode == 1) {
                     // Reuse the same adaptive window used on the output side (clamped 250–3000 us)
                     final int minTimeoutUs = 250;
@@ -2525,13 +2533,53 @@ try {
                 }
             }
 
+            // Hung detection across calls (do NOT rely on single-call deltaMs)
+            if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                inputTryAgainStreak++;
+                final long nowMs = SystemClock.uptimeMillis();
+                if (inputDequeueHangStartMs == 0L) {
+                    inputDequeueHangStartMs = nowMs;
+                } else if ((nowMs - inputDequeueHangStartMs) >= 5000 && initialException == null) {
+                    DecoderHungException decoderHungException =
+                            new DecoderHungException((int) (nowMs - inputDequeueHangStartMs));
+                    if (!reportedCrash) {
+                        reportedCrash = true;
+                        crashListener.notifyCrash(decoderHungException);
+                    }
+                    throw new RendererException(this, decoderHungException);
+                }
+
+                // Avoid busy-spin in ULL path (timeout 0) without adding meaningful latency
+                if (preferLowerDelays && dequeueTimeoutUs == 0) {
+                    if (inputTryAgainStreak >= 256) {
+                        LockSupport.parkNanos(500_000L); // 0.5 ms
+                    } else if (inputTryAgainStreak >= 32) {
+                        LockSupport.parkNanos(200_000L); // 0.2 ms
+                    } else {
+                        Thread.yield();
+                    }
+                }
+
+                return false;
+            }
+
             // Get the backing ByteBuffer for the input buffer index
             if (nextInputBufferIndex >= 0) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
-                        // Not a valid dequeued buffer, try again next frame
+                        // This is not "busy": it's a codec/framework contract violation.
+                        // Trigger codec recovery (caller will request IDR after recovery).
+                        inputTryAgainStreak = 0;
+                        inputDequeueHangStartMs = 0L;
+
                         nextInputBufferIndex = -1;
+                        nextInputBuffer = null;
+
+                        handleDecoderException(new IllegalStateException(
+                                "getInputBuffer() returned null for index " + nextInputBufferIndex));
+
+                        return false;
                     } else {
                         // Always start from a clean buffer position/limit
                         nextInputBuffer.clear();
@@ -2542,44 +2590,41 @@ try {
                     // Clear old input data pre-Lollipop
                     nextInputBuffer.clear();
                 }
+
+                // Success: reset hang tracking only when we truly have a buffer
+                inputTryAgainStreak = 0;
+                inputDequeueHangStartMs = 0L;
             }
 
         } catch (IllegalStateException e) {
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
             handleDecoderException(e);
             return false;
+
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
 
-        // If codec recovery is required, always return false to ensure the caller will request
-        // an IDR frame to complete the codec recovery.
         if (codecRecovered) {
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
             return false;
         }
 
-        int deltaMs = (int)(SystemClock.uptimeMillis() - startTime);
+        int deltaMs = (int) (SystemClock.uptimeMillis() - startTime);
 
         if (deltaMs >= 20) {
             LimeLog.warning("Dequeue input buffer ran long: " + deltaMs + " ms");
         }
 
-        if (nextInputBuffer == null) {
-            // We've been hung for 5 seconds and no other exception was reported,
-            // so generate a decoder hung exception
-            if (deltaMs >= 5000 && initialException == null) {
-                DecoderHungException decoderHungException = new DecoderHungException(deltaMs);
-                if (!reportedCrash) {
-                    reportedCrash = true;
-                    crashListener.notifyCrash(decoderHungException);
-                }
-                throw new RendererException(this, decoderHungException);
-            }
-
-            return false;
-        }
-
-        return true;
+        return nextInputBuffer != null;
     }
+
 
 
     @Override
