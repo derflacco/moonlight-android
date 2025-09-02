@@ -733,5 +733,7 @@
     <string name="summary_checkbox_antilag">LFR for Balanced Frame Pacing</string>
     <string name="title_checkbox_enable_async_decoder">Use async video decoder (experimental)</string>
     <string name="summary_checkbox_enable_async_decoder">Enable MediaCodec callback mode to reduce blocking on the app thread. Recommended on recent Snapdragon devices.</string>
-
+    <!-- Performance: big cores (non-root) -->
+    <string name="title_prefer_big_cores">Prefer big CPU cores (non-root)</string>
+    <string name="summary_prefer_big_cores">Experimental. Best-effort pinning of critical threads to big cores and use of performance hints. May increase power usage and heat.</string>
 </resources>

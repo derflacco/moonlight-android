@@ -100,7 +100,7 @@ android {
             resValue "string", "app_label_root", "Diana (Root)"
             resValue "string", "app_label_game", "Diana (Game)"
 
-            minifyEnabled true
+            minifyEnabled false // Disabled in debug to avoid R8 stripping JNI classes
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
         release {
