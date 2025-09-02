@@ -44,6 +44,14 @@ import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
+
+    // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
+    // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
+    // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
+    private static final long AFFINITY_REFRESH_NS = 2_000_000_000L; // 2s
+    private volatile long lastAffinityRefreshNs = 0L;
+    private volatile String lastAllowedMask = null;
+    private volatile boolean affinityPinned = false;
     // Async codec runtime flag from preferences
     private boolean useAsyncCodec = false;
     private android.os.HandlerThread codecCallbackThread;
@@ -1236,6 +1244,92 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Boost thread priority to reduce decoding latency
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
 
+                // Give the renderer thread a recognizable name for /proc and debugging
+                try { Thread.currentThread().setName("MoonlightRenderer"); } catch (Throwable ignored) {}
+
+                // Log TID and allowed CPUs before pin
+                try {
+                    int __tid = android.os.Process.myTid();
+                    String __allowedBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                    LimeLog.info("RendererAffinity: tid=" + __tid
+                            + " allowed_before=" + __allowedBefore
+                            + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
+                } catch (Throwable ignored) {}
+
+// Best-effort: pin renderer thread to big cores if requested (non-root, optional JNI)
+                try {
+                    if (prefs != null && prefs.preferBigCores) {
+                        com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+
+
+                        // pin process-wide + boost hot threads (renderer/GL/Choreographer/Binder/MediaCodec) ---
+                        try {
+                            int[] __bigQR = com.limelight.utils.CpuAffinity.detectBigCores();
+                            if (__bigQR != null && __bigQR.length > 0) {
+                                // Mass pin for all threads in this process
+                                com.limelight.utils.CpuAffinity.pinAllThreadsToCores(__bigQR);
+
+                                // Bump priority and re-affirm affinity for hot threads
+                                int[] __tidsQR = com.limelight.utils.CpuAffinity.listTids();
+                                for (int __tidQR : __tidsQR) {
+                                    String __nameQR = com.limelight.utils.CpuAffinity.readThreadName(__tidQR);
+                                    if (__nameQR == null) __nameQR = "";
+                                    boolean __hotQR =
+                                            __nameQR.contains("Renderer") ||
+                                                    __nameQR.contains("RenderThread") ||
+                                                    __nameQR.contains("GL") ||
+                                                    __nameQR.contains("Choreographer") ||
+                                                    __nameQR.contains("MediaCodec") ||
+                                                    __nameQR.startsWith("Binder:");
+                                    if (__hotQR) {
+                                        try {
+                                            android.os.Process.setThreadPriority(__tidQR,
+                                                    android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                                        } catch (Throwable ignored) {}
+                                        try {
+                                            com.limelight.utils.CpuAffinity.setAffinityForTid(__tidQR, __bigQR);
+                                        } catch (Throwable ignored) {}
+                                    }
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+// Log what we tried to set (native detection) + the kernel result
+                        int[] __bigNative = com.limelight.utils.CpuAffinity.detectBigCoresForDebug();
+                        String __allowedAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                        LimeLog.info("RendererAffinity: nativeLoaded=" + com.limelight.utils.CpuAffinity.isNativeLoaded()
+                                + " big_native=" + java.util.Arrays.toString(__bigNative)
+                                + " allowed_after=" + __allowedAfter);
+
+
+                        // Remember what we pinned to and when
+                        MediaCodecDecoderRenderer.this.lastAllowedMask = __allowedAfter;
+                        MediaCodecDecoderRenderer.this.affinityPinned = true;
+                        MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
+// Optional: current CPU
+                        int __cpu = com.limelight.utils.CpuAffinity.getCurrentCpuOrMinus1();
+                        LimeLog.info("RendererAffinity: current_cpu=" + __cpu);
+                    }
+                } catch (Throwable ignored) {}
+
+                android.os.PerformanceHintManager.Session __hs = null;
+// Performance Hint session (API 30+): guide scheduler to budget for our frame work
+                if (android.os.Build.VERSION.SDK_INT >= 30 && context != null) {
+                    try {
+                        float __fps = (targetFps > 0 ? targetFps : 60f);
+                        long targetWorkNs = (long) (1_000_000_000L / Math.max(30f, __fps));
+                        android.os.PerformanceHintManager phm =
+                                (android.os.PerformanceHintManager) context.getSystemService(android.os.PerformanceHintManager.class);
+                        if (phm != null) {
+                            LimeLog.info("PHM: session created for renderer, targetWorkNs=" + targetWorkNs);
+                            int tid = android.os.Process.myTid();
+                            __hs =
+                                    phm.createHintSession(new int[]{ tid }, targetWorkNs);
+                            try { __hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
+
                 // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
                 long vsyncPeriodNs;
                 float displayHz = 60f;
@@ -1287,6 +1381,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 BufferInfo info = new BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
+
+                    // Periodic sticky affinity refresh (cheap): re-pin if mask changed
+                    if (prefs != null && prefs.preferBigCores) {
+                        final long __now = android.os.SystemClock.elapsedRealtimeNanos();
+                        if (__now - lastAffinityRefreshNs >= AFFINITY_REFRESH_NS) {
+                            try {
+                                String __maskBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                                if (lastAllowedMask == null || !__maskBefore.equals(lastAllowedMask)) {
+                                    com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+                                    String __maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                                    LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + __maskBefore + " allowed_after=" + __maskAfter);
+                                    lastAllowedMask = __maskAfter;
+                                }
+                            } catch (Throwable ignored) {}
+                            lastAffinityRefreshNs = __now;
+                        }
+                    }
                     /* LATEST_ONLY_LOW_LATENCY */
                     if (preferLowerDelays) {
                         try {
@@ -1614,6 +1725,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         } catch (Throwable ignored) {}
                         lastOutputNs = __nowNs;
                     }
+                } catch (Throwable ignored) {}
+
+// Close PHM session if created and restore affinity
+                try { if (__hs != null) __hs.close(); } catch (Throwable ignored) {}
+                try {
+                    com.limelight.utils.CpuAffinity.clearAllThreadsAffinityAllOnline();
+
+                    // Reset sticky-affinity state
+                    MediaCodecDecoderRenderer.this.affinityPinned = false;
+                    MediaCodecDecoderRenderer.this.lastAllowedMask = null;
+                    MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
+                    LimeLog.info("RendererAffinity: cleared to all online CPUs");
+                    // Log final mask after clearing (debug)
+                    String __cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                    LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
                 } catch (Throwable ignored) {}
             }
         };
