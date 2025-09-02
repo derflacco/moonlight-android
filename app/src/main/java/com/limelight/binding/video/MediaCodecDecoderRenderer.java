@@ -1158,6 +1158,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             public void run() {
                 // Boost thread priority to reduce decoding latency
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                android.os.PerformanceHintManager.Session __hs = null;
+// Performance Hint session (API 30+): guide scheduler to budget for our frame work
+                if (android.os.Build.VERSION.SDK_INT >= 30 && context != null) {
+                    try {
+                        float __fps = (targetFps > 0 ? targetFps : 60f);
+                        long targetWorkNs = (long) (1_000_000_000L / Math.max(30f, __fps));
+                        android.os.PerformanceHintManager phm =
+                                (android.os.PerformanceHintManager) context.getSystemService(android.os.PerformanceHintManager.class);
+                        if (phm != null) {
+                            LimeLog.info("PHM: session created for renderer, targetWorkNs=" + targetWorkNs);
+                            int tid = android.os.Process.myTid();
+                            __hs =
+                                    phm.createHintSession(new int[]{ tid }, targetWorkNs);
+                            try { __hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
+                        }
+                    } catch (Throwable ignored) {}
+                }
 
                 // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
                 long vsyncPeriodNs;
