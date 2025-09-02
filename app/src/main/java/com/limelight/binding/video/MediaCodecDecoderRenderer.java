@@ -64,9 +64,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Helper: release with low-latency policy (immediate only when very near to now)
     private void releaseWithPolicy(int bufferIndex, long frameTimeNanos) {
+// Adaptive 'immediate present' window: 150µs on fast devices, else 200–300µs fallback
+        final long presentSlackNs = (isHighPerfDevice() ? 150_000L : 200_000L);
+
         try {
             long now = System.nanoTime();
-            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 300_000L);
+            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + presentSlackNs);
             if (immediate) {
                 videoDecoder.releaseOutputBuffer(bufferIndex, true);
             } else {
@@ -2423,6 +2426,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (name == null) return false;
         String n = name.toLowerCase();
         return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
+    }
+
+
+
+    // Heuristic: treat devices with >=8 CPUs and 64-bit ABI as "fast"
+    private static boolean isHighPerfDevice() {
+        try {
+            int cores = java.lang.Runtime.getRuntime().availableProcessors();
+            boolean arm64 = false;
+            try {
+                String[] abis = android.os.Build.SUPPORTED_ABIS;
+                if (abis != null) {
+                    for (String abi : abis) {
+                        if (abi != null && abi.toLowerCase(java.util.Locale.US).contains("arm64")) {
+                            arm64 = true;
+                            break;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) { }
+            return (cores >= 8) && arm64;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
 }
