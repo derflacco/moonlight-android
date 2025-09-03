@@ -48,3 +48,7 @@
 -dontwarn com.github.mikephil.charting.**
 # Keep CpuAffinity (public wrappers called via reflection in places)
 -keep class com.limelight.utils.CpuAffinity { *; }
+
+
+# FSR
+-keep class com.limelight.render.GlUpscaleRenderer { *; }
