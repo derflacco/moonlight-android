@@ -40,6 +40,8 @@ import android.os.SystemClock;
 import android.util.Range;
 import android.view.Choreographer;
 import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
@@ -50,6 +52,38 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile String lastAllowedMask = null;
     private volatile boolean affinityPinned = false;
       // Latency profile: favor minimal end-to-end delay over absolute smoothness.
+    // --- FSR-like upscaler reflection helpers (no hard dependency) ---
+    private static void __fsrCall(Object upscaler, String method) {
+        if (upscaler == null) return;
+        try {
+            java.lang.reflect.Method m = upscaler.getClass().getMethod(method);
+            m.invoke(upscaler);
+        } catch (Throwable ignored) {}
+    }
+    private static Surface __fsrCreateInputSurface(Object upscaler) {
+        if (upscaler == null) return null;
+        try {
+            java.lang.reflect.Method m = upscaler.getClass().getMethod("createDecoderInputSurface");
+            Object s = m.invoke(upscaler);
+            return (Surface) s;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+    private static Object __fsrMaybeCreate(Object existing, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
+        if (existing != null) return existing;
+        try {
+            Class<?> cls = Class.forName("com.limelight.render.GlUpscaleRenderer");
+            java.lang.reflect.Constructor<?> c = cls.getConstructor(Surface.class, int.class, int.class, PreferenceConfiguration.class);
+            return c.newInstance(windowSurface, srcW, srcH, prefs);
+        } catch (Throwable t) {
+            LimeLog.warning("GL upscaler unavailable: " + t);
+            return null;
+        }
+    }
+    // --- end helpers ---
+
+    // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
     // --- HDR state for overlays ---
@@ -317,6 +351,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     public void setRenderTarget(Surface renderTarget) {
+        // Tear down previous upscaler if surface changed
+        if (this.renderTarget != null && this.renderTarget != renderTarget && glUpscaler != null) {
+            try { __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
+            glUpscaler = null;
+            if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
+        }
         this.renderTarget = renderTarget;
     }
 
@@ -563,7 +603,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
-        videoDecoder.configure(format, renderTarget, null, 0);
+                // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
+        Surface __codecSurface = renderTarget;
+        if (prefs != null && prefs.videoUpscaleEnable) {
+            try {
+                if (glUpscaler == null) {
+                    glUpscaler = __fsrMaybeCreate((Object)glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
+                    decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
+                }
+                __codecSurface = decoderInputSurfaceForUpscale;
+            } catch (Throwable t) {
+                LimeLog.warning("GL upscaler init failed; falling back: " + t);
+                try { if (glUpscaler != null) __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
+                glUpscaler = null; decoderInputSurfaceForUpscale = null;
+            }
+        }
+        videoDecoder.configure(format, __codecSurface, null, 0);
+
+        // Start GL upscaler loop if present
+        try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
+
 
         configuredFormat = format;
 
@@ -738,6 +797,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         return initializeDecoder(false);
     }
+    private Object glUpscaler; // usato via reflection
+    private android.view.Surface decoderInputSurfaceForUpscale;
+
 
     // All threads that interact with the MediaCodec instance must call this function regularly!
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
