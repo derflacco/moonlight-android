@@ -84,6 +84,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return null;
         }
     }
+    // FSR overlay reflection helpers (appended)
+    private static void __fsrSetDebugEnabled(Object upscaler, boolean enabled) {
+        if (upscaler == null) return;
+        try {
+            java.lang.reflect.Method m = upscaler.getClass().getMethod("setFsrDebugEnabled", boolean.class);
+            m.invoke(upscaler, enabled);
+        } catch (Throwable ignored) {}
+    }
+    private static String __fsrGetOverlayLine(Object upscaler) {
+        if (upscaler == null) return "";
+        try {
+            java.lang.reflect.Method m = upscaler.getClass().getMethod("getFsrOverlayLine");
+            Object s = m.invoke(upscaler);
+            return (s != null) ? s.toString() : "";
+        } catch (Throwable ignored) { return ""; }
+    }
+
     // --- end helpers ---
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
@@ -659,7 +676,7 @@ return videoFormat;
 
         LimeLog.info("Configuring with format: "+format);
 
-                // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
+        // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
         Surface __codecSurface = renderTarget;
         if (prefs != null && prefs.videoUpscaleEnable) {
             try {
@@ -678,6 +695,13 @@ return videoFormat;
 
         // Start GL upscaler loop if present
         try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
+        try {
+            if (glUpscaler != null) {
+                boolean dbg = (prefs != null) && (prefs.enablePerfOverlay || prefs.enablePerfOverlayLite);
+                __fsrSetDebugEnabled(glUpscaler, dbg);
+            }
+        } catch (Throwable ignored) {}
+
 
 
 try {
@@ -2095,6 +2119,10 @@ boolean isC2Decoder = false;
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
                 }
+                try {
+                    String __fsr = __fsrGetOverlayLine(glUpscaler);
+                    if (__fsr != null && !__fsr.isEmpty()) { sb.append(__fsr).append('\t'); }
+                } catch (Throwable ignored) {}
                 String fullLog = sb.toString();
                 if(prefs.enablePerfOverlay) {
                     perfListener.onPerfUpdate(fullLog);
