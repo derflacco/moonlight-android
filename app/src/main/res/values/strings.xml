@@ -727,11 +727,10 @@
 
     <string-array name="pref_video_upscale_mode_entries">
         <item>RCAS (sharpen only)</item>
-        <item>EASU + RCAS</item>
+
     </string-array>
     <string-array name="pref_video_upscale_mode_values">
         <item>rcas</item>
-        <item>easu_rcas</item>
     </string-array>
 
 </resources>
