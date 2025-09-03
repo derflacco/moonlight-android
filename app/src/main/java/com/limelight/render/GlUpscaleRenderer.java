@@ -789,7 +789,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final String FS_RCAS =
             "#version 300 es\n" +
                     "precision highp float;\n" +
-                    "vec3 gamma(vec3 c){ return pow(max(c, vec3(0.0)), vec3(1.0/2.2)); }\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform sampler2D uUpscaled;\n" +
@@ -816,9 +815,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  float edge=sqrt(gx*gx+gy*gy); float edgeW=1.0/(1.0+3.0*edge);\n" +
                     "  float k=1.6*pow(clamp(uSharp,0.0,1.0),0.85);\n" +
                     "  vec3 outc=clamp(c+detail*(k*edgeW),0.0,1.0);\n" +
-                    "  fragColor = vec4(gamma(outc), 1.0);\n" +
+                    "  fragColor=vec4(outc,1.0);\n" +
                     "}";
-
     // ===== FSR telemetry controls =====
     public void setFsrDebugEnabled(boolean enabled) { __fsr.enabled = enabled; }
     public String getFsrOverlayLine() { return __fsrOverlay; }
