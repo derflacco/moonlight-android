@@ -57,6 +57,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile boolean affinityPinned = false;
       // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
+    // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
     private static void __fsrCall(Object upscaler, String method) {
         if (upscaler == null) return;
         try {
