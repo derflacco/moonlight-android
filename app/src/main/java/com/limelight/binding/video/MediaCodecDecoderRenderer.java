@@ -423,7 +423,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
         }
         this.renderTarget = renderTarget;
-    }
+    
+        // Re-apply presentation hint to upscaler when render target may change
+        try { if (glUpscaler != null) {
+            java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
+            __m.invoke(glUpscaler, context);
+        } } catch (Throwable ignored) {}
+}
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
@@ -676,7 +682,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 if (glUpscaler == null) {
                     glUpscaler = __fsrMaybeCreate((Object)glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
                     decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
-                }
+                    // Provide presentation-size hint from Context if available
+                    try {
+                        java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
+                        __m.invoke(glUpscaler, context);
+                    } catch (Throwable ignored) {}
+}
                 __codecSurface = decoderInputSurfaceForUpscale;
             } catch (Throwable t) {
                 LimeLog.warning("GL upscaler init failed; falling back: " + t);

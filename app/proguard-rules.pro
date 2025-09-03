@@ -1,6 +1,9 @@
 # Don't obfuscate code
 -dontobfuscate
 
+# (Opzionale ma consigliato) mantieni annotazioni e generics per riflessione/JSON
+-keepattributes *Annotation*, Signature
+
 # Our code
 -keep class com.limelight.binding.input.evdev.* {*;}
 
@@ -43,5 +46,12 @@
 -keep class com.github.mikephil.charting.** { *; }
 -dontwarn com.github.mikephil.charting.**
 
-# FSR
+# FSR renderer (auto-hint)
 -keep class com.limelight.render.GlUpscaleRenderer { *; }
+
+# FSR per-device sizing helpers (TextureView/SurfaceView + installer)
+-keep class com.limelight.utils.DisplaySizer { *; }
+-keep class com.limelight.utils.TextureViewSizer { *; }
+-keep class com.limelight.utils.SurfaceViewSizer { *; }
+-keep class com.limelight.utils.FSRSizerInstaller { *; }
+-keep class com.limelight.utils.FSRSizerInstaller$AutoCloser { *; }

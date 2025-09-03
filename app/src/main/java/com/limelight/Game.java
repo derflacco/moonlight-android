@@ -51,6 +51,8 @@ import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
+import com.limelight.utils.DisplaySizer;
+import com.limelight.utils.FSRSizerInstaller;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
@@ -204,6 +206,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean pointerSwiping = false;
     private boolean waitingForAllModifiersUp = false;
     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+    private FSRSizerInstaller.AutoCloser fsrSizer;
+
     private StreamView streamView;
     private long synthTouchDownTime = 0;
 
@@ -442,6 +446,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Listen for non-touch events on the game surface
         streamView = findViewById(R.id.surfaceView);
+        // Ensure present surface is display-sized (per device/rotation)
+        try {
+            com.limelight.utils.DisplaySizer.applyTo((android.view.SurfaceView) streamView);
+            fsrSizer = com.limelight.utils.FSRSizerInstaller.installForSurfaceView(this, (android.view.SurfaceView) streamView, /*renderer*/ null);
+            fsrSizer.start();
+        } catch (Throwable ignored) {}
+
         streamView.setOnGenericMotionListener(this);
         streamView.setOnKeyListener(this);
         streamView.setInputCallbacks(this);
@@ -1752,6 +1763,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onStop() {
+        try { if (fsrSizer != null) fsrSizer.stop(); } catch (Throwable ignored) {}
+
         super.onStop();
 
         SpinnerDialog.closeDialogs(this);
