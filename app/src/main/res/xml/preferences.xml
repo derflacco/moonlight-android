@@ -240,6 +240,7 @@
             android:key="pref_video_upscale_sharpness"
             android:title="@string/pref_video_upscale_sharpness_title"
             android:summary="@string/pref_video_upscale_sharpness_summary"
+			android:dependency="pref_video_upscale_enable"
             android:defaultValue="35"
             android:max="100"
             app:iconSpaceReserved="false"

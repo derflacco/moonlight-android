@@ -304,6 +304,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
             final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
+            final boolean forceRcasOnly = "easu_rcas".equals(mode);
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
 
             // Decide target size for *policy/telemetry*: prefer display hint if provided
@@ -333,11 +334,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsrOverlay = __fsr.overlayLine();
                 }
                 drawOesToScreen();
-            } else if (("easu_rcas".equals(mode) && !nearNative) && canUpscaleNow) {
+            } else if (false /* EASU disabled */) {
                 boolean ok;
-                long t0 = System.nanoTime();
                 ok = drawEasuRcasSafe(fbW, fbH, sharpUser);
-                long dt = System.nanoTime() - t0;
                 if (__fsr.enabled) {
                     __fsr.mode = "EASU+RCAS";
                     __fsr.srcW = srcW; __fsr.srcH = srcH;
@@ -347,7 +346,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.notes = (ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed")
                             + " | nearNative=" + nearNative + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
                     // Treat combined pass as total
-                    __fsr.easuAvgNs = (__fsr.easuAvgNs==0.0) ? dt : (0.2*dt + 0.8*__fsr.easuAvgNs);
                     __fsr.frames++;
                     if ((__fsr.frames % 240L) == 0L) {
                         com.limelight.LimeLog.info(__fsr.periodicLine());
@@ -373,6 +371,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     String reason;
                     if (nearNative) reason = "reason=nearNative";
                     else if (srcW == fbW && srcH == fbH) reason = "reason=dstEqSrc";
+                    else if (forceRcasOnly) reason = "reason=easu_disabled";
                     else reason = "reason=mode!=easu_rcas";
                     __fsr.notes = (ok ? reason : ("fallback:rcas_only_failed")) +
                             " | nearNative=" + nearNative + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
@@ -450,13 +449,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         setOesFilter(true); // NEAREST
         GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+        if (__fsr.enabled) { __fsr.tocEasu(); }
 
         // RCAS: upscaledTex -> screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
         GLES20.glUseProgram(progRcas);
         bindQuad(progRcas);
+        if (__fsr.enabled) { __fsr.ticRcas(); }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
@@ -465,6 +465,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / dstW, 1.0f / dstH);
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        if (__fsr.enabled) { __fsr.tocRcas(); }
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
         return true;
     }
@@ -484,12 +485,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // EASU
         GLES20.glUseProgram(progEasu);
         bindQuad(progEasu);
+        if (__fsr.enabled) { __fsr.ticEasu(); }
         GLES20.glUniform2f(easu_uSrcSize, (float) srcW, (float) srcH);
         GLES20.glUniform2f(easu_uDstSize, (float) dstW, (float) dstH);
         GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-        setOesFilter(false);
+        setOesFilter(true);
         GLES20.glUniform1i(easu_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
@@ -632,19 +634,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Shaders
         progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
         progBlit = linkProgram(progVs, FS_OES_BLIT);
-        progEasu = linkProgram(progVs, FS_EASU_OES);
+        /* EASU disabled */ progEasu = 0;
         progRcas = linkProgram(progVs, FS_RCAS);
         progRcasOes = 0; // disabled due to black screen on some GPUs
 
         // Uniform cache
         blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
         blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
-
-        easu_uTex     = GLES20.glGetUniformLocation(progEasu, "uTex");
-        easu_uSrcSize = GLES20.glGetUniformLocation(progEasu, "uSrcSize");
-        easu_uDstSize = GLES20.glGetUniformLocation(progEasu, "uDstSize");
-        easu_uTexMat  = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
-
+        /* EASU uniforms disabled */ easu_uTex = easu_uSrcSize = easu_uDstSize = easu_uTexMat = -1;
         rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
         rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
         rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
@@ -759,7 +756,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform mat4 uTexMatrix;\n" +
                     "void main(){ vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy; fragColor=vec4(texture(uTex, uv).rgb,1.0);}";
 
-    private static final String FS_EASU_OES =
+/*    private static final String FS_EASU_OES =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "precision highp float;\n" +
@@ -775,51 +772,52 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "vec3 s(vec2 uv){ return lin(texture(uTex,(uTexMatrix*vec4(uv,0.0,1.0)).xy).rgb); }\n" +
                     "void main(){\n" +
                     "  vec2 t = 1.0 / uSrcSize;\n" +
-                    "  vec2 uv = vUv;\n" +
-                    "  vec3 c00=s(uv+t*vec2(-1,-1)); vec3 c10=s(uv+t*vec2(0,-1)); vec3 c20=s(uv+t*vec2(1,-1));\n" +
-                    "  vec3 c01=s(uv+t*vec2(-1, 0)); vec3 c11=s(uv);            vec3 c21=s(uv+t*vec2(1, 0));\n" +
-                    "  vec3 c02=s(uv+t*vec2(-1, 1)); vec3 c12=s(uv+t*vec2(0, 1)); vec3 c22=s(uv+t*vec2(1, 1));\n" +
-                    "  float gx=(luma(c20)+2.0*luma(c21)+luma(c22))-(luma(c00)+2.0*luma(c01)+luma(c02));\n" +
-                    "  float gy=(luma(c02)+2.0*luma(c12)+luma(c22))-(luma(c00)+2.0*luma(c10)+luma(c20));\n" +
-                    "  vec2 dir=normalize(vec2(gx,gy)+1e-5);\n" +
-                    "  vec2 off=vec2(-dir.y,dir.x)*t*0.5;\n" +
-                    "  vec3 a=s(uv-off); vec3 b=s(uv+off);\n" +
-                    "  vec3 base=(c11+c12+c21+c10)*0.25;\n" +
-                    "  vec3 up=mix(base,(a+b)*0.5,0.6);\n" +
-                    "  fragColor=vec4(gamma(up),1.0);\n" +
-                    "}";
+                    "  vec2 uv = (gl_FragCoord.xy - 0.5) / uDstSize;" +
+        "  vec3 c00=s(uv+t*vec2(-1,-1)); vec3 c10=s(uv+t*vec2(0,-1)); vec3 c20=s(uv+t*vec2(1,-1));\n" +
+        "  vec3 c01=s(uv+t*vec2(-1, 0)); vec3 c11=s(uv);            vec3 c21=s(uv+t*vec2(1, 0));\n" +
+        "  vec3 c02=s(uv+t*vec2(-1, 1)); vec3 c12=s(uv+t*vec2(0, 1)); vec3 c22=s(uv+t*vec2(1, 1));\n" +
+        "  float gx=(luma(c20)+2.0*luma(c21)+luma(c22))-(luma(c00)+2.0*luma(c01)+luma(c02));\n" +
+        "  float gy=(luma(c02)+2.0*luma(c12)+luma(c22))-(luma(c00)+2.0*luma(c10)+luma(c20));\n" +
+        "  vec2 dir=normalize(vec2(gx,gy)+1e-5);\n" +
+        "  vec2 off=vec2(-dir.y,dir.x)*t*0.5;\n" +
+        "  vec3 a=s(uv-off); vec3 b=s(uv+off);\n" +
+        "  vec3 base=(c11+c12+c21+c10)*0.25;\n" +
+        "  vec3 up=mix(base,(a+b)*0.5,0.6);\n" +
+        "  fragColor=vec4(clamp(up,0.0,1.0),1.0);\n" +
+        "}";*/
 
     private static final String FS_RCAS =
             "#version 300 es\n" +
-            "precision highp float;\n" +
-            "in vec2 vUv;\n" +
-            "layout(location=0) out vec4 fragColor;\n" +
-            "uniform sampler2D uUpscaled;\n" +
-            "uniform vec2 uInvDstSize;\n" +
-            "uniform float uSharp;\n" +
-            "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
-            "vec3 bilateral5(vec2 uv, vec2 texel){\n" +
-            "  vec3 c0=texture(uUpscaled,uv).rgb; float lc=luma(c0);\n" +
-            "  float inv2SigR2=1.0/(2.0*0.15*0.15); float ws=0.9; vec3 sum=c0; float wsum=1.0;\n" +
-            "  vec3 c; float dr; float w;\n" +
-            "  c=texture(uUpscaled,uv+vec2( texel.x,0)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-            "  c=texture(uUpscaled,uv+vec2(-texel.x,0)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-            "  c=texture(uUpscaled,uv+vec2(0, texel.y)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-            "  c=texture(uUpscaled,uv+vec2(0,-texel.y)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-            "  return sum/max(wsum,1e-5);\n" +
-            "}\n" +
-            "void main(){\n" +
-            "  vec2 texel=uInvDstSize; vec3 c=texture(uUpscaled,vUv).rgb;\n" +
-            "  if(uSharp<=0.001){ fragColor=vec4(c,1.0); return; }\n" +
-            "  vec3 b=bilateral5(vUv,texel); vec3 detail=c-b; vec3 sgn=sign(detail);\n" +
-            "  detail=max(abs(detail)-vec3(1.0/255.0),vec3(0.0))*sgn;\n" +
-            "  float gx=luma(texture(uUpscaled,vUv+vec2(texel.x,0)).rgb)-luma(texture(uUpscaled,vUv-vec2(texel.x,0)).rgb);\n" +
-            "  float gy=luma(texture(uUpscaled,vUv+vec2(0,texel.y)).rgb)-luma(texture(uUpscaled,vUv-vec2(0,texel.y)).rgb);\n" +
-            "  float edge=sqrt(gx*gx+gy*gy); float edgeW=1.0/(1.0+3.0*edge);\n" +
-            "  float k=1.6*pow(clamp(uSharp,0.0,1.0),0.85);\n" +
-            "  vec3 outc=clamp(c+detail*(k*edgeW),0.0,1.0);\n" +
-            "  fragColor=vec4(outc,1.0);\n" +
-            "}";
+                    "precision highp float;\n" +
+                    "vec3 gamma(vec3 c){ return pow(max(c, vec3(0.0)), vec3(1.0/2.2)); }\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "uniform sampler2D uUpscaled;\n" +
+                    "uniform vec2 uInvDstSize;\n" +
+                    "uniform float uSharp;\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "vec3 bilateral5(vec2 uv, vec2 texel){\n" +
+                    "  vec3 c0=texture(uUpscaled,uv).rgb; float lc=luma(c0);\n" +
+                    "  float inv2SigR2=1.0/(2.0*0.15*0.15); float ws=0.9; vec3 sum=c0; float wsum=1.0;\n" +
+                    "  vec3 c; float dr; float w;\n" +
+                    "  c=texture(uUpscaled,uv+vec2( texel.x,0)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
+                    "  c=texture(uUpscaled,uv+vec2(-texel.x,0)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
+                    "  c=texture(uUpscaled,uv+vec2(0, texel.y)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
+                    "  c=texture(uUpscaled,uv+vec2(0,-texel.y)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
+                    "  return sum/max(wsum,1e-5);\n" +
+                    "}\n" +
+                    "void main(){\n" +
+                    "  vec2 texel=uInvDstSize; vec3 c=texture(uUpscaled,vUv).rgb;\n" +
+                    "  if(uSharp<=0.001){ fragColor=vec4(c,1.0); return; }\n" +
+                    "  vec3 b=bilateral5(vUv,texel); vec3 detail=c-b; vec3 sgn=sign(detail);\n" +
+                    "  detail=max(abs(detail)-vec3(1.0/255.0),vec3(0.0))*sgn;\n" +
+                    "  float gx=luma(texture(uUpscaled,vUv+vec2(texel.x,0)).rgb)-luma(texture(uUpscaled,vUv-vec2(texel.x,0)).rgb);\n" +
+                    "  float gy=luma(texture(uUpscaled,vUv+vec2(0,texel.y)).rgb)-luma(texture(uUpscaled,vUv-vec2(0,texel.y)).rgb);\n" +
+                    "  float edge=sqrt(gx*gx+gy*gy); float edgeW=1.0/(1.0+3.0*edge);\n" +
+                    "  float k=1.6*pow(clamp(uSharp,0.0,1.0),0.85);\n" +
+                    "  vec3 outc=clamp(c+detail*(k*edgeW),0.0,1.0);\n" +
+                    "  fragColor = vec4(gamma(outc), 1.0);\n" +
+                    "}";
 
     // ===== FSR telemetry controls =====
     public void setFsrDebugEnabled(boolean enabled) { __fsr.enabled = enabled; }
