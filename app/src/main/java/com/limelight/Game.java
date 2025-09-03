@@ -51,6 +51,8 @@ import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
+import com.limelight.utils.DisplaySizer;
+import com.limelight.utils.FSRSizerInstaller;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
@@ -224,6 +226,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean pointerSwiping = false;
     private boolean waitingForAllModifiersUp = false;
     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+
+    private com.limelight.utils.FSRSizerInstaller.AutoCloser fsrSizer;
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
@@ -483,6 +487,32 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Listen for non-touch events on the game surface
         streamContainer = findViewById(R.id.streamContainer);
         streamContainer.init(this, prefConfig);
+
+        // Ensure present surface is display-sized (per device/rotation) and install FSR sizer
+        try {
+            android.view.SurfaceView __surface = null;
+            // Breadth-first search: find the first SurfaceView inside the container
+            java.util.ArrayDeque<android.view.View> q = new java.util.ArrayDeque<>();
+            q.add(streamContainer);
+            while (!q.isEmpty()) {
+                android.view.View cur = q.removeFirst();
+                if (cur instanceof android.view.SurfaceView) {
+                    __surface = (android.view.SurfaceView) cur;
+                    break;
+                }
+                if (cur instanceof android.view.ViewGroup) {
+                    android.view.ViewGroup g = (android.view.ViewGroup) cur;
+                    for (int i = 0; i < g.getChildCount(); i++) {
+                        q.add(g.getChildAt(i));
+                    }
+                }
+            }
+            if (__surface != null) {
+                com.limelight.utils.DisplaySizer.applyTo(__surface);
+                fsrSizer = com.limelight.utils.FSRSizerInstaller.installForSurfaceView(this, __surface, /*renderer*/ null);
+                if (fsrSizer != null) fsrSizer.start();
+            }
+        } catch (Throwable ignored) {}
         streamContainer.setOnGenericMotionListener(this);
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
@@ -1708,6 +1738,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onStop() {
+
+        try { if (fsrSizer != null) fsrSizer.stop(); } catch (Throwable ignored) {}
+
         super.onStop();
 
         SpinnerDialog.closeDialogs(this);
