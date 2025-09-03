@@ -10,6 +10,11 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
+    // Video upscaling (FSR-like)
+    public boolean videoUpscaleEnable;
+    public String  videoUpscaleMode;     // "rcas" or "easu_rcas"
+    public int     videoUpscaleSharpness; // 0..100
+
 
     public enum ScaleMode {
         FIT,
@@ -30,7 +35,15 @@ public class PreferenceConfiguration {
         LEFT
     }
 
+ // FSR-like spatial upscaling
+    private static final String VIDEO_UPSCALE_ENABLE_PREF_STRING = "pref_video_upscale_enable";
+    private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "rcas" or "easu_rcas"
+    private static final String VIDEO_UPSCALE_SHARP_PREF_STRING  = "pref_video_upscale_sharpness"; // 0..100
+
+    private static final String DEFAULT_VIDEO_UPSCALE_MODE = "rcas";
+    private static final int    DEFAULT_VIDEO_UPSCALE_SHARP = 35;
     public static final String CUSTOM_BITRATE_PREF_STRING = "edit_diy_bitrate";
+
     public static final String CUSTOM_REFRESH_RATE_PREF_STRING = "custom_refresh_rate";
     public static final String CUSTOM_RESOLUTION_PREF_STRING = "edit_diy_w_h";
 
@@ -1013,6 +1026,17 @@ public class PreferenceConfiguration {
         config.panOffsetX = prefs.getFloat(NUMBER_PAN_OFFSET_X, DEFAULT_PAN_OFFSET);
         config.panOffsetY = prefs.getFloat(NUMBER_PAN_OFFSET_Y, DEFAULT_PAN_OFFSET);
 
-        return config;
+
+        // FSR-like video upscaling prefs
+        config.videoUpscaleEnable    = prefs.getBoolean(VIDEO_UPSCALE_ENABLE_PREF_STRING, false);
+        config.videoUpscaleMode      = prefs.getString(VIDEO_UPSCALE_MODE_PREF_STRING, DEFAULT_VIDEO_UPSCALE_MODE);
+        try {
+            config.videoUpscaleSharpness = prefs.getInt(VIDEO_UPSCALE_SHARP_PREF_STRING, DEFAULT_VIDEO_UPSCALE_SHARP);
+        } catch (ClassCastException ex) {
+            // SeekBarPreference may store string on some forks; try to parse
+            try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
+            catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
+        }
+    return config;
     }
 }
