@@ -1311,6 +1311,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 BufferInfo info = new BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
+                    long __loopNow = System.nanoTime();
                     /* LATEST_ONLY_LOW_LATENCY */
                     if (!preferLowerDelays) {
                         try {
@@ -1399,7 +1400,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     // In max smoothness or cap FPS mode, we want to never drop frames
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        final long frameAgeNs = __loopNow - (presentationTimeUs * 1000L);
 
                                         // Smoothness: tighter threshold 1.05..1.2×
                                         double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
@@ -1439,10 +1440,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     } else {
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
                                             long __ts = System.nanoTime();
-                                            releaseWithPolicy(lastIndex, System.nanoTime());} else {
+                                            releaseWithPolicy(lastIndex, __ts);} else {
                                             if (android.os.Build.VERSION.SDK_INT >= 21) {
                                                 long __ts = System.nanoTime();
-                                                releaseWithPolicy(lastIndex, System.nanoTime());} else {
+                                                releaseWithPolicy(lastIndex, __ts);} else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, false);
                                             }
                                         }
@@ -1455,7 +1456,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 else {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        final long frameAgeNs = __loopNow - (presentationTimeUs * 1000L);
 
                                         // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
                                         double backPressure = Math.min(1.0, (double)tryAgainStreak / 6.0);
@@ -1513,10 +1514,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     } else {
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
                                             long __ts = System.nanoTime();
-                                            releaseWithPolicy(lastIndex, System.nanoTime());} else {
+                                            releaseWithPolicy(lastIndex, __ts);} else {
                                             if (android.os.Build.VERSION.SDK_INT >= 21) {
                                                 long __ts = System.nanoTime();
-                                                releaseWithPolicy(lastIndex, System.nanoTime());} else {
+                                                releaseWithPolicy(lastIndex, __ts);} else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, false);
                                             }
                                         }
