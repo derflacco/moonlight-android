@@ -45,6 +45,9 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    // Reusable BufferInfo to avoid per-iteration allocations in drain paths
+    private final android.media.MediaCodec.BufferInfo __drainInfo = new android.media.MediaCodec.BufferInfo();
+
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
     // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
     private static void __fsrCall(Object upscaler, String method) {
@@ -423,13 +426,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
         }
         this.renderTarget = renderTarget;
-    
+
         // Re-apply presentation hint to upscaler when render target may change
         try { if (glUpscaler != null) {
             java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
             __m.invoke(glUpscaler, context);
         } } catch (Throwable ignored) {}
-}
+    }
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
@@ -687,7 +690,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
                         __m.invoke(glUpscaler, context);
                     } catch (Throwable ignored) {}
-}
+                }
                 __codecSurface = decoderInputSurfaceForUpscale;
             } catch (Throwable t) {
                 LimeLog.warning("GL upscaler init failed; falling back: " + t);
@@ -1315,7 +1318,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     /* LATEST_ONLY_LOW_LATENCY */
                     if (!preferLowerDelays) {
                         try {
-                            android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
+                            android.media.MediaCodec.BufferInfo __tmpInfo = __drainInfo;
                             int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
                             int __last = -1;
                             long __lastPtsUs = -1L;
@@ -1386,7 +1389,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                while (true) {
+                                    try {
+                                        outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
+                                    } catch (IllegalStateException ise) {
+                                        // Decoder transiently unavailable; treat as no-output
+                                        outIndex = -1;
+                                    }
+                                    if (outIndex < 0) break;
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
                                     frameDropped = true; // we're discarding the oldest one
 
