@@ -1,38 +1,58 @@
 package com.limelight.utils;
 
 import android.app.Activity;
-import android.hardware.display.DisplayManager;
 import android.view.SurfaceView;
 import android.view.TextureView;
 
 import com.limelight.render.GlUpscaleRenderer;
 
-/** One-call installer that keeps the present surface display-sized and notifies GlUpscaleRenderer with hints. */
+import java.io.Closeable;
+import java.io.IOException;
+
+/**
+ * One-call installer that keeps the target view's buffer size matched to the display size
+ * and notifies GlUpscaleRenderer with presentation-size hints.
+ */
 public final class FSRSizerInstaller {
 
-    public interface AutoCloser extends java.io.Closeable { void start(); void stop(); @Override default void close(){ stop(); } }
+    /** Prevent instantiation. */
+    private FSRSizerInstaller() {}
 
-    private FSRSizerInstaller(){}
+    public interface AutoCloser extends Closeable {
+        void start();
+        void stop();
+        @Override
+        default void close() throws IOException { stop(); }
+    }
 
-    public static AutoCloser installForTextureView(Activity activity, TextureView tv, GlUpscaleRenderer renderer){
+    /** Attach sizing to a TextureView and return a controllable handle. */
+    public static AutoCloser installForTextureView(final Activity activity,
+                                                   final TextureView tv,
+                                                   final GlUpscaleRenderer renderer) {
         final TextureViewSizer sizer = new TextureViewSizer(activity, tv, () -> applyHint(activity, renderer));
         return new AutoCloser() {
             @Override public void start() { sizer.start(); applyHint(activity, renderer); }
-            @Override public void stop() { sizer.stop(); }
+            @Override public void stop()  { sizer.stop(); }
         };
     }
 
-    public static AutoCloser installForSurfaceView(Activity activity, SurfaceView sv, GlUpscaleRenderer renderer){
+    /** Attach sizing to a SurfaceView and return a controllable handle. */
+    public static AutoCloser installForSurfaceView(final Activity activity,
+                                                   final SurfaceView sv,
+                                                   final GlUpscaleRenderer renderer) {
         final SurfaceViewSizer sizer = new SurfaceViewSizer(activity, sv, () -> applyHint(activity, renderer));
         return new AutoCloser() {
             @Override public void start() { sizer.start(); applyHint(activity, renderer); }
-            @Override public void stop() { sizer.stop(); }
+            @Override public void stop()  { sizer.stop(); }
         };
     }
 
-    private static void applyHint(Activity activity, GlUpscaleRenderer renderer){
+    /** Push current presentation-size hint to the renderer (best-effort). */
+    private static void applyHint(final Activity activity, final GlUpscaleRenderer renderer) {
         if (renderer == null) return;
-        int[] sz = DisplaySizer.getPresentationSizePx(activity);
-        try { renderer.setPresentationSizeHint(sz[0], sz[1]); } catch (Throwable ignored) {}
+        final int[] sz = DisplaySizer.getPresentationSizePx(activity);
+        try {
+            renderer.setPresentationSizeHint(sz[0], sz[1]);
+        } catch (Throwable ignored) { /* best-effort only */ }
     }
 }
