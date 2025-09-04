@@ -234,7 +234,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+
 
         decoderSurfaceTex = new SurfaceTexture(oesTexId);
         decoderSurfaceTex.setOnFrameAvailableListener(this);
@@ -414,7 +414,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1i(blit_uTex, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
     }
 
@@ -439,7 +439,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glUniform1i(rcasOes_uTex, 0);
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+
             if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
             return true;
         }
@@ -480,7 +480,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         if (__fsr.enabled) { __fsr.tocRcas(); }
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
     }
@@ -508,7 +508,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         setOesFilter(true);
         GLES20.glUniform1i(easu_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+
         if (__fsr.enabled) { __fsr.tocEasu(); }
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
@@ -525,7 +525,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         setTex2DFilter(false);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
     }
@@ -582,7 +582,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+
         twoDNearest = false;
     }
 
