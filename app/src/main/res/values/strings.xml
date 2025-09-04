@@ -731,6 +731,10 @@
     <string name="title_prefer_big_cores">Prefer big CPU cores (non-root)</string>
     <string name="summary_prefer_big_cores">Experimental. Best-effort pinning of critical threads to big cores and use of performance hints. May increase power usage and heat.</string>
 
+
+    <!-- FG-lite -->
+    <string name="pref_fg_lite_motion_adapt_title">Motion-adaptive FG-lite</string>
+    <string name="pref_fg_lite_motion_adapt_summary">Reduce ghosting by lowering blend on fast edges</string>
     <!-- Video Upscaling (FSR-like) -->
     <string name="pref_video_upscale_enable_title">Video upscaling (FSR‑like)</string>
     <string name="pref_video_upscale_enable_summary">GPU spatial upscaling + optional sharpening. Adds a tiny GPU cost.</string>
@@ -739,11 +743,18 @@
     <string name="pref_video_upscale_sharpness_summary">RCAS intensity (0–100)</string>
 
     <string-array name="pref_video_upscale_mode_entries">
+        <item>None (disable upscaling &amp; sharpening)</item>
         <item>RCAS (sharpen only)</item>
-
     </string-array>
     <string-array name="pref_video_upscale_mode_values">
+        <item>none</item>
         <item>rcas</item>
     </string-array>
 
+    <string name="pref_video_framegen_enable_title">Frame generation (Lite)</string>
+    <string name="pref_video_framegen_enable_summary">Insert a simple blended frame between decoded frames at 90/120 Hz to reduce judder. No optical flow, no motion vectors. Best with Fsr-like set to none.</string>
+    <string name="pref_video_framegen_debug_title">Frame generation debug</string>
+    <string name="pref_video_framegen_debug_summary">Show a tiny on-screen marker when a synthetic FG frame is drawn.</string>
+    <string name="pref_video_framegen_ghost_title">Ghost suppression threshold</string>
+    <string name="pref_video_framegen_ghost_summary">Control sensitivity (0–100). Higher values reduce ghosts but bias towards current frame.</string>
 </resources>
