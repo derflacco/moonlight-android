@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.util.Collections;
 import java.util.LinkedList;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -56,7 +57,7 @@ public class MediaCodecHelper {
     private static boolean initialized = false;
 
     static {
-        directSubmitPrefixes = new LinkedList<>();
+        directSubmitPrefixes = new ArrayList<>();
 
         // These decoders have low enough input buffer latency that they
         // can be directly invoked from the receive thread
@@ -74,9 +75,9 @@ public class MediaCodecHelper {
     }
 
     static {
-        refFrameInvalidationAvcPrefixes = new LinkedList<>();
+        refFrameInvalidationAvcPrefixes = new ArrayList<>();
 
-        refFrameInvalidationHevcPrefixes = new LinkedList<>();
+        refFrameInvalidationHevcPrefixes = new ArrayList<>();
         refFrameInvalidationHevcPrefixes.add("omx.exynos");
         refFrameInvalidationHevcPrefixes.add("c2.exynos");
 
@@ -84,11 +85,11 @@ public class MediaCodecHelper {
     }
 
     static {
-        preferredDecoders = new LinkedList<>();
+        preferredDecoders = new ArrayList<>();
     }
 
     static {
-        blacklistedDecoderPrefixes = new LinkedList<>();
+        blacklistedDecoderPrefixes = new ArrayList<>();
 
         // Blacklist software decoders that don't support H264 high profile except on systems
         // that are expected to only have software decoders (like emulators).
@@ -114,15 +115,15 @@ public class MediaCodecHelper {
     static {
         // If a decoder qualifies for reference frame invalidation,
         // these entries will be ignored for those decoders.
-        spsFixupBitstreamFixupDecoderPrefixes = new LinkedList<>();
+        spsFixupBitstreamFixupDecoderPrefixes = new ArrayList<>();
         spsFixupBitstreamFixupDecoderPrefixes.add("omx.nvidia");
         spsFixupBitstreamFixupDecoderPrefixes.add("omx.qcom");
         spsFixupBitstreamFixupDecoderPrefixes.add("omx.brcm");
 
-        baselineProfileHackPrefixes = new LinkedList<>();
+        baselineProfileHackPrefixes = new ArrayList<>();
         baselineProfileHackPrefixes.add("omx.intel");
 
-        blacklistedAdaptivePlaybackPrefixes = new LinkedList<>();
+        blacklistedAdaptivePlaybackPrefixes = new ArrayList<>();
         // The Intel decoder on Lollipop on Nexus Player would increase latency badly
         // if adaptive playback was enabled so let's avoid it to be safe.
         blacklistedAdaptivePlaybackPrefixes.add("omx.intel");
@@ -130,12 +131,12 @@ public class MediaCodecHelper {
         // on some Android TV devices with HEVC only.
         blacklistedAdaptivePlaybackPrefixes.add("omx.mtk");
 
-        constrainedHighProfilePrefixes = new LinkedList<>();
+        constrainedHighProfilePrefixes = new ArrayList<>();
         constrainedHighProfilePrefixes.add("omx.intel");
     }
 
     static {
-        whitelistedHevcDecoders = new LinkedList<>();
+        whitelistedHevcDecoders = new ArrayList<>();
 
         // Allow software HEVC decoding in the official AOSP emulator
         if (Build.HARDWARE.equals("ranchu")) {
@@ -206,7 +207,7 @@ public class MediaCodecHelper {
     }
 
     static {
-        useFourSlicesPrefixes = new LinkedList<>();
+        useFourSlicesPrefixes = new ArrayList<>();
 
         // Software decoders will use 4 slices per frame to allow for slice multithreading
         useFourSlicesPrefixes.add("omx.google");
@@ -218,16 +219,16 @@ public class MediaCodecHelper {
     }
 
     static {
-        knownVendorLowLatencyOptions = new LinkedList<>();
+        knownVendorLowLatencyOptions = new ArrayList<>();
 
-        knownVendorLowLatencyOptions.add("vendor.qti-ext-dec-low-latency.enable");
-        knownVendorLowLatencyOptions.add("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req");
-        knownVendorLowLatencyOptions.add("vendor.rtc-ext-dec-low-latency.enable");
-        knownVendorLowLatencyOptions.add("vendor.low-latency.enable");
+        knownVendorLowLatencyOptions.add("vendor.qti-ext-dec-low-latency.enable".toLowerCase(java.util.Locale.US));
+        knownVendorLowLatencyOptions.add("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req".toLowerCase(java.util.Locale.US));
+        knownVendorLowLatencyOptions.add("vendor.rtc-ext-dec-low-latency.enable".toLowerCase(java.util.Locale.US));
+        knownVendorLowLatencyOptions.add("vendor.low-latency.enable".toLowerCase(java.util.Locale.US));
     }
 
     static {
-        qualcommDecoderPrefixes = new LinkedList<>();
+        qualcommDecoderPrefixes = new ArrayList<>();
 
         qualcommDecoderPrefixes.add("omx.qcom");
         qualcommDecoderPrefixes.add("c2.qti");
@@ -235,7 +236,7 @@ public class MediaCodecHelper {
     }
 
     static {
-        tegraDecoderPrefixes = new LinkedList<>();
+        tegraDecoderPrefixes = new ArrayList<>();
 
         tegraDecoderPrefixes.add("omx.nvidia");
         tegraDecoderPrefixes.add("c2.nvidia");
@@ -243,28 +244,28 @@ public class MediaCodecHelper {
 
     //ALONSOJR1980
     static {
-        mtkDecoderPrefixes = new LinkedList<>();
+        mtkDecoderPrefixes = new ArrayList<>();
 
         mtkDecoderPrefixes.add("omx.mtk");
         mtkDecoderPrefixes.add("c2.mtk");
     }
 
     static {
-        kirinDecoderPrefixes = new LinkedList<>();
+        kirinDecoderPrefixes = new ArrayList<>();
 
         kirinDecoderPrefixes.add("omx.hisi");
         kirinDecoderPrefixes.add("c2.hisi"); // Unconfirmed
     }
 
     static {
-        exynosDecoderPrefixes = new LinkedList<>();
+        exynosDecoderPrefixes = new ArrayList<>();
 
         exynosDecoderPrefixes.add("omx.exynos");
         exynosDecoderPrefixes.add("c2.exynos");
     }
 
     static {
-        amlogicDecoderPrefixes = new LinkedList<>();
+        amlogicDecoderPrefixes = new ArrayList<>();
 
         amlogicDecoderPrefixes.add("omx.amlogic");
         amlogicDecoderPrefixes.add("c2.amlogic"); // Unconfirmed
@@ -450,21 +451,22 @@ public class MediaCodecHelper {
         initialized = true;
     }
 
+
+    private static boolean nameStartsWithAny(String name, List<String> prefixes) {
+        if (name == null || prefixes == null || prefixes.isEmpty()) return false;
+        final String lower = name.toLowerCase(java.util.Locale.US);
+        for (int i = 0, s = prefixes.size(); i < s; i++) {
+            String p = prefixes.get(i);
+            if (p != null && lower.startsWith(p)) return true;
+        }
+        return false;
+    }
+
     private static boolean isDecoderInList(List<String> decoderList, String decoderName) {
         if (!initialized) {
             throw new IllegalStateException("MediaCodecHelper must be initialized before use");
         }
-
-        for (String badPrefix : decoderList) {
-            if (decoderName.length() >= badPrefix.length()) {
-                String prefix = decoderName.substring(0, badPrefix.length());
-                if (prefix.equalsIgnoreCase(badPrefix)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return nameStartsWithAny(decoderName, decoderList);
     }
 
     private static boolean decoderSupportsAndroidRLowLatency(MediaCodecInfo decoderInfo, String mimeType) {
@@ -493,8 +495,9 @@ public class MediaCodecHelper {
 
                 // See if any of the vendor parameters match ones we know about
                 for (String supportedOption : testCodec.getSupportedVendorParameters()) {
+                    final String __opt = (supportedOption != null) ? supportedOption.toLowerCase(java.util.Locale.US) : null;
                     for (String knownLowLatencyOption : knownVendorLowLatencyOptions) {
-                        if (supportedOption.equalsIgnoreCase(knownLowLatencyOption)) {
+                        if (__opt != null && __opt.equals(knownLowLatencyOption)) {
                             LimeLog.info(decoderName + " supports known low latency option: " + supportedOption);
                             return true;
                         }
@@ -646,7 +649,7 @@ public class MediaCodecHelper {
 
                     // Pipeline / code path
                     safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
-                   // safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
+                    // safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
                     safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
                     safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
 
@@ -878,8 +881,8 @@ public class MediaCodecHelper {
 
     @SuppressWarnings("deprecation")
     @SuppressLint("NewApi")
-    private static LinkedList<MediaCodecInfo> getMediaCodecList() {
-        LinkedList<MediaCodecInfo> infoList = new LinkedList<>();
+    private static List<MediaCodecInfo> getMediaCodecList() {
+        List<MediaCodecInfo> infoList = new ArrayList<>();
 
         MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
         Collections.addAll(infoList, mcl.getCodecInfos());
