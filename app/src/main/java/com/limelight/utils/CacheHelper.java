@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 
 public class CacheHelper {
     public static File openPath(boolean createPath, File root, String... path) {
@@ -81,6 +82,6 @@ public class CacheHelper {
     }
 
     public static void writeStringToOutputStream(OutputStream out, String str) throws IOException {
-        out.write(str.getBytes("UTF-8"));
+        out.write(str.getBytes(StandardCharsets.UTF_8));
     }
 }
