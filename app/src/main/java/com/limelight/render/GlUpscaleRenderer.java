@@ -187,7 +187,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
     }
 
-
+    // ===== Performance state =====
+    // VAO (ES3) per ridurre le bind per draw; fallback automatico a VBO path
+    private int vao = 0;
+    private boolean hasVao = false;
+    // Evita eglMakeCurrent e query dimensioni ogni frame
+    private long lastSizeQueryNs = 0L;
+    private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
+    private boolean fixedStateApplied = false;
+    // Temp per evitare allocazioni ripetute
+    private final int[] tmpInt1 = new int[1];
 
     // Threading
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -284,7 +293,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!isGlReady()) continue;
-            EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+            // Rendiamo corrente il contesto solo se necessario
+            if (EGL14.eglGetCurrentContext() != eglContext ||
+                    EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
+                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+            }
+            if (!fixedStateApplied) { applyFixedState(); }
 
             try {
                 if (decoderSurfaceTex != null) {
@@ -293,11 +307,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             } catch (Throwable t) { /* ignore */ }
 
-            refreshWindowSize();
+            long __now = System.nanoTime();
+            if (fbW <= 0 || (__now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
+                refreshWindowSize();
+                lastSizeQueryNs = __now;
+            }
             if (fbW <= 0 || fbH <= 0) continue;
 
-            GLES20.glDisable(GLES20.GL_BLEND);
-            GLES20.glDisable(GLES20.GL_DEPTH_TEST);
             ensureViewport(fbW, fbH);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
@@ -315,11 +331,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
             final boolean canUpscaleNow = (fbW != srcW || fbH != srcH);
 
-
-
-
             // === FSR path selection + telemetry ===
-            // Compute near-native condition and remember threshold for logs
             final float nearThr = 0.05f;
 
             if (!upscaleEnabled) {
@@ -345,7 +357,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
                     __fsr.notes = (ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed")
                             + " | nearNative=" + nearNative + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
-                    // Treat combined pass as total
                     __fsr.frames++;
                     if ((__fsr.frames % 240L) == 0L) {
                         com.limelight.LimeLog.info(__fsr.periodicLine());
@@ -404,6 +415,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
     }
 
     private boolean drawRcasOnlySafe(int dstW, int dstH, float sharp) {
@@ -428,6 +440,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+            if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
             return true;
         }
 
@@ -450,6 +463,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         if (__fsr.enabled) { __fsr.tocEasu(); }
+        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
         // RCAS: upscaledTex -> screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
@@ -467,9 +481,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         if (__fsr.enabled) { __fsr.tocRcas(); }
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
     }
-
 
     private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp) {
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
@@ -495,6 +509,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1i(easu_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0);
+        if (__fsr.enabled) { __fsr.tocEasu(); }
+        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
         // RCAS → screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
@@ -510,6 +526,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         setTex2DFilter(false);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
     }
 
@@ -522,11 +539,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private void refreshWindowSize() {
         if (!isGlReady()) return;
-        int[] val = new int[1];
         int w = 0, h = 0;
         try {
-            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_WIDTH, val, 0);  w = val[0];
-            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_HEIGHT, val, 0); h = val[0];
+            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_WIDTH,  tmpInt1, 0);  w = tmpInt1[0];
+            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_HEIGHT, tmpInt1, 0); h = tmpInt1[0];
         } catch (Throwable ignored) {}
         if (w > 0 && h > 0 && (w != fbW || h != fbH)) {
             createOrResizeFbo(w, h);
@@ -620,16 +636,32 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         quadUv.put(UV).position(0);
 
         int[] ids = new int[1];
-        GLES20.glGenBuffers(1, ids, 0);
-        vboPos = ids[0];
+        // VBOs
+        GLES20.glGenBuffers(1, ids, 0); vboPos = ids[0];
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadPos.capacity()*4, quadPos, GLES20.GL_STATIC_DRAW);
-
-        GLES20.glGenBuffers(1, ids, 0);
-        vboUv = ids[0];
+        GLES20.glGenBuffers(1, ids, 0); vboUv = ids[0];
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadUv.capacity()*4, quadUv, GLES20.GL_STATIC_DRAW);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+        // VAO: pre-binda gli attributi una volta sola
+        try {
+            int[] vaoId = new int[1];
+            GLES30.glGenVertexArrays(1, vaoId, 0);
+            vao = vaoId[0];
+            GLES30.glBindVertexArray(vao);
+            // aPos @ location 0
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
+            GLES20.glEnableVertexAttribArray(0);
+            GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 0, 0);
+            // aUv @ location 1
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
+            GLES20.glEnableVertexAttribArray(1);
+            GLES20.glVertexAttribPointer(1, 2, GLES20.GL_FLOAT, false, 0, 0);
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+            GLES30.glBindVertexArray(0);
+            hasVao = (vao != 0);
+        } catch (Throwable ignored) { hasVao = false; }
 
         // Shaders
         progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
@@ -650,6 +682,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void destroyGl() {
         destroyFbo();
         int[] ids = new int[1];
+        if (hasVao && vao != 0) { int[] vaoId = new int[]{vao}; try { GLES30.glDeleteVertexArrays(1, vaoId, 0); } catch (Throwable ignored) {} vao = 0; hasVao = false; }
         if (vboPos != 0) { ids[0] = vboPos; GLES20.glDeleteBuffers(1, ids, 0); vboPos = 0; }
         if (vboUv  != 0) { ids[0] = vboUv;  GLES20.glDeleteBuffers(1, ids, 0); vboUv  = 0; }
         if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
@@ -672,18 +705,24 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void bindQuad(int prog) {
-        int locPos = GLES20.glGetAttribLocation(prog, "aPos");
-        int locUv  = GLES20.glGetAttribLocation(prog, "aUv");
-
+        if (hasVao && vao != 0) {
+            try { GLES30.glBindVertexArray(vao); return; } catch (Throwable ignored) { /* fallback */ }
+        }
+        // Fallback VBO: attributi fissi (location 0/1 bindate in linkProgram)
+        int locPos = 0, locUv = 1;
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glEnableVertexAttribArray(locPos);
         GLES20.glVertexAttribPointer(locPos, 2, GLES20.GL_FLOAT, false, 0, 0);
-
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glEnableVertexAttribArray(locUv);
         GLES20.glVertexAttribPointer(locUv, 2, GLES20.GL_FLOAT, false, 0, 0);
-
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+    }
+
+    private void applyFixedState() {
+        GLES20.glDisable(GLES20.GL_BLEND);
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST);
+        fixedStateApplied = true;
     }
 
     private void setTex2DFilter(boolean toNearest) {
@@ -795,32 +834,37 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform vec2 uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
                     "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
-                    "vec3 bilateral5(vec2 uv, vec2 texel){\n" +
-                    "  vec3 c0=texture(uUpscaled,uv).rgb; float lc=luma(c0);\n" +
-                    "  float inv2SigR2=1.0/(2.0*0.15*0.15); float ws=0.9; vec3 sum=c0; float wsum=1.0;\n" +
-                    "  vec3 c; float dr; float w;\n" +
-                    "  c=texture(uUpscaled,uv+vec2( texel.x,0)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-                    "  c=texture(uUpscaled,uv+vec2(-texel.x,0)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-                    "  c=texture(uUpscaled,uv+vec2(0, texel.y)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-                    "  c=texture(uUpscaled,uv+vec2(0,-texel.y)).rgb; dr=luma(c)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=c*w; wsum+=w;\n" +
-                    "  return sum/max(wsum,1e-5);\n" +
-                    "}\n" +
                     "void main(){\n" +
-                    "  vec2 texel=uInvDstSize; vec3 c=texture(uUpscaled,vUv).rgb;\n" +
+                    "  vec2 texel=uInvDstSize; vec2 uv=vUv;\n" +
+                    "  vec3 c = texture(uUpscaled, uv).rgb;\n" +
                     "  if(uSharp<=0.001){ fragColor=vec4(c,1.0); return; }\n" +
-                    "  vec3 b=bilateral5(vUv,texel); vec3 detail=c-b; vec3 sgn=sign(detail);\n" +
-                    "  detail=max(abs(detail)-vec3(1.0/255.0),vec3(0.0))*sgn;\n" +
-                    "  float gx=luma(texture(uUpscaled,vUv+vec2(texel.x,0)).rgb)-luma(texture(uUpscaled,vUv-vec2(texel.x,0)).rgb);\n" +
-                    "  float gy=luma(texture(uUpscaled,vUv+vec2(0,texel.y)).rgb)-luma(texture(uUpscaled,vUv-vec2(0,texel.y)).rgb);\n" +
-                    "  float edge=sqrt(gx*gx+gy*gy); float edgeW=1.0/(1.0+3.0*edge);\n" +
-                    "  float k=1.6*pow(clamp(uSharp,0.0,1.0),0.85);\n" +
-                    "  vec3 outc=clamp(c+detail*(k*edgeW),0.0,1.0);\n" +
-                    "  fragColor=vec4(outc,1.0);\n" +
+                    "  // 4 sample riusati per bilateral + gradient (5 fetch totali)\n" +
+                    "  vec3 rx = texture(uUpscaled, uv + vec2(texel.x, 0.0)).rgb;\n" +
+                    "  vec3 lx = texture(uUpscaled, uv - vec2(texel.x, 0.0)).rgb;\n" +
+                    "  vec3 ty = texture(uUpscaled, uv + vec2(0.0, texel.y)).rgb;\n" +
+                    "  vec3 by = texture(uUpscaled, uv - vec2(0.0, texel.y)).rgb;\n" +
+                    "  float lc = luma(c);\n" +
+                    "  float inv2SigR2=1.0/(2.0*0.15*0.15);\n" +
+                    "  float ws=0.9; float wsum=1.0; vec3 sum=c; float dr; float w;\n" +
+                    "  dr=luma(rx)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=rx*w; wsum+=w;\n" +
+                    "  dr=luma(lx)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=lx*w; wsum+=w;\n" +
+                    "  dr=luma(ty)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=ty*w; wsum+=w;\n" +
+                    "  dr=luma(by)-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=by*w; wsum+=w;\n" +
+                    "  vec3 b = sum / max(wsum, 1e-5);\n" +
+                    "  float gx = luma(rx) - luma(lx);\n" +
+                    "  float gy = luma(ty) - luma(by);\n" +
+                    "  float edge = sqrt(gx*gx + gy*gy);\n" +
+                    "  float edgeW = 1.0/(1.0 + 3.0*edge);\n" +
+                    "  float k = 1.6*pow(clamp(uSharp,0.0,1.0),0.85);\n" +
+                    "  vec3 detail = c - b; vec3 sgn=sign(detail);\n" +
+                    "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
+                    "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
+                    "  fragColor = vec4(outc,1.0);\n" +
                     "}";
+
     // ===== FSR telemetry controls =====
     public void setFsrDebugEnabled(boolean enabled) { __fsr.enabled = enabled; }
     public String getFsrOverlayLine() { return __fsrOverlay; }
-
 
     // Draw a tiny frame with RCAS_OES into a 2x2 FBO and read back to verify non-zero output.
     private void checkRcasOesHealthOnce(int dstW, int dstH) {
@@ -874,5 +918,4 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         try { com.limelight.LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
     }
-
 }
