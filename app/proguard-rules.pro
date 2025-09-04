@@ -55,3 +55,4 @@
 -keep class com.limelight.utils.SurfaceViewSizer { *; }
 -keep class com.limelight.utils.FSRSizerInstaller { *; }
 -keep class com.limelight.utils.FSRSizerInstaller$AutoCloser { *; }
+-keep class com.limelight.binding.input.InputSender

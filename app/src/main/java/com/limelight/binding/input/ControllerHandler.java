@@ -1,5 +1,7 @@
 package com.limelight.binding.input;
 
+import com.limelight.binding.input.InputSender;
+
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
@@ -127,10 +129,25 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final Handler mainThreadHandler;
     private final HandlerThread backgroundHandlerThread;
     private final Handler backgroundThreadHandler;
+    private final InputSender inputSender;
     private boolean hasGameController;
     private boolean stopped = false;
 
     private final PreferenceConfiguration prefConfig;
+
+    private static final int MAX_CONTROLLERS = 4;
+    // Thresholds to avoid spamming tiny changes
+    private static final int AXIS_DELTA_MIN = 64; // ~0.2% of full scale
+    private static final int TRIGGER_DELTA_MIN = 2; // 0-255
+
+    private final short[] lastSentLeftStickX = new short[MAX_CONTROLLERS];
+    private final short[] lastSentLeftStickY = new short[MAX_CONTROLLERS];
+    private final short[] lastSentRightStickX = new short[MAX_CONTROLLERS];
+    private final short[] lastSentRightStickY = new short[MAX_CONTROLLERS];
+    private final byte[] lastSentLeftTrigger = new byte[MAX_CONTROLLERS];
+    private final byte[] lastSentRightTrigger = new byte[MAX_CONTROLLERS];
+    private final int[] lastSentInputMap = new int[MAX_CONTROLLERS];
+    
     private short currentControllers, initialControllers;
 
     public ControllerHandler(Activity activityContext, NvConnection conn, GameGestures gestures, PreferenceConfiguration prefConfig) {
@@ -148,6 +165,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.backgroundHandlerThread = new HandlerThread("ControllerHandler");
         this.backgroundHandlerThread.start();
         this.backgroundThreadHandler = new Handler(backgroundHandlerThread.getLooper());
+        this.inputSender = new InputSender((type, A, B, C) -> { /* direct posting used */ });
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             this.deviceVibratorManager = (VibratorManager) activityContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
@@ -293,6 +311,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     public void destroy() {
+        if (inputSender != null) { inputSender.shutdown(); }
         if (!stopped) {
             stop();
         }
@@ -1309,42 +1328,65 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
             if ((changedMask & ControllerPacket.A_FLAG) != 0) {
                 if (aDown) {
-                    conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
+                    inputSender.post(() -> conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT));
                 }
                 else {
-                    conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
+                    inputSender.post(() -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT));
                 }
             }
             if ((changedMask & ControllerPacket.B_FLAG) != 0) {
                 if (bDown) {
-                    conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
+                    inputSender.post(() -> conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT));
                 }
                 else {
-                    conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
+                    inputSender.post(() -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT));
                 }
             }
             if ((changedMask & ControllerPacket.UP_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.UP_FLAG) != 0) {
-                    conn.sendMouseScroll((byte) 1);
+                    inputSender.post(() -> conn.sendMouseScroll((byte) 1));
                 }
             }
             if ((changedMask & ControllerPacket.DOWN_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.DOWN_FLAG) != 0) {
-                    conn.sendMouseScroll((byte) -1);
+                    inputSender.post(() -> conn.sendMouseScroll((byte) -1));
                 }
             }
             if ((changedMask & ControllerPacket.RIGHT_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.RIGHT_FLAG) != 0) {
-                    conn.sendMouseHScroll((byte) 1);
+                    inputSender.post(() -> conn.sendMouseHScroll((byte) 1));
                 }
             }
             if ((changedMask & ControllerPacket.LEFT_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.LEFT_FLAG) != 0) {
-                    conn.sendMouseHScroll((byte) -1);
+                    inputSender.post(() -> conn.sendMouseHScroll((byte) -1));
                 }
             }
 
-            conn.sendControllerInput(controllerNumber, getActiveControllerMask(),
+            
+            /* DELTA THRESHOLD CHECK */
+            int ci = Math.max(0, Math.min(MAX_CONTROLLERS-1, controllerNumber));
+            boolean mapChanged = (inputMap != lastSentInputMap[ci]);
+            boolean axesChanged =
+                    Math.abs(leftStickX - lastSentLeftStickX[ci]) >= AXIS_DELTA_MIN ||
+                    Math.abs(leftStickY - lastSentLeftStickY[ci]) >= AXIS_DELTA_MIN ||
+                    Math.abs(rightStickX - lastSentRightStickX[ci]) >= AXIS_DELTA_MIN ||
+                    Math.abs(rightStickY - lastSentRightStickY[ci]) >= AXIS_DELTA_MIN ||
+                    Math.abs((leftTrigger & 0xFF) - (lastSentLeftTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN ||
+                    Math.abs((rightTrigger & 0xFF) - (lastSentRightTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN;
+
+            if (!mapChanged && !axesChanged) {
+                return;
+            }
+
+            lastSentInputMap[ci] = inputMap;
+            lastSentLeftStickX[ci] = leftStickX;
+            lastSentLeftStickY[ci] = leftStickY;
+            lastSentRightStickX[ci] = rightStickX;
+            lastSentRightStickY[ci] = rightStickY;
+            lastSentLeftTrigger[ci] = leftTrigger;
+            lastSentRightTrigger[ci] = rightTrigger;
+        conn.sendControllerInput(controllerNumber, getActiveControllerMask(),
                     (short)0, (byte)0, (byte)0, (short)0, (short)0, (short)0, (short)0);
         }
         else {
@@ -1973,11 +2015,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             if(mouseEmulationXDown == true )
             {
                 // convert the vector number to -1 if negative and +1 if positive and then send the mouse movement in pixels
-                conn.sendMouseMove((short)(Integer.signum((int)vector.getX()) * mouseEmulationPixelMultiplier) , (short)(Integer.signum((int)-vector.getY()) * mouseEmulationPixelMultiplier) );
+                inputSender.post(() -> conn.sendMouseMove((short)(Integer.signum((int)vector.getX()) * mouseEmulationPixelMultiplier) , (short)(Integer.signum((int)-vector.getY()) * mouseEmulationPixelMultiplier) ));
             }
             else {
                 // If X button is not pressed, base the movement on how much the stick is moved from the center
-                conn.sendMouseMove((short) vector.getX(), (short) -vector.getY());
+                inputSender.post(() -> conn.sendMouseMove((short) vector.getX(), (short) -vector.getY()));
             }
         }
     }
@@ -3107,6 +3149,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         public void destroy() {
+        if (inputSender != null) { inputSender.shutdown(); }
             mouseEmulationActive = false;
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
         }
@@ -3213,6 +3256,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         @Override
         public void destroy() {
+        if (inputSender != null) { inputSender.shutdown(); }
             super.destroy();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && vibratorManager != null) {
@@ -3435,14 +3479,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     class UsbDeviceContext extends InputDeviceContext {
         public AbstractController device;
 
-//        @Override
-//        public void destroy() {
-//            super.destroy();
-//
-//            // Nothing for now
-//        }
-
-        @Override
+      @Override
+        public void destroy() {
+        if (inputSender != null) { inputSender.shutdown(); }
+          super.destroy();
+      }
+          // Nothing for now
+       @Override
         public void sendControllerArrival() {
             byte type = device.getType();
             short capabilities = device.getCapabilities();
