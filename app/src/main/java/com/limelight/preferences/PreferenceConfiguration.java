@@ -12,7 +12,7 @@ import com.limelight.profiles.ProfilesManager;
 public class PreferenceConfiguration {
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
-    public String  videoUpscaleMode;     // "rcas" or "easu_rcas"
+    public String  videoUpscaleMode;     // "none", "rcas", or "easu_rcas"
     public int     videoUpscaleSharpness; // 0..100
 
 
@@ -35,9 +35,9 @@ public class PreferenceConfiguration {
         LEFT
     }
 
- // FSR-like spatial upscaling
+    // FSR-like spatial upscaling
     private static final String VIDEO_UPSCALE_ENABLE_PREF_STRING = "pref_video_upscale_enable";
-    private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "rcas" or "easu_rcas"
+    private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "none", "rcas", or "easu_rcas"
     private static final String VIDEO_UPSCALE_SHARP_PREF_STRING  = "pref_video_upscale_sharpness"; // 0..100
 
     private static final String DEFAULT_VIDEO_UPSCALE_MODE = "rcas";
@@ -1065,6 +1065,16 @@ private static int getFramePacingValue(Context context) {
             try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
         }
-    return config;
+
+    }
+
+    public static boolean isFGLiteMotionAdapt(android.content.Context ctx) {
+        try {
+            return androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+                    .getBoolean("pref_fg_lite_motion_adapt", true);
+        } catch (Throwable t) {
+            return true;
+        }
+        return config;
     }
 }

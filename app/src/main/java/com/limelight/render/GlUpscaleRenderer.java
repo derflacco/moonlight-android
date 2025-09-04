@@ -320,6 +320,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
             final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
+            final boolean modeNone = "none".equals(mode);
             final boolean forceRcasOnly = "easu_rcas".equals(mode);
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
 
@@ -334,7 +335,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // === FSR path selection + telemetry ===
             final float nearThr = 0.05f;
 
-            if (!upscaleEnabled) {
+            if (!upscaleEnabled || modeNone) {
                 // BYPASS
                 if (__fsr.enabled) {
                     __fsr.mode = "BYPASS";
@@ -342,7 +343,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.dstW = fbW; __fsr.dstH = fbH;
                     __fsr.sharp = 0f;
                     __fsr.sampling = "bypass";
-                    __fsr.notes = "reason=bypass:upscaleDisabled" + " | win=" + fbW + "x" + fbH + " hint=" + dstTargetW + "x" + dstTargetH;
+                    __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled") + " | win=" + fbW + "x" + fbH + " hint=" + dstTargetW + "x" + dstTargetH;
                     __fsrOverlay = __fsr.overlayLine();
                 }
                 drawOesToScreen();
