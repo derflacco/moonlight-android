@@ -118,6 +118,24 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Programs
     private int progVs = 0, progBlit = 0, progEasu = 0, progRcas = 0;
 
+    // ===== FG-lite (lightweight frame generation) =====
+    // Keeps the last two presented frames in 2D textures and, when enabled,
+    // can draw a synthetic frame by blending them in linear space.
+    private int fgPrevTex = 0;
+    private int fgCurrTex = 0;
+    private int progBlend = 0;
+    private int blend_uPrev = -1, blend_uCurr = -1, blend_uAlpha = -1;
+    private boolean fgHasHistory = false;
+    private boolean fgSyntheticDoneForInterval = false;
+    private long fgLastSrcArriveNs = 0L; // wall-clock when a new source frame arrives
+    private long fgLastPtsNs = 0L;       // from SurfaceTexture.getTimestamp()
+    private long fgAvgPeriodNs = 0L;     // EWMA of source frame interval
+    private long fgLastRealSwapMonoNs = 0L; // System.nanoTime() when last real frame was swapped
+    private int fgCountThisSec = 0;
+    private long fgCounterWindowStartNs = 0L;
+    private long fgLastLogNs = 0L; // FG-lite logging window
+    private int blend_uGhostLo = -1, blend_uGhostHi = -1;
+
     // Uniform locations
     private int blit_uTex = -1, blit_uTexMat = -1;
     private int easu_uTex = -1, easu_uSrcSize = -1, easu_uDstSize = -1, easu_uTexMat = -1;
@@ -287,7 +305,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         while (running.get()) {
             synchronized (frameLock) {
                 if (!frameAvailable) {
-                    try { frameLock.wait(33); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    int __waitMs = 33;
+                    // If FG-lite is enabled, wake closer to the mid-interval to synthesize a frame
+                    if (prefs != null && prefs.videoFrameGenLiteEnable && fgHasHistory && fgAvgPeriodNs > 0L && !fgSyntheticDoneForInterval) {
+                        long __targetNs = fgLastSrcArriveNs + (fgAvgPeriodNs >> 1); // ~half source period from arrival
+                        long __nowNs = System.nanoTime();
+                        long __msUntil = (__targetNs - __nowNs) / 1_000_000L;
+                        if (__msUntil < 0L) __msUntil = 0L;
+                        // Keep CPU sane: cap to 8 ms, floor to 1 ms to avoid busy spin
+                        if (__msUntil > 8L) __msUntil = 8L;
+                        if (__msUntil < 1L) __msUntil = 1L;
+                        __waitMs = (int) Math.min(33, __msUntil);
+                    }
+                    try { frameLock.wait(__waitMs); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
                 }
                 frameAvailable = false;
             }
@@ -304,6 +334,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (decoderSurfaceTex != null) {
                     decoderSurfaceTex.updateTexImage();
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
+                    try { long __ts = decoderSurfaceTex.getTimestamp();
+                        boolean __new = (__ts != fgLastPtsNs);
+                        if (__new) {
+                            if (fgLastPtsNs != 0L) { fgAvgPeriodNs = ewmaNs(fgAvgPeriodNs, (__ts - fgLastPtsNs)); }
+                            fgLastPtsNs = __ts; fgSyntheticDoneForInterval = false;
+                        }
+                    } catch (Throwable ignored) {}
+
                 }
             } catch (Throwable t) { /* ignore */ }
 
@@ -320,6 +358,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
             final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
+            final boolean modeNone = "none".equals(mode);
             final boolean forceRcasOnly = "easu_rcas".equals(mode);
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
 
@@ -331,10 +370,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
             final boolean canUpscaleNow = (fbW != srcW || fbH != srcH);
 
-            // === FSR path selection + telemetry ===
+            /*__FG_LITE_MAYBE*/
+            boolean __didFg = false;
+            final boolean __fgEnabled = (prefs != null && prefs.videoFrameGenLiteEnable);
+            if (__fgEnabled && fgHasHistory && !fgSyntheticDoneForInterval) {
+                long __nowNs = System.nanoTime();
+                long __since = __nowNs - fgLastRealSwapMonoNs;
+                // Use source PTS EWMA if available; else fall back to wall-clock delta
+                long __periodNs = (fgAvgPeriodNs > 0L ? fgAvgPeriodNs : __since);
+                if (__periodNs > 0L && __since >= (__periodNs >> 1)) {
+                    __didFg = drawSyntheticBlend(0.5f);
+                    if (__didFg) { fgSyntheticDoneForInterval = true; fgCountThisSec++; }
+                }
+            }
+            if (!__didFg) {
+
+// === FSR path selection + telemetry ===
+            }
+
             final float nearThr = 0.05f;
 
-            if (!upscaleEnabled) {
+            if (!upscaleEnabled || modeNone) {
                 // BYPASS
                 if (__fsr.enabled) {
                     __fsr.mode = "BYPASS";
@@ -342,8 +398,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.dstW = fbW; __fsr.dstH = fbH;
                     __fsr.sharp = 0f;
                     __fsr.sampling = "bypass";
-                    __fsr.notes = "reason=bypass:upscaleDisabled" + " | win=" + fbW + "x" + fbH + " hint=" + dstTargetW + "x" + dstTargetH;
+                    __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled") + " | win=" + fbW + "x" + fbH + " hint=" + dstTargetW + "x" + dstTargetH;
                     __fsrOverlay = __fsr.overlayLine();
+                    try {
+                        if (prefs != null && prefs.videoFrameGenLiteDebugOverlay) {
+                            __fsrOverlay = __fsrOverlay + " | FG:" + fgCountThisSec;
+                        }
+                    } catch (Throwable ignored) {}
+
                 }
                 drawOesToScreen();
             } else if (false /* EASU disabled */) {
@@ -398,6 +460,52 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
             try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
+            // Before swap, on real frames capture to FG history (best effort)
+            try {
+                if (prefs != null && prefs.videoFrameGenLiteEnable) {
+                    ensureFgTextures(fbW, fbH);
+                    if (!fgSyntheticDoneForInterval) {
+                        int __tmp = fgPrevTex; fgPrevTex = fgCurrTex; fgCurrTex = __tmp;
+                        captureScreenTo(fgCurrTex, fbW, fbH);
+                        fgHasHistory = true;
+                        fgLastRealSwapMonoNs = System.nanoTime();
+                    }
+                }
+            } catch (Throwable ignored) {}
+            // FG-LITE DEBUG OVERLAY (small scissor rectangles)
+            if (prefs != null && prefs.videoFrameGenLiteDebugOverlay) {
+                long nowNs = System.nanoTime();
+                if (fgCounterWindowStartNs == 0L || nowNs - fgCounterWindowStartNs > 1_000_000_000L) {
+                    fgCounterWindowStartNs = nowNs;
+                    // decay the counter each second to keep it readable
+                    // keep full count for logging; cap only for visual squares below
+                }
+                int n = (fgCountThisSec > 8) ? 8 : fgCountThisSec;
+                int box = Math.max(6, fbH / 180); // scale a bit with height
+                GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+                for (int i=0; i<n && i<8; i++) {
+                    GLES20.glScissor(2 + i*(box+2), fbH - (box+2), box, box);
+                    GLES20.glClearColor(0f, 1f, 0f, 1f);
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                }
+                GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+            }
+            // FG-lite textual log (once per second; toggle with debug)
+            if (prefs != null && prefs.videoFrameGenLiteDebugOverlay) {
+                long nowFg = System.nanoTime();
+                if (fgLastLogNs == 0L || (nowFg - fgLastLogNs) > 1_000_000_000L) {
+                    double __ms = (fgAvgPeriodNs > 0 ? (fgAvgPeriodNs / 1e6) : 0.0);
+                    try { com.limelight.LimeLog.info(String.format(java.util.Locale.US,
+                            "FG-lite | FG/s=%d | srcPeriod=%.2f ms | enabled=%s | hist=%s | pts=%s",
+                            fgCountThisSec, __ms,
+                            String.valueOf(prefs != null && prefs.videoFrameGenLiteEnable),
+                            String.valueOf(fgHasHistory),
+                            String.valueOf(fgAvgPeriodNs > 0)) ); } catch (Throwable ignored) {}
+                    fgLastLogNs = nowFg;
+                    fgCountThisSec = 0; // reset window
+                }
+            }
+
             EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
         }
     }
@@ -719,6 +827,98 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
     }
 
+
+    // FG-lite helpers
+    private static long ewmaNs(long avg, long sample) {
+        if (avg <= 0) return sample;
+        // alpha = 0.2 for quick adaptation
+        long a = (long)(avg * 8 / 10);
+        long b = (long)(sample * 2 / 10);
+        return a + b;
+    }
+    private void ensureFgTextures(int w, int h) {
+        if (w <= 0 || h <= 0) return;
+        if (fgPrevTex != 0 && fgCurrTex != 0) return;
+        int[] ids = new int[2];
+        GLES20.glGenTextures(2, ids, 0);
+        fgPrevTex = ids[0];
+        fgCurrTex = ids[1];
+        for (int i = 0; i < 2; i++) {
+            int t = ids[i];
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, t);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+        }
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+    }
+    private void captureScreenTo(int texture2D, int w, int h) {
+        if (texture2D == 0) return;
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture2D);
+        // Copy from the default framebuffer into the texture
+        GLES20.glCopyTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+    }
+    private void ensureBlendProgram() {
+        if (progBlend != 0) return;
+        final String FS_BLEND =
+                "#version 300 es\n"
+                        + "precision highp float;\n"
+                        + "in vec2 vUv;\n"
+                        + "layout(location=0) out vec4 fragColor;\n"
+                        + "uniform sampler2D uPrev;\n"
+                        + "uniform sampler2D uCurr;\n"
+                        + "uniform float uAlpha;\n"
+                        + "uniform float uGhostLo;\n"
+                        + "uniform float uGhostHi;\n"
+                        + "vec3 lin(vec3 c){ return pow(max(c, vec3(0.0)), vec3(2.2)); }\n"
+                        + "vec3 gamma(vec3 c){ return pow(max(c, vec3(0.0)), vec3(1.0/2.2)); }\n"
+                        + "void main(){\n"
+                        + "  vec3 p = texture(uPrev, vUv).rgb;\n"
+                        + "  vec3 c = texture(uCurr, vUv).rgb;\n"
+                        + "  vec3 lp = lin(p);\n"
+                        + "  vec3 lc = lin(c);\n"
+                        + "  float a = clamp(uAlpha, 0.0, 1.0);\n"
+                        + "  vec3 blended = mix(lp, lc, a);\n"
+                        + "  float diff = length(lc - lp);\n"
+                        + "  float s = smoothstep(uGhostLo, uGhostHi, diff);\n"
+                        + "  vec3 outc = mix(blended, lc, s * 0.5);\n"
+                        + "  fragColor = vec4(gamma(outc), 1.0);\n"
+                        + "}\n";
+        progBlend = linkProgram(progVs, FS_BLEND);
+        blend_uPrev = GLES20.glGetUniformLocation(progBlend, "uPrev");
+        blend_uCurr = GLES20.glGetUniformLocation(progBlend, "uCurr");
+        blend_uAlpha = GLES20.glGetUniformLocation(progBlend, "uAlpha");
+        blend_uGhostLo = GLES20.glGetUniformLocation(progBlend, "uGhostLo");
+        blend_uGhostHi = GLES20.glGetUniformLocation(progBlend, "uGhostHi");
+    }
+
+
+    private boolean drawSyntheticBlend(float alpha) {
+        if (fgPrevTex == 0 || fgCurrTex == 0) return false;
+        ensureBlendProgram();
+        ensureViewport(fbW, fbH);
+        GLES20.glUseProgram(progBlend);
+        bindQuad(progBlend);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fgPrevTex);
+        GLES20.glUniform1i(blend_uPrev, 0);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fgCurrTex);
+        GLES20.glUniform1i(blend_uCurr, 1);
+        GLES20.glUniform1f(blend_uAlpha, alpha);
+        boolean __ma = (prefs != null ? prefs.videoFrameGenLiteMotionAdapt : true);
+        float __thr = (prefs != null ? (prefs.videoFrameGenGhostThreshold / 100.0f) : 0.15f);
+        float __lo = __ma ? (0.03f + (0.09f * __thr)) : 2.0f;
+        float __hi = __ma ? (__lo + 0.09f) : 3.0f;
+        GLES20.glUniform1f(blend_uGhostLo, __lo);
+        GLES20.glUniform1f(blend_uGhostHi, __hi);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+        return true;
+    }
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);

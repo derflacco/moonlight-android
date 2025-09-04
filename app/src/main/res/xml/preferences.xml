@@ -178,7 +178,7 @@
             android:title="@string/title_fullexdisplay_mode"
             app:iconSpaceReserved="false" />
 
-    
+
         <!-- Video Upscaling (FSR-like) -->
         <CheckBoxPreference
             android:key="pref_video_upscale_enable"
@@ -200,7 +200,7 @@
             android:key="pref_video_upscale_sharpness"
             android:title="@string/pref_video_upscale_sharpness_title"
             android:summary="@string/pref_video_upscale_sharpness_summary"
-			android:dependency="pref_video_upscale_enable"
+            android:dependency="pref_video_upscale_enable"
             android:defaultValue="35"
             android:max="100"
             app:iconSpaceReserved="false"
@@ -209,6 +209,44 @@
             seekbar:min="0"
             seekbar:step="1"
             android:text="%" />
+
+
+        <CheckBoxPreference
+            android:key="pref_video_framegen_enable"
+            android:title="@string/pref_video_framegen_enable_title"
+            android:summary="@string/pref_video_framegen_enable_summary"
+            android:dependency="pref_video_upscale_enable"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="pref_video_framegen_debug"
+            android:title="@string/pref_video_framegen_debug_title"
+            android:summary="@string/pref_video_framegen_debug_summary"
+            android:dependency="pref_video_framegen_enable"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:key="pref_fg_lite_motion_adapt"
+            android:title="@string/pref_fg_lite_motion_adapt_title"
+            android:dependency="pref_video_framegen_enable"
+            android:summary="@string/pref_fg_lite_motion_adapt_summary"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+        android:key="pref_video_upscale_sharpness"
+        android:title="@string/pref_video_upscale_sharpness_title"
+        android:summary="@string/pref_video_upscale_sharpness_summary"
+        android:dependency="pref_video_upscale_enable"
+        <com.limelight.preferences.SeekBarPreference
+            android:key="pref_video_framegen_ghost"
+            android:title="@string/pref_video_framegen_ghost_title"
+            android:summary="@string/pref_video_framegen_ghost_summary"
+            android:dependency="pref_video_framegen_enable"
+            android:defaultValue="15"
+            android:max="100"
+            app:iconSpaceReserved="false"
+            seekbar:min="0"
+            seekbar:step="1" />
     </PreferenceCategory>
 
     <PreferenceCategory

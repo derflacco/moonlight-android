@@ -11,8 +11,12 @@ import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
     // Video upscaling (FSR-like)
+    public boolean videoFrameGenLiteEnable; // Lightweight frame-generation toggle
+    public boolean videoFrameGenLiteDebugOverlay; // Show tiny on-screen FG marker/counter
+    public boolean videoFrameGenLiteMotionAdapt; // motion-adaptive FG-lite toggle
+    public int videoFrameGenGhostThreshold; // 0..100, ghost suppression threshold
     public boolean videoUpscaleEnable;
-    public String  videoUpscaleMode;     // "rcas" or "easu_rcas"
+    public String  videoUpscaleMode;     // "none", "rcas", or "easu_rcas"
     public int     videoUpscaleSharpness; // 0..100
 
 
@@ -35,9 +39,9 @@ public class PreferenceConfiguration {
         LEFT
     }
 
- // FSR-like spatial upscaling
+    // FSR-like spatial upscaling
     private static final String VIDEO_UPSCALE_ENABLE_PREF_STRING = "pref_video_upscale_enable";
-    private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "rcas" or "easu_rcas"
+    private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "none", "rcas", or "easu_rcas"
     private static final String VIDEO_UPSCALE_SHARP_PREF_STRING  = "pref_video_upscale_sharpness"; // 0..100
 
     private static final String DEFAULT_VIDEO_UPSCALE_MODE = "rcas";
@@ -58,6 +62,10 @@ public class PreferenceConfiguration {
     private static final String BITRATE_PREF_OLD_STRING = "seekbar_bitrate";
     private static final String METERED_BITRATE_PREF_STRING = "seekbar_metered_bitrate_kbps";
     private static final String ENABLE_ULTRA_LOW_LATENCY_PREF_STRING = "checkbox_ultra_low_latency";
+    private static final String VIDEO_FRAMEGEN_LITE_ENABLE_PREF_STRING = "pref_video_framegen_enable";
+    private static final String VIDEO_FRAMEGEN_LITE_DEBUG_PREF_STRING = "pref_video_framegen_debug";
+    private static final String FG_LITE_MOTION_ADAPT_PREF_STRING = "pref_fg_lite_motion_adapt";
+    private static final String VIDEO_FRAMEGEN_GHOST_THR_PREF_STRING = "pref_video_framegen_ghost";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
     private static final String AUTO_INVERT_VIDEO_RESOLUTION_PREF_STRING = "checkbox_auto_invert_video_resolution";
@@ -1028,6 +1036,11 @@ public class PreferenceConfiguration {
 
 
         // FSR-like video upscaling prefs
+        config.videoFrameGenLiteDebugOverlay = prefs.getBoolean(VIDEO_FRAMEGEN_LITE_DEBUG_PREF_STRING, false);
+        config.videoFrameGenGhostThreshold = prefs.getInt(VIDEO_FRAMEGEN_GHOST_THR_PREF_STRING, 15);
+        config.videoFrameGenLiteEnable = prefs.getBoolean(VIDEO_FRAMEGEN_LITE_ENABLE_PREF_STRING, false);
+        config.videoFrameGenLiteMotionAdapt = prefs.getBoolean(FG_LITE_MOTION_ADAPT_PREF_STRING, true);
+
         config.videoUpscaleEnable    = prefs.getBoolean(VIDEO_UPSCALE_ENABLE_PREF_STRING, false);
         config.videoUpscaleMode      = prefs.getString(VIDEO_UPSCALE_MODE_PREF_STRING, DEFAULT_VIDEO_UPSCALE_MODE);
         try {
@@ -1037,6 +1050,15 @@ public class PreferenceConfiguration {
             try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
         }
-    return config;
+        return config;
+    }
+
+    public static boolean isFGLiteMotionAdapt(android.content.Context ctx) {
+        try {
+            return androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+                    .getBoolean("pref_fg_lite_motion_adapt", true);
+        } catch (Throwable t) {
+            return true;
+        }
     }
 }
