@@ -12,6 +12,7 @@ import android.os.Build;
 import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.PreferenceConfiguration;
 
 /**
  * AndroidAudioRenderer
@@ -27,6 +28,8 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private final Context context;
     private final boolean preferLowLatency;
     private final boolean enableAudioFx;
+    private boolean smoothAudio;
+
 
     private AudioTrack track;
 
@@ -57,6 +60,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
         this.context = context;
         this.preferLowLatency = preferLowLatency;
         this.enableAudioFx = enableAudioFx;
+        this.smoothAudio = PreferenceConfiguration.readPreferences(context).smoothAudioPlayback;
     }
 
     /** Back-compat constructor used by older call sites: (Context, enableAudioFx) */
@@ -187,11 +191,15 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
         if (track == null) return -2;
 
-        // Ring ~70 ms
-        int capMs = 70;
-        int capSamples = (sampleRate * audioConfiguration.channelCount * capMs) / 1000;
-        rbInit(capSamples, audioConfiguration.channelCount, sampleRate);
-
+        // Ring ~70 ms (only when Smooth Audio Playback is ON)
+        if (smoothAudio && nbSupported) {
+            int capMs = 70;
+            int capSamples = (sampleRate * audioConfiguration.channelCount * capMs) / 1000;
+            rbInit(capSamples, audioConfiguration.channelCount, sampleRate);
+        } else {
+            // Ensure ring is cleared when disabled
+            ring = null; ringSize = rHead = rTail = rCount = 0; capSamples = 0; this.channels = audioConfiguration.channelCount; this.sampleRate = sampleRate;
+        }
         return 0;
     }
 
@@ -201,7 +209,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
         final int pendingMs = MoonBridge.getPendingAudioDuration();
 
-        if (nbSupported) {
+        if (smoothAudio && nbSupported) {
             // Drain first
             rbReadToTrackNonBlocking();
 

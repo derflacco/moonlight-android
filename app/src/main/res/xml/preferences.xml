@@ -266,6 +266,7 @@
             android:summary="@string/summary_checkbox_enable_audiofx"
             android:title="@string/title_checkbox_enable_audiofx"
             app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -983,6 +984,13 @@
             android:summary="@string/summary_video_format"
             android:title="@string/title_video_format"
             app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:key="checkbox_smooth_audio_playback"
+            android:title="@string/title_smooth_audio_playback"
+            android:summary="@string/summary_smooth_audio_playback"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

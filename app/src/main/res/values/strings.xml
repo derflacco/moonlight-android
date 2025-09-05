@@ -744,4 +744,8 @@
     <string name="pref_video_framegen_debug_summary">Show a tiny on-screen marker when a synthetic FG frame is drawn.</string>
     <string name="pref_video_framegen_ghost_title">Ghost suppression threshold</string>
     <string name="pref_video_framegen_ghost_summary">Control sensitivity (0–100). Higher values reduce ghosts but bias towards current frame.</string>
+
+
+    <string name="title_smooth_audio_playback">Smooth Audio Playback</string>
+    <string name="summary_smooth_audio_playback">Reduce audio hiccups via non-blocking writes.</string>
 </resources>
