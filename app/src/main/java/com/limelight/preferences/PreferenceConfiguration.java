@@ -1071,16 +1071,8 @@ private static int getFramePacingValue(Context context) {
             try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
         }
-
-    }
-
-    public static boolean isFGLiteMotionAdapt(android.content.Context ctx) {
-        try {
-            return androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
-                    .getBoolean("pref_fg_lite_motion_adapt", true);
-        } catch (Throwable t) {
-            return true;
-        }
         return config;
     }
-}
+
+
+    }
