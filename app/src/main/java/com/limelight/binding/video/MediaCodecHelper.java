@@ -583,7 +583,7 @@ public class MediaCodecHelper {
                 videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
                 setNewOption = true;
             }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
                 setNewOption = true;
             }
