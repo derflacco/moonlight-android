@@ -777,4 +777,7 @@
     <string name="pref_entry_display_3">Monitor 3</string>
     <string name="pref_entry_display_4">Monitor 4</string>
     <string name="pref_entry_display_5">Monitor 5</string>
+
+        <string name="title_checkbox_snappy_input">Snappy Input</string>
+        <string name="summary_checkbox_snappy_input">Offload input to a background thread and ignore tiny axis/trigger deltas for a smoother feel. </string>
 </resources>
