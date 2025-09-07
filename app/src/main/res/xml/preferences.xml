@@ -391,7 +391,15 @@
             android:text="@string/suffix_seekbar_vibrate_fallback_strength"
             android:title="@string/title_seekbar_vibrate_fallback_strength"
             app:iconSpaceReserved="false" />
-    </PreferenceCategory>
+    
+
+<CheckBoxPreference
+    android:defaultValue="false"
+    android:key="checkbox_snappy_input"
+    android:title="@string/title_checkbox_snappy_input"
+    android:summary="@string/summary_checkbox_snappy_input"
+    app:iconSpaceReserved="false" />
+</PreferenceCategory>
 
     <PreferenceCategory
         android:key="category_input_settings"

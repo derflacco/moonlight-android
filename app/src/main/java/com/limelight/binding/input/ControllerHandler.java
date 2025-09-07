@@ -1,5 +1,6 @@
 package com.limelight.binding.input;
 
+import com.limelight.binding.input.InputSender;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
@@ -127,10 +128,25 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final Handler mainThreadHandler;
     private final HandlerThread backgroundHandlerThread;
     private final Handler backgroundThreadHandler;
+    private final InputSender inputSender;
     private boolean hasGameController;
     private boolean stopped = false;
 
     private final PreferenceConfiguration prefConfig;
+
+private static final int MAX_CONTROLLERS = 4;
+// Thresholds to avoid spamming tiny changes
+private static final int AXIS_DELTA_MIN = 64; // ~0.2% of full scale
+private static final int TRIGGER_DELTA_MIN = 2; // 0-255
+
+private final short[] lastSentLeftStickX = new short[MAX_CONTROLLERS];
+private final short[] lastSentLeftStickY = new short[MAX_CONTROLLERS];
+private final short[] lastSentRightStickX = new short[MAX_CONTROLLERS];
+private final short[] lastSentRightStickY = new short[MAX_CONTROLLERS];
+private final byte[] lastSentLeftTrigger = new byte[MAX_CONTROLLERS];
+private final byte[] lastSentRightTrigger = new byte[MAX_CONTROLLERS];
+private final int[] lastSentInputMap = new int[MAX_CONTROLLERS];
+
     private short currentControllers, initialControllers;
 
     public ControllerHandler(Activity activityContext, NvConnection conn, GameGestures gestures, PreferenceConfiguration prefConfig) {
@@ -148,6 +164,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.backgroundHandlerThread = new HandlerThread("ControllerHandler");
         this.backgroundHandlerThread.start();
         this.backgroundThreadHandler = new Handler(backgroundHandlerThread.getLooper());
+
+// Initialize snappy input sender if enabled
+if (this.prefConfig != null && this.prefConfig.snappyInput) {
+    this.inputSender = new InputSender(null);
+} else {
+    this.inputSender = null;
+}
+
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             this.deviceVibratorManager = (VibratorManager) activityContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
@@ -298,6 +322,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         sceManager.stop();
+        if (inputSender != null) { try { inputSender.shutdown(); } catch (Throwable ignored) {} }
         backgroundHandlerThread.quit();
     }
 
@@ -1309,18 +1334,41 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
             if ((changedMask & ControllerPacket.A_FLAG) != 0) {
                 if (aDown) {
-                    conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
+                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT)); } else { conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT); }
                 }
                 else {
-                    conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
+                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT)); } else { conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT); }
                 }
             }
             if ((changedMask & ControllerPacket.B_FLAG) != 0) {
                 if (bDown) {
-                    conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
+                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT)); } else { conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT); }
                 }
+
+// === SNAPPY INPUT: delta-threshold gating ===
+if (inputSender != null) {
+    final int ci = Math.max(0, Math.min(MAX_CONTROLLERS - 1, controllerNumber));
+    boolean mapChanged = (inputMap != lastSentInputMap[ci]);
+    boolean axesChanged =
+            Math.abs(leftStickX - lastSentLeftStickX[ci]) >= AXIS_DELTA_MIN ||
+            Math.abs(leftStickY - lastSentLeftStickY[ci]) >= AXIS_DELTA_MIN ||
+            Math.abs(rightStickX - lastSentRightStickX[ci]) >= AXIS_DELTA_MIN ||
+            Math.abs(rightStickY - lastSentRightStickY[ci]) >= AXIS_DELTA_MIN ||
+            Math.abs((leftTrigger & 0xFF) - (lastSentLeftTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN ||
+            Math.abs((rightTrigger & 0xFF) - (lastSentRightTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN;
+    if (!mapChanged && !axesChanged) {
+        return;
+    }
+    lastSentInputMap[ci] = inputMap;
+    lastSentLeftStickX[ci] = leftStickX;
+    lastSentLeftStickY[ci] = leftStickY;
+    lastSentRightStickX[ci] = rightStickX;
+    lastSentRightStickY[ci] = rightStickY;
+    lastSentLeftTrigger[ci] = leftTrigger;
+    lastSentRightTrigger[ci] = rightTrigger;
+}
                 else {
-                    conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
+                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT)); } else { conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT); }
                 }
             }
             if ((changedMask & ControllerPacket.UP_FLAG) != 0) {
@@ -3107,6 +3155,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         public void destroy() {
+        if (inputSender != null) { try { inputSender.shutdown(); } catch (Throwable ignored) {} }
             mouseEmulationActive = false;
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
         }
@@ -3213,6 +3262,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         @Override
         public void destroy() {
+        if (inputSender != null) { try { inputSender.shutdown(); } catch (Throwable ignored) {} }
             super.destroy();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && vibratorManager != null) {
