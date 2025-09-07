@@ -42,3 +42,4 @@
 # MPAndroidChart
 -keep class com.github.mikephil.charting.** { *; }
 -dontwarn com.github.mikephil.charting.**
+-keep class com.limelight.binding.input.InputSender
