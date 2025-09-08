@@ -580,7 +580,7 @@ public class MediaCodecHelper {
 
         if (tryNumber < 3) {
             if (MediaCodecHelper.decoderSupportsMaxOperatingRate(decoderInfo.getName())) {
-                videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+                if (!isNvidiaDecoder(decoderInfo.getName())) { videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE); }
                 setNewOption = true;
             }
             else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -646,7 +646,7 @@ public class MediaCodecHelper {
 
                     // Pipeline / code path
                     safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
-                   // safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
+                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
                     safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
                     safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
 
@@ -665,13 +665,9 @@ public class MediaCodecHelper {
                     safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 0);
                     safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);
 
-                    // Standard Android hints
-                    try { videoFormat.setInteger(android.media.MediaFormat.KEY_OPERATING_RATE, (int)Short.MAX_VALUE); } catch (Throwable ignored) {}
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                        try { videoFormat.setInteger(android.media.MediaFormat.KEY_PRIORITY, 0); } catch (Throwable ignored) {}
-                    }
-                }
+
                 setNewOption = true;
+            }
             }
 
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
@@ -1088,10 +1084,10 @@ public class MediaCodecHelper {
 
     public static boolean isExynos4Device() {
         try {
-            // Try reading CPU info too look for 
+            // Try reading CPU info too look for
             String cpuInfo = readCpuinfo();
 
-            // SMDK4xxx is Exynos 4 
+            // SMDK4xxx is Exynos 4
             if (stringContainsIgnoreCase(cpuInfo, "SMDK4")) {
                 LimeLog.info("Found SMDK4 in /proc/cpuinfo");
                 return true;
@@ -1163,12 +1159,7 @@ public class MediaCodecHelper {
     public static void applyExtraVendorOptions(MediaFormat videoFormat, String decoderName) {
         if (videoFormat == null || decoderName == null) return;
         // NVIDIA Tegra (Shield TV): enable generic low-latency + disable frame reordering
-        if (isNvidiaDecoder(decoderName)) {
-            safeSet(videoFormat, "media.low-latency.enable", 1);
-            safeSet(videoFormat, "vendor.low-latency.enable", 1); // fallback generic vendor key
-            safeSet(videoFormat, "disable-output-reorder", 1);
-            safeSet(videoFormat, "vendor.nvidia.disable-output-reorder", 1); // in case vendor namespace is required
-        }
+        if (isNvidiaDecoder(decoderName)) { /* disabled on NVIDIA to avoid jitter */ }
         // Qualcomm: ensure vendor low latency and frame-order tweaks
         if (isQualcommDecoder(decoderName)) {
             safeSet(videoFormat, "vendor.qti-ext-dec-low-latency.enable", 1);
@@ -1186,11 +1177,9 @@ public class MediaCodecHelper {
             safeSet(videoFormat, "vendor.qti-ext-dec-dpb-output-delay.enable", 0);
             // Prefer IDR when possible
             safeSet(videoFormat, "vendor.qti-ext-dec-picture-type.enable", 0); //ignored in logs
-            // Generic AOSP scheduling hints
-            try { videoFormat.setInteger(android.media.MediaFormat.KEY_OPERATING_RATE, (int)Short.MAX_VALUE); } catch (Throwable ignored) {}
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                try { videoFormat.setInteger(android.media.MediaFormat.KEY_PRIORITY, 0); } catch (Throwable ignored) {}
-            }
+
+
+
         }
     }
 

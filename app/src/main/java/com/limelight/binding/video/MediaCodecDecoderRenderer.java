@@ -79,7 +79,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             } catch (Throwable ignored) {}
         }
     }
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? Math.max(250, preferLowerDelaysTimeoutUs) : preferLowerDelaysTimeoutUs; }
+    private int getOutputDequeueTimeoutUs(){
+        try {
+            // ULL (preferLowerDelays) => non-blocking dequeue
+            if (preferLowerDelays) {
+                return 0;
+            } else {
+                return preferLowerDelaysTimeoutUs;
+            }
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
@@ -1209,7 +1220,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
                     /* LATEST_ONLY_LOW_LATENCY */
-                    if (!preferLowerDelays) {
+                    if (preferLowerDelays) {
                         try {
                             android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
                             int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
@@ -2382,6 +2393,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
     private void applySurfaceFrameRate(android.view.Surface surface, int targetFps) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                boolean __nv = false;
+                try {
+                    if (videoDecoder != null) {
+                        try {
+                            android.media.MediaCodecInfo info = videoDecoder.getCodecInfo();
+                            String name = (info != null ? info.getName() : "");
+                            __nv = com.limelight.binding.video.MediaCodecHelper.isNvidiaDecoder(name);
+                        } catch (Throwable ignored) {}
+                    }
+                } catch (Throwable ignored) {}
+                if (__nv) {
+                    com.limelight.LimeLog.info("Skipping Surface.setFrameRate on NVIDIA/Tegra (renderer)");
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {}
+
         if (surface == null) return;
         try {
             // API 30+ supports Surface.setFrameRate; for older, attempt View-based call elsewhere.

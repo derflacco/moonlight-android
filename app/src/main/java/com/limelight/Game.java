@@ -677,9 +677,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (prefConfig != null && prefConfig.preferLowerDelays) {
                 // Intermediate: more responsive than Balanced but not 0 µs
                 decoderRenderer.setPreferLowerDelays(true);
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(500);  // 0.5 ms
+                decoderRenderer.setPreferLowerDelaysTimeoutUs(0);  // 0.5 ms
                 prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("PreferLowerDelays: preferLowerDelays=true, timeout=500us, pacing=BALANCED");
+                LimeLog.info("PreferLowerDelays: preferLowerDelays=true, timeout=0us, pacing=BALANCED");
             } else {
                 // Balanced default
                 decoderRenderer.setPreferLowerDelays(false);
