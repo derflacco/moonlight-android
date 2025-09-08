@@ -635,7 +635,9 @@ public class MediaCodecHelper {
 //                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
-                    // --- PRESET: MTK Low-Latency (safe & balanced, no duplicates) ---
+                    // --- PRESET: MTK Low-Latency (safe & balanced) ---
+                    // -note: this will likely do little to nothing. In my testing most values are hardcoded,
+                    // at least on my two mtk devices: mtk g99, mtk Dimensity 8300 ultra.
 
                     // Boost/DVFS: moderate profile
                     safeSet(videoFormat, "vdec-lowlatency", 1);
@@ -646,7 +648,7 @@ public class MediaCodecHelper {
 
                     // Pipeline / code path
                     safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
-                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
+                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 1);   // ULL off for stability
                     safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
                     safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
 
@@ -658,6 +660,7 @@ public class MediaCodecHelper {
 
                     // Pacing: controlled by the app
                     safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);
+                    safeSet(videoFormat, "vendor.mtk.vdec.pq", 0); // if supported, disableq PQ
 
                     // Skip/drop: only NVOP
                     safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);
@@ -666,7 +669,7 @@ public class MediaCodecHelper {
                     safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);
 
                     // Standard Android hints
-                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
+                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
                     safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
                 }
                 setNewOption = true;
@@ -698,6 +701,18 @@ public class MediaCodecHelper {
             }
         }
 
+
+        // derflacco — final best-effort vendor extras (QTI/OMX.qcom/NVIDIA), like MTK block above
+        try {
+            final String __decName = (decoderInfo != null) ? decoderInfo.getName() : null;
+            if (__decName != null) {
+                final String __dn = __decName.toLowerCase(java.util.Locale.US);
+                if (isNvidiaDecoder(__decName) || isQualcommDecoder(__decName) || __dn.startsWith("omx.qcom")) {
+                    applyExtraVendorOptions(videoFormat, __decName);
+                    setNewOption = true;
+                }
+            }
+        } catch (Throwable ignored) {}
         return setNewOption;
     }
 
@@ -1185,10 +1200,8 @@ public class MediaCodecHelper {
             // Prefer IDR when possible
             safeSet(videoFormat, "vendor.qti-ext-dec-picture-type.enable", 0); //ignored in logs
             // Generic AOSP scheduling hints
-            try { videoFormat.setInteger(android.media.MediaFormat.KEY_OPERATING_RATE, (int)Short.MAX_VALUE); } catch (Throwable ignored) {}
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                try { videoFormat.setInteger(android.media.MediaFormat.KEY_PRIORITY, 0); } catch (Throwable ignored) {}
-            }
+            safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+            safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
         }
     }
 
