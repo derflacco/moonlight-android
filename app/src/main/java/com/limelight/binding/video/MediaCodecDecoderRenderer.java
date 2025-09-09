@@ -2439,9 +2439,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         try {
             // API 30+ supports Surface.setFrameRate; for older, attempt View-based call elsewhere.
             if (android.os.Build.VERSION.SDK_INT >= 30) {
-                surface.setFrameRate((float) targetFps,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
-                LimeLog.info("Applied Surface frame rate: " + targetFps + " Hz");
+
+                // Minimal debounce: only apply if value really changed and outside 200ms window
+                {
+                    long __now = System.nanoTime();
+                    float __fps = (float) targetFps;
+                    int __compat = android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
+                    boolean __skip = (__mcdrLastSurfaceFps > 0f) &&
+                            (Math.abs(__mcdrLastSurfaceFps - __fps) <= __MCDR_FRAME_RATE_EPS_HZ) &&
+                            (__mcdrLastSurfaceCompat == __compat) &&
+                            ((__now - __mcdrLastSurfaceSetNs) < __MCDR_FRAME_RATE_DEBOUNCE_NS);
+                    if (!__skip) {
+                        surface.setFrameRate(__fps, __compat);
+                        __mcdrLastSurfaceFps = __fps;
+                        __mcdrLastSurfaceCompat = __compat;
+                        __mcdrLastSurfaceSetNs = __now;
+                        LimeLog.info("Applied Surface frame rate: " + targetFps + " Hz");
+
+                    }
+                }
             }
         } catch (Throwable t) {
             // best-effort
