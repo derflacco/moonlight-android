@@ -66,7 +66,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void releaseWithPolicy(int bufferIndex, long frameTimeNanos) {
         try {
             long now = System.nanoTime();
-            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 300_000L);
+            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 1_000_000L) /* widened to 1ms to reduce near-vsync jitter */;
             if (immediate) {
                 videoDecoder.releaseOutputBuffer(bufferIndex, true);
             } else {
