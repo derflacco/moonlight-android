@@ -141,6 +141,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener, EvdevListener,
         OnSystemUiVisibilityChangeListener, GameGestures, StreamView.InputCallbacks, ExternalControllerView.InputCallbacks,
         PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
+    // --- Debounce state for preferredDisplayModeId (WindowManager) ---
+    private int   __lastAppliedDisplayModeId = -1;
+    private int   __lastAppliedW = -1, __lastAppliedH = -1;
+    private float __lastAppliedHz = -1f;
+    private long  __lastDisplayModeSetNs = 0L;
+    private static final long __DISPLAY_MODE_DEBOUNCE_NS = 200_000_000L; // 200 ms
+
+    // --- Debounce state for setFrameRate() ---
+    private float __lastSurfaceFps = -1f;
+    private int   __lastSurfaceCompat = Integer.MIN_VALUE;
+    private int   __lastSurfaceStrategy = Integer.MIN_VALUE; // only used on S+
+    private long  __lastSurfaceSetNs = 0L;
+
+    private float __lastViewFps = -1f;
+    private int   __lastViewCompat = Integer.MIN_VALUE;
+    private long  __lastViewSetNs = 0L;
+
+    private static final float __FRAME_RATE_EPS_HZ = 0.25f;     // ~0.25 Hz tolerance
+    private static final long  __FRAME_RATE_DEBOUNCE_NS = 200_000_000L; // 200 ms
+
     public static Game instance;
 
     private int lastButtonState = 0;
@@ -897,14 +917,133 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             : Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE;
 
                     try {
-                        java.lang.reflect.Method m = SurfaceView.class.getMethod("setFrameRate", float.class, int.class);
-                        m.invoke(streamSurfaceView, Math.min(targetFps, displayHz), compat);
+                        __applyViewSetFrameRateDebounced(streamSurfaceView, Math.min(targetFps, displayHz), compat);
                     } catch (Throwable ignored) {}
                 }
             }
         } catch (Throwable ignored) {}
     }
 
+
+    // Apply Surface.setFrameRate() with debounce to avoid jitter from frequent updates.
+
+    // Apply Surface.setFrameRate() with debounce to avoid jitter from frequent updates.
+    private void __applySurfaceSetFrameRateDebounced(android.view.Surface surface, float fps, int compat, Integer changeStrategy /* nullable */) {
+        if (surface == null) return;
+        try {
+            final long now = System.nanoTime();
+            // Normalize bad values
+            if (!(fps > 0f && fps < 1000f)) return;
+
+            boolean compatChanged = (compat != __lastSurfaceCompat);
+            boolean strategyChanged = (changeStrategy != null ? (__lastSurfaceStrategy != changeStrategy.intValue()) : false);
+            boolean fpsChanged = (Math.abs(fps - __lastSurfaceFps) > __FRAME_RATE_EPS_HZ);
+            boolean needApply = (__lastSurfaceSetNs == 0L) || compatChanged || strategyChanged || fpsChanged;
+
+            // Debounce: if too soon since last apply and nothing materially changed, skip
+            if (!needApply) {
+                long dt = now - __lastSurfaceSetNs;
+                if (dt < __FRAME_RATE_DEBOUNCE_NS) {
+                    return;
+                }
+            }
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && changeStrategy != null) {
+                // Android 12+ supports change strategy
+                try {
+                    surface.setFrameRate(fps, compat, changeStrategy.intValue());
+                } catch (Throwable t) {
+                    // Fallback to basic call
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        try { surface.setFrameRate(fps, compat); } catch (Throwable ignored) {}
+                    }
+                }
+            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                try { surface.setFrameRate(fps, compat); } catch (Throwable ignored) {}
+            } else {
+                return; // not supported pre-R
+            }
+
+            __lastSurfaceFps = fps;
+            __lastSurfaceCompat = compat;
+            __lastSurfaceStrategy = (changeStrategy != null) ? changeStrategy.intValue() : Integer.MIN_VALUE;
+            __lastSurfaceSetNs = now;
+        } catch (Throwable ignored) {}
+    }
+
+
+    // Apply SurfaceView.setFrameRate() via reflection with debounce on Android R+
+
+    // Apply SurfaceView.setFrameRate() via reflection with debounce on Android R+
+    private void __applyViewSetFrameRateDebounced(android.view.SurfaceView view, float fps, int compat) {
+        if (view == null) return;
+        try {
+            final long now = System.nanoTime();
+            if (!(fps > 0f && fps < 1000f)) return;
+
+            boolean compatChanged = (compat != __lastViewCompat);
+            boolean fpsChanged = (Math.abs(fps - __lastViewFps) > __FRAME_RATE_EPS_HZ);
+            boolean needApply = (__lastViewSetNs == 0L) || compatChanged || fpsChanged;
+
+            if (!needApply) {
+                long dt = now - __lastViewSetNs;
+                if (dt < __FRAME_RATE_DEBOUNCE_NS) {
+                    return;
+                }
+            }
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                try {
+                    java.lang.reflect.Method m = android.view.SurfaceView.class.getMethod("setFrameRate", float.class, int.class);
+                    m.invoke(view, fps, compat);
+                } catch (Throwable ignored) { /* best effort */ }
+            }
+
+            __lastViewFps = fps;
+            __lastViewCompat = compat;
+            __lastViewSetNs = now;
+        } catch (Throwable ignored) {}
+    }
+
+
+    // Debounced application of preferredDisplayModeId to minimize WindowManager churn
+    private void __applyPreferredDisplayModeDebounced(android.view.WindowManager.LayoutParams wlp,
+                                                      android.view.Display.Mode currentMode,
+                                                      android.view.Display.Mode targetMode) {
+        if (wlp == null || currentMode == null || targetMode == null) return;
+        try {
+            final int modeId = targetMode.getModeId();
+            final int tw = targetMode.getPhysicalWidth();
+            final int th = targetMode.getPhysicalHeight();
+            final float thz = targetMode.getRefreshRate();
+            final long now = System.nanoTime();
+
+            boolean resChanged = (currentMode.getPhysicalWidth() != tw) || (currentMode.getPhysicalHeight() != th);
+            boolean hzChanged = Math.abs(currentMode.getRefreshRate() - thz) > __FRAME_RATE_EPS_HZ;
+            boolean differs = (currentMode.getModeId() != modeId) || resChanged || hzChanged;
+
+            if (!differs) return;
+
+            // If we just applied the same target very recently, skip to avoid flapping
+            if (__lastDisplayModeSetNs != 0L &&
+                    (__lastAppliedDisplayModeId == modeId) &&
+                    (__lastAppliedW == tw) &&
+                    (__lastAppliedH == th) &&
+                    (Math.abs(__lastAppliedHz - thz) <= __FRAME_RATE_EPS_HZ) &&
+                    (now - __lastDisplayModeSetNs < __DISPLAY_MODE_DEBOUNCE_NS)) {
+                return;
+            }
+
+            wlp.preferredDisplayModeId = modeId;
+            getWindow().setAttributes(wlp);
+
+            __lastAppliedDisplayModeId = modeId;
+            __lastAppliedW = tw;
+            __lastAppliedH = th;
+            __lastAppliedHz = thz;
+            __lastDisplayModeSetNs = now;
+        } catch (Throwable ignored) {}
+    }
     @SuppressLint("ClickableViewAccessibility")
     private void setupOverlayToggleButton() {
         if (overlayToggleButton != null) {
@@ -1527,8 +1666,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         currentDisplay.getMode().getPhysicalWidth() != bestMode.getPhysicalWidth() ||
                         currentDisplay.getMode().getPhysicalHeight() != bestMode.getPhysicalHeight()) {
                     // Apply the display mode change
-                    windowLayoutParams.preferredDisplayModeId = bestMode.getModeId();
-                    getWindow().setAttributes(windowLayoutParams);
+                    __applyPreferredDisplayModeDebounced(windowLayoutParams, currentDisplay.getMode(), bestMode);
                 }
                 else {
                     LimeLog.info("Using setFrameRate() instead of preferredDisplayModeId due to matching resolution");
@@ -3815,13 +3953,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // We want to change frame rate even if it's not seamless, since prepareDisplayForRendering()
             // will not set the display mode on S+ if it only differs by the refresh rate. It depends
             // on us to trigger the frame rate switch here.
-            holder.getSurface().setFrameRate(desiredFrameRate,
-                    Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                    Surface.CHANGE_FRAME_RATE_ALWAYS);
+            __applySurfaceSetFrameRateDebounced(holder.getSurface(), desiredFrameRate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE, Surface.CHANGE_FRAME_RATE_ALWAYS);
         }
         else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            holder.getSurface().setFrameRate(desiredFrameRate,
-                    Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+            __applySurfaceSetFrameRateDebounced(holder.getSurface(), desiredFrameRate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE, null);
         }
     }
 

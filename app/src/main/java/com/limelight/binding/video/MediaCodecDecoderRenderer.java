@@ -81,11 +81,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
     private int getOutputDequeueTimeoutUs(){
         try {
-            // ULL (preferLowerDelays) => non-blocking dequeue
             if (preferLowerDelays) {
-                return 0;
+                int us = Math.max(100, Math.min(250, preferLowerDelaysTimeoutUs));
+                return us;
             } else {
-                return preferLowerDelaysTimeoutUs;
+                int us = Math.max(0, preferLowerDelaysTimeoutUs);
+                return us;
             }
         } catch (Throwable ignored) {
             return 0;
@@ -132,6 +133,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Context context;
     private Activity activity;
     private MediaCodec videoDecoder;
+    // --- Debounce state for setFrameRate() in renderer to reduce jitter ---
+    private float __mcdrLastSurfaceFps = -1f;
+    private int   __mcdrLastSurfaceCompat = Integer.MIN_VALUE;
+    private long  __mcdrLastSurfaceSetNs = 0L;
+    private static final float __MCDR_FRAME_RATE_EPS_HZ = 0.25f;       // ~0.25 Hz tolerance
+    private static final long  __MCDR_FRAME_RATE_DEBOUNCE_NS = 200_000_000L; // 200 ms
+
     private Thread rendererThread;
     private boolean needsSpsBitstreamFixup, isExynos4;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
