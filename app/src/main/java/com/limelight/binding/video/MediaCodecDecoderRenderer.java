@@ -66,7 +66,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void releaseWithPolicy(int bufferIndex, long frameTimeNanos) {
         try {
             long now = System.nanoTime();
-            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 1_000_000L) /* widened to 1ms to reduce near-vsync jitter */;
+            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 1_500_000L) /* widened to 1ms to reduce near-vsync jitter */;
             if (immediate) {
                 videoDecoder.releaseOutputBuffer(bufferIndex, true);
             } else {
@@ -79,19 +79,34 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             } catch (Throwable ignored) {}
         }
     }
-    private int getOutputDequeueTimeoutUs(){
+    private
+    int getOutputDequeueTimeoutUs(){
         try {
+            int us;
             if (preferLowerDelays) {
-                int us = Math.max(100, Math.min(250, preferLowerDelaysTimeoutUs));
-                return us;
+                // Keep a small non-zero timeout to limit busy-spin jitter
+                us = Math.max(150, Math.min(2000, preferLowerDelaysTimeoutUs));
             } else {
-                int us = Math.max(0, preferLowerDelaysTimeoutUs);
-                return us;
+                us = Math.max(0, preferLowerDelaysTimeoutUs);
             }
+            // Tegra/NVIDIA prefer >= 1ms
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 21 && videoDecoder != null) {
+                    String decName = videoDecoder.getName();
+                    if (decName != null) {
+                        String s = decName.toLowerCase(java.util.Locale.US);
+                        if (s.contains("nvidia") || s.contains("omx.nvidia") || s.contains("c2.nvidia")) {
+                            us = Math.max(1000, Math.min(5000, us == 0 ? 2000 : us));
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+            return us;
         } catch (Throwable ignored) {
             return 0;
         }
     }
+
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
@@ -1199,7 +1214,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 final boolean highRefresh = displayHz >= 90f;
                 final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
                 // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
-                final long periodNs = (preferLowerDelays ? vsyncPeriodNs : Math.max(vsyncPeriodNs, streamPeriodNs));
+                final long periodNs = (forceTightThresholds ? vsyncPeriodNs : (preferLowerDelays ? vsyncPeriodNs : Math.max(vsyncPeriodNs, streamPeriodNs)));
                 boolean isC2Decoder = false;
                 try {
                     String decName = videoDecoder.getName();
