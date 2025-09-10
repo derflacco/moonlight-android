@@ -59,7 +59,7 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
 
     // When preferLowerDelays=true we use this configurable timeout (µs) for output dequeue.
 // When preferLowerDelays=false we force 0µs (non-blocking, latest-frame rendering).
-    private volatile int preferLowerDelaysTimeoutUs = 2000;
+    private volatile int preferLowerDelaysTimeoutUs = 500; // align with applyLatencyPolicy() default
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
 
     private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? preferLowerDelaysTimeoutUs : 0; }
@@ -1189,7 +1189,7 @@ boolean isC2Decoder = false;
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
                 /* LATEST_ONLY_LOW_LATENCY */
-                if (!preferLowerDelays) {
+                if (preferLowerDelays) {
     try {
         android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
         int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);

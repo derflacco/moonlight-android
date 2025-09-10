@@ -688,23 +688,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         } catch (Throwable ignored) {}
 
-// --- Selezione profilo latenza ---
-// Semantica: TRUE = gestito (usa timeout); FALSE = 0µs latest-only
-        try {
-             if (prefConfig != null && prefConfig.preferLowerDelays) {
-                // Intermedio: più reattivo di Balanced ma non 0 µs
-                decoderRenderer.setPreferLowerDelays(true);          // GESTITO
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(500);  // 0.5 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("PreferLowerDelays: preferLowerDelays=true, timeout=500us, pacing=BALANCED");
-            } else {
-                // Balanced default
-                decoderRenderer.setPreferLowerDelays(true);          // GESTITO
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(2000); // 2 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("Balanced: preferLowerDelays=true, timeout=2000us, pacing=BALANCED");
-            }
-        } catch (Throwable ignored) {}
 
         // Don't stream HDR if the decoder can't support it
         if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
@@ -888,7 +871,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         overlayToggleButton = findViewById(R.id.overlayToggleZoomButton);
         setupOverlayToggleButton();
-    
+
         //fixed size + pacing without back-pressure on MTK
         try {
             View root = findViewById(android.R.id.content);
@@ -931,10 +914,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         java.lang.reflect.Method m = SurfaceView.class.getMethod("setFrameRate", float.class, int.class);
                         m.invoke(streamSurfaceView, Math.min(targetFps, displayHz), compat);
                     } catch (Throwable ignored) {}
+                    // Apply latency policy (LFR/ULL vs managed)
+                    try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
+
                 }
             }
         } catch (Throwable ignored) {}
-}
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     private void setupOverlayToggleButton() {
@@ -1004,7 +990,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (overlayToggleButton != null) {
             // Change background based on pan/zoom mode state
             overlayToggleButton.setBackgroundResource(isPanZoomMode ?
-                R.drawable.floating_menu_button_active : R.drawable.floating_menu_button);
+                    R.drawable.floating_menu_button_active : R.drawable.floating_menu_button);
             // No need for alpha changes since the color indicates the state
             overlayToggleButton.setAlpha(1.0f);
         }
@@ -1631,7 +1617,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
                 getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-            || isOnExternalDisplay()) {// TVs may take a few moments to switch refresh rates, and we can probably assume
+                || isOnExternalDisplay()) {// TVs may take a few moments to switch refresh rates, and we can probably assume
             // it will be eventually activated.
             // external displays cant be compared with displaymanager currents display refreshrate
             // TODO: Improve this
@@ -4353,22 +4339,30 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // Notes (EN):
     // - In low-latency modes we enforce non-blocking dequeue (0 µs) and tight VSYNC pacing.
     // - In smooth/balanced modes we allow a small timeout to stabilize pacing.
-    private void applyLatencyPolicy(com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
-                                    com.limelight.preferences.PreferenceConfiguration prefConfig) {
+    private void applyLatencyPolicy(
+            com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
+            com.limelight.preferences.PreferenceConfiguration prefConfig) {
+        if (decoderRenderer == null) return;
         try {
-            boolean isLowLatency = true;
-            if (prefConfig != null) {
-                // Consider Ultra/Reactive/ULL as low-latency, Balanced/Smooth as non-low-latency
-                int pacing = prefConfig.framePacing;
-                // Heuristic: if user selected Balanced/Smooth keep some timeout
-                isLowLatency = (pacing != com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED);
-            }
-            decoderRenderer.setPreferLowerDelays(isLowLatency);
-            decoderRenderer.setPreferLowerDelaysTimeoutUs(2000);
-            // Tighten thresholds to VSYNC when low-latency is requested
-            decoderRenderer.setForceTightThresholds(isLowLatency);
-        } catch (Throwable ignored) {
-        }
-    }
+            // UI semantics:
+            // preferLowerDelays = TRUE  → latest-only (0 µs dequeue)  [ULL]
+            // preferLowerDelays = FALSE → managed (+ small timeout)   [Balanced]
+            final boolean latestOnly = (prefConfig != null) && prefConfig.preferLowerDelays;
 
+            // Balanced: 500 µs, ULL: 0 µs
+            final int timeoutUs = latestOnly ? 0 : 500;
+
+            // Renderer API: TRUE=latest-only (LFR), FALSE=managed (Balanced)
+            decoderRenderer.setPreferLowerDelays(latestOnly);
+            decoderRenderer.setPreferLowerDelaysTimeoutUs(timeoutUs);
+
+            // Tight thresholds ON se: ULL oppure toggle "Tight VSync" attivo in UI
+            final boolean tightFromUi = (prefConfig != null) && prefConfig.forceTightThresholds;
+            decoderRenderer.setForceTightThresholds(tightFromUi);
+
+            LimeLog.info("Latency policy → " +
+                    (latestOnly ? "latest-only, timeout=0us" : ("managed, timeout=" + timeoutUs + "us")) +
+                    " | forceTight=" + (tightFromUi));
+        } catch (Throwable ignored) { }
+    }
 }
