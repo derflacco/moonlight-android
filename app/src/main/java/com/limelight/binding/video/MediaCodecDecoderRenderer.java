@@ -1203,49 +1203,60 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     if (preferLowerDelays) {
                         try {
                             final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
-                            final int tmoUs = 0;       // latest-only: non-blocking
-                            final int MAX_DRAIN = 8;   // bound: evita loop lunghi
-                            int drained = 0;
+
+                            // Use existing field as adaptive timeout state (starts at 0us)
+                            int firstTimeoutUs = Math.max(0, Math.min(3000, preferLowerDelaysTimeoutUs));
 
                             int last = -1;
                             long lastPtsUs = -1L;
+                            int drained = 0;
+                            boolean drainedMultiple = false;
 
-                            while (true) {
-                                int idx = videoDecoder.dequeueOutputBuffer(lfrInfo, tmoUs);
+                            // First attempt: current adaptive timeout (usually 0us at start)
+                            int idx = videoDecoder.dequeueOutputBuffer(lfrInfo, firstTimeoutUs);
 
-                                if (idx >= 0) {
-                                    // tieni solo l'ultimo frame; droppa i precedenti
-                                    if (last >= 0) {
-                                        try { videoDecoder.releaseOutputBuffer(last, false); } catch (Throwable ignored) {}
-                                    }
-                                    last = idx;
-                                    lastPtsUs = lfrInfo.presentationTimeUs;
+                            while (idx >= 0) {
+                                // Keep only the newest; drop intermediates
+                                if (last >= 0) {
+                                    try { videoDecoder.releaseOutputBuffer(last, false); } catch (Throwable ignored) {}
+                                    drained++;
+                                    drainedMultiple = true;
+                                }
 
-                                    // se EOS, esci presentando questo come ultimo
-                                    if ((lfrInfo.flags & android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                        break;
-                                    }
-                                    // bound di sicurezza per evitare starvation
-                                    if (++drained >= MAX_DRAIN) {
-                                        break;
-                                    }
-                                    continue;
-                                } else if (idx == android.media.MediaCodec.INFO_TRY_AGAIN_LATER) {
-                                    break; // nessun buffer pronto
-                                } else if (idx == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                                    // opzionale: leggere il formato per eventuali side-effect
-                                    try { android.media.MediaFormat __fmt = videoDecoder.getOutputFormat(); } catch (Throwable ignored) {}
-                                    continue;
-                                } else if (idx == android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                                    // solo pre-21: ignora
-                                    continue;
-                                } else {
-                                    // altro codice: esci
+                                last = idx;
+                                lastPtsUs = lfrInfo.presentationTimeUs;
+
+                                // EOS: present this one and leave
+                                if ((lfrInfo.flags & android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                                     break;
+                                }
+
+                                // Soft cap to avoid long loops (more lenient when timeout is tiny)
+                                final int drainSoftCap = (firstTimeoutUs <= 500) ? 6 : 4;
+                                if (drained >= drainSoftCap) {
+                                    break;
+                                }
+
+                                // Follow-ups: non-blocking to chase an even newer frame
+                                idx = videoDecoder.dequeueOutputBuffer(lfrInfo, 0);
+                            }
+
+                            // Adaptive tweak using the existing field:
+                            // - Empty often -> bump +250us (up to 3ms)
+                            // - Frequent bursts -> nudge -250us (toward 0)
+                            if (idx == android.media.MediaCodec.INFO_TRY_AGAIN_LATER) {
+                                preferLowerDelaysTimeoutUs = Math.min(3000, preferLowerDelaysTimeoutUs + 250);
+                            } else if (idx == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                                try { android.media.MediaFormat __fmt = videoDecoder.getOutputFormat(); } catch (Throwable ignored) {}
+                            } else if (idx == android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+                                // pre-21: ignore
+                            } else {
+                                if (drainedMultiple) {
+                                    preferLowerDelaysTimeoutUs = Math.max(0, preferLowerDelaysTimeoutUs - 250);
                                 }
                             }
 
-                            // presenta SOLO l'ultimo frame disponibile
+                            // Present ONLY the newest frame
                             if (last >= 0) {
                                 final long nowNs = System.nanoTime();
                                 try {
@@ -1256,7 +1267,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     }
                                 } catch (Throwable ignored) {}
 
-                                // metriche decode->present protette
+                                // Safe metrics
                                 if (lastPtsUs >= 0L) {
                                     final long d2pRaw = nowNs - (lastPtsUs * 1000L);
                                     final long d2p = (d2pRaw >= 0L) ? d2pRaw : 0L;
@@ -1267,6 +1278,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         } catch (Throwable ignored) {}
                     }
                     /* /LATEST_ONLY_LOW_LATENCY */
+
                     try {
                         // Try to output a frame
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
