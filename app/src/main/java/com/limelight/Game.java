@@ -645,7 +645,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                         // We must use commit because the app will crash when we return from this function
                         tombstonePrefs.edit().putInt("CrashCount", tombstonePrefs.getInt("CrashCount", 0) + 1).commit();
-                                 reportedCrash = true;
+                        // --- Conservative latency policy ---
+                        try {
+                            decoderRenderer.setPreferLowerDelays(true);      // managed path: small timeout instead of 0µs
+                            decoderRenderer.setPreferLowerDelaysTimeoutUs(2000); // 2 ms, avoids busy-wait & network backpressure
+                        } catch (Throwable ignored) {}
+
+                        reportedCrash = true;
                     }
                 },
                 tombstonePrefs.getInt("CrashCount", 0),
