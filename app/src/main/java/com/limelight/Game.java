@@ -645,10 +645,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                         // We must use commit because the app will crash when we return from this function
                         tombstonePrefs.edit().putInt("CrashCount", tombstonePrefs.getInt("CrashCount", 0) + 1).commit();
-                        // --- Conservative latency policy ---
+                        // --- Conservative latency policy (imported from GOOD behavior) ---
                         try {
-                            decoderRenderer.setPreferLowerDelays(true);      // managed path: small timeout instead of 0µs
-                            decoderRenderer.setPreferLowerDelaysTimeoutUs(2000); // 2 ms, avoids busy-wait & network backpressure
+                            decoderRenderer.applyLatencyProfile(false);
                         } catch (Throwable ignored) {}
 
                         reportedCrash = true;
@@ -673,27 +672,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 } catch (Throwable ignored) {}
             }
             try { decoderRenderer.setForceTightThresholds(forceTight);
-        applyLatencyPolicy(decoderRenderer, prefConfig);} catch (Throwable ignored) {}
+                applyLatencyPolicy(decoderRenderer, prefConfig);} catch (Throwable ignored) {}
             if (forceTight) {
                 LimeLog.info("ForceTightThresholds enabled: using vsync-based thresholds on all devices");
             }
         } catch (Throwable ignored) {}
 
 // --- Selezione profilo latenza ---
-// Semantica: TRUE = gestito (usa timeout); FALSE = 0µs latest-only
+// Delego al decoder la policy (0µs vs 2000µs) tramite applyLatencyProfile()
         try {
-             if (prefConfig != null && prefConfig.preferLowerDelays) {
-                // Intermedio: più reattivo di Balanced ma non 0 µs
-                decoderRenderer.setPreferLowerDelays(true);          // GESTITO
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(500);  // 0.5 ms
+            boolean wantLatestOnly = (prefConfig != null && prefConfig.preferLowerDelays);
+            decoderRenderer.applyLatencyProfile(wantLatestOnly);
+            if (prefConfig != null) {
                 prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("PreferLowerDelays: preferLowerDelays=true, timeout=500us, pacing=BALANCED");
-            } else {
-                // Balanced default
-                decoderRenderer.setPreferLowerDelays(true);          // GESTITO
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(2000); // 2 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("Balanced: preferLowerDelays=true, timeout=2000us, pacing=BALANCED");
             }
         } catch (Throwable ignored) {}
 
@@ -865,7 +856,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         overlayToggleButton = findViewById(R.id.overlayToggleZoomButton);
         setupOverlayToggleButton();
-    
+
         //fixed size + pacing without back-pressure on MTK
         try {
             View root = findViewById(android.R.id.content);
@@ -911,7 +902,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             }
         } catch (Throwable ignored) {}
-}
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     private void setupOverlayToggleButton() {
@@ -981,7 +972,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (overlayToggleButton != null) {
             // Change background based on pan/zoom mode state
             overlayToggleButton.setBackgroundResource(isPanZoomMode ?
-                R.drawable.floating_menu_button_active : R.drawable.floating_menu_button);
+                    R.drawable.floating_menu_button_active : R.drawable.floating_menu_button);
             // No need for alpha changes since the color indicates the state
             overlayToggleButton.setAlpha(1.0f);
         }
@@ -1608,7 +1599,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
                 getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-            || isOnExternalDisplay()) {// TVs may take a few moments to switch refresh rates, and we can probably assume
+                || isOnExternalDisplay()) {// TVs may take a few moments to switch refresh rates, and we can probably assume
             // it will be eventually activated.
             // external displays cant be compared with displaymanager currents display refreshrate
             // TODO: Improve this
@@ -2865,11 +2856,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         // Press & Hold / Double-Tap & Hold for Selection or Drag & Drop
                         double positionDelta = Math.sqrt(
                                 Math.pow(event.getX() - lastTouchDownX, 2) +
-                                Math.pow(event.getY() - lastTouchDownY, 2)
+                                        Math.pow(event.getY() - lastTouchDownY, 2)
                         );
 
                         if (synthClickPending &&
-                            event.getEventTime() - synthTouchDownTime >= prefConfig.trackpadDragDropThreshold) {
+                                event.getEventTime() - synthTouchDownTime >= prefConfig.trackpadDragDropThreshold) {
                             if (positionDelta > 50) {
                                 pendingDrag = false;
                             } else if (pendingDrag) {
@@ -4158,9 +4149,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void applyMouseMode(int mode) {
         switch (mode) {
             case 0: // Multi-touch
-            prefConfig.enableMultiTouchScreen = true;
-            prefConfig.touchscreenTrackpad = false;
-            break;
+                prefConfig.enableMultiTouchScreen = true;
+                prefConfig.touchscreenTrackpad = false;
+                break;
             case 1: // Normal mouse
             case 5: // Normal mouse with swapped buttons
                 prefConfig.enableMultiTouchScreen = false;
@@ -4366,8 +4357,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // Heuristic: if user selected Balanced/Smooth keep some timeout
                 isLowLatency = (pacing != com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED);
             }
-            decoderRenderer.setPreferLowerDelays(isLowLatency);
-            decoderRenderer.setPreferLowerDelaysTimeoutUs(2000);
+            decoderRenderer.applyLatencyProfile(isLowLatency);
             // Tighten thresholds to VSYNC when low-latency is requested
             decoderRenderer.setForceTightThresholds(isLowLatency);
         } catch (Throwable ignored) {
