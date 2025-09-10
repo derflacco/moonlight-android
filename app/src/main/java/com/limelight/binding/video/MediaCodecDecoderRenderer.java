@@ -61,7 +61,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile int preferLowerDelaysTimeoutUs = 2000;
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
 
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? 0 : preferLowerDelaysTimeoutUs; }
+    private int getOutputDequeueTimeoutUs(){
+        // Avoid busy-spin on some stacks when using latest-only
+        if (preferLowerDelays) {
+            int us = preferLowerDelaysTimeoutUs;
+            // floor to a tiny non-zero to prevent spin; adaptive code will tune this further
+            if (us <= 0) us = 250; // 0.25 ms
+            return Math.min(3000, Math.max(0, us));
+        } else {
+            return Math.max(0, preferLowerDelaysTimeoutUs);
+        }
+    }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
@@ -76,6 +86,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
         }
+    }
+
+    // Present helper: choose render timestamp based on pacing policy.
+    private void releaseWithPolicy(int index, long nowNs) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                // In max smoothness or cap FPS, render at TS=0 to avoid Surface-side drops.
+                if (prefs != null && (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
+                    videoDecoder.releaseOutputBuffer(index, 0 /* renderTimestampNs */);
+                } else {
+                    videoDecoder.releaseOutputBuffer(index, nowNs);
+                }
+            } else {
+                videoDecoder.releaseOutputBuffer(index, true);
+            }
+        } catch (Throwable ignored) {}
     }
 
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
@@ -1338,7 +1365,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                         long dropThresholdSmoothNs = (long)(periodNs * factorSmooth);
 
-                                        if (frameAgeNs >= dropThresholdSmoothNs) {
+                                        final long dropThresholdHardNs = Math.max(dropThresholdSmoothNs * 5 / 2, dropThresholdSmoothNs + 1_000_000L);
+                                        final boolean isLate = frameAgeNs >= dropThresholdSmoothNs;
+                                        lateStreak = isLate ? (lateStreak + 1) : 0;
+                                        final boolean backlogLikely = (lateStreak >= 1) || (recentDrops >= 2);
+                                        final boolean tooOldHard = frameAgeNs >= (dropThresholdHardNs - 250_000L);
+                                        if (tooOldHard || (isLate && backlogLikely)) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
@@ -1346,11 +1378,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             continue;
                                         }
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+// Present per policy (near-now o TS=0 in smoothness/cap)
+                                        releaseWithPolicy(lastIndex, nowNs);
                                         lastPresentNs = nowNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
-
-                                        // [STATS] update subito dopo il present
+// [STATS] update subito dopo il present
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
 
@@ -1389,17 +1421,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
 
                                         long dropThresholdNs = (long)(periodNs * factorLatency);
+                                        final long dropThresholdHardNs = Math.max(dropThresholdNs * 5 / 2, dropThresholdNs + 1_000_000L);
+                                        final boolean tooOldHard = frameAgeNs >= (dropThresholdHardNs - 250_000L);
+
 
                                         final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
                                         final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
-                                        final boolean isLate = frameAgeNs > dropThresholdNs;
+                                        final boolean isLate = frameAgeNs >= dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
 
                                         final boolean shouldDrop =
-                                                isLate &&
-                                                        (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long)(periodNs * 0.5)) &&
-                                                        dropCooldownOk;
+                                                (tooOldHard) || (
+                                                        isLate &&
+                                                                (lateStreak >= 1) &&
+                                                                (sinceLastPresent < (long)(periodNs * 0.5)) &&
+                                                                dropCooldownOk);
 
                                         if (shouldDrop) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
@@ -1409,7 +1445,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             continue; // niente stats sui frame droppati
                                         }
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        releaseWithPolicy(lastIndex, nowNs);
                                         lastPresentNs = nowNs;
                                         if (!isLate) lateStreak = 0;
                                         recentDrops = Math.max(0, recentDrops - 1);
