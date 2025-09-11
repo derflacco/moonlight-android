@@ -1208,7 +1208,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 } catch (Throwable ignored) {}
 
                 // Aggressive/adaptive state
-                final double EWMA_ALPHA = 0.25;
+                final double EWMA_ALPHA = managedMode ? 0.15 : 0.25;
                 final double MIN_FACTOR = 1.00;
                 final double MAX_FACTOR = 1.20;
 
@@ -1220,8 +1220,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 int    recentDrops             = 0;
 
                 double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1, tfps));
-                double ewmaDecodeToPresentNs   = periodNs * 0.7;
-                double ewmaJitterNs            = periodNs * 0.1;
+                double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
+                double ewmaJitterNs = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
 
                 BufferInfo info = new BufferInfo();
                 long lastOutputNs = System.nanoTime();
