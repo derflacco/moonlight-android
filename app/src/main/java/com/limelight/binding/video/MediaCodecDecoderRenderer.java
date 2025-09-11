@@ -66,7 +66,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void releaseWithPolicy(int bufferIndex, long frameTimeNanos) {
         try {
             long now = System.nanoTime();
-            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 1_500_000L) /* widened to 1ms to reduce near-vsync jitter */;
+            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 300_000L);
             if (immediate) {
                 videoDecoder.releaseOutputBuffer(bufferIndex, true);
             } else {
@@ -79,34 +79,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             } catch (Throwable ignored) {}
         }
     }
-    private
-    int getOutputDequeueTimeoutUs(){
-        try {
-            int us;
-            if (preferLowerDelays) {
-                // Keep a small non-zero timeout to limit busy-spin jitter
-                us = Math.max(150, Math.min(2000, preferLowerDelaysTimeoutUs));
-            } else {
-                us = Math.max(0, preferLowerDelaysTimeoutUs);
-            }
-            // Tegra/NVIDIA prefer >= 1ms
-            try {
-                if (android.os.Build.VERSION.SDK_INT >= 21 && videoDecoder != null) {
-                    String decName = videoDecoder.getName();
-                    if (decName != null) {
-                        String s = decName.toLowerCase(java.util.Locale.US);
-                        if (s.contains("nvidia") || s.contains("omx.nvidia") || s.contains("c2.nvidia")) {
-                            us = Math.max(1000, Math.min(5000, us == 0 ? 2000 : us));
-                        }
-                    }
-                }
-            } catch (Throwable ignored) {}
-            return us;
-        } catch (Throwable ignored) {
-            return 0;
-        }
-    }
-
+    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? Math.max(250, preferLowerDelaysTimeoutUs) : preferLowerDelaysTimeoutUs; }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
@@ -148,13 +121,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Context context;
     private Activity activity;
     private MediaCodec videoDecoder;
-    // --- Debounce state for setFrameRate() in renderer to reduce jitter ---
-    private float __mcdrLastSurfaceFps = -1f;
-    private int   __mcdrLastSurfaceCompat = Integer.MIN_VALUE;
-    private long  __mcdrLastSurfaceSetNs = 0L;
-    private static final float __MCDR_FRAME_RATE_EPS_HZ = 0.25f;       // ~0.25 Hz tolerance
-    private static final long  __MCDR_FRAME_RATE_DEBOUNCE_NS = 200_000_000L; // 200 ms
-
     private Thread rendererThread;
     private boolean needsSpsBitstreamFixup, isExynos4;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
@@ -1214,7 +1180,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 final boolean highRefresh = displayHz >= 90f;
                 final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
                 // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
-                final long periodNs = (forceTightThresholds ? vsyncPeriodNs : (preferLowerDelays ? vsyncPeriodNs : Math.max(vsyncPeriodNs, streamPeriodNs)));
+                final long periodNs = (preferLowerDelays ? vsyncPeriodNs : Math.max(vsyncPeriodNs, streamPeriodNs));
                 boolean isC2Decoder = false;
                 try {
                     String decName = videoDecoder.getName();
@@ -1243,7 +1209,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
                     /* LATEST_ONLY_LOW_LATENCY */
-                    if (preferLowerDelays) {
+                    if (!preferLowerDelays) {
                         try {
                             android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
                             int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
@@ -2416,48 +2382,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
     private void applySurfaceFrameRate(android.view.Surface surface, int targetFps) {
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
-                boolean __nv = false;
-                try {
-                    if (videoDecoder != null) {
-                        try {
-                            android.media.MediaCodecInfo info = videoDecoder.getCodecInfo();
-                            String name = (info != null ? info.getName() : "");
-                            __nv = com.limelight.binding.video.MediaCodecHelper.isNvidiaDecoder(name);
-                        } catch (Throwable ignored) {}
-                    }
-                } catch (Throwable ignored) {}
-                if (__nv) {
-                    com.limelight.LimeLog.info("Skipping Surface.setFrameRate on NVIDIA/Tegra (renderer)");
-                    return;
-                }
-            }
-        } catch (Throwable ignored) {}
-
         if (surface == null) return;
         try {
             // API 30+ supports Surface.setFrameRate; for older, attempt View-based call elsewhere.
             if (android.os.Build.VERSION.SDK_INT >= 30) {
-
-                // Minimal debounce: only apply if value really changed and outside 200ms window
-                {
-                    long __now = System.nanoTime();
-                    float __fps = (float) targetFps;
-                    int __compat = android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
-                    boolean __skip = (__mcdrLastSurfaceFps > 0f) &&
-                            (Math.abs(__mcdrLastSurfaceFps - __fps) <= __MCDR_FRAME_RATE_EPS_HZ) &&
-                            (__mcdrLastSurfaceCompat == __compat) &&
-                            ((__now - __mcdrLastSurfaceSetNs) < __MCDR_FRAME_RATE_DEBOUNCE_NS);
-                    if (!__skip) {
-                        surface.setFrameRate(__fps, __compat);
-                        __mcdrLastSurfaceFps = __fps;
-                        __mcdrLastSurfaceCompat = __compat;
-                        __mcdrLastSurfaceSetNs = __now;
-                        LimeLog.info("Applied Surface frame rate: " + targetFps + " Hz");
-
-                    }
-                }
+                surface.setFrameRate((float) targetFps,
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+                LimeLog.info("Applied Surface frame rate: " + targetFps + " Hz");
             }
         } catch (Throwable t) {
             // best-effort
