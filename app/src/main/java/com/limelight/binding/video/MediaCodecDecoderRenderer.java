@@ -95,7 +95,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // In max smoothness or cap FPS, render at TS=0 to avoid Surface-side drops.
                 if (prefs != null && (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
-                    videoDecoder.releaseOutputBuffer(index, 0 /* renderTimestampNs */);
+                    videoDecoder.releaseOutputBuffer(index, true);
                 } else {
                     videoDecoder.releaseOutputBuffer(index, nowNs);
                 }
@@ -1341,16 +1341,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
-                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                    frameDropped = true; // stiamo scartando il più vecchio
-
-                                    numFramesOut++;
-                                    lastIndex = outIndex;
-                                    presentationTimeUs = info.presentationTimeUs;
+                                // Get the last output buffer in the queue (conditional coalesce ≤1)
+                                {
+                                    final long nowNs = System.nanoTime();
+                                    final double __hz = Math.max(1.0, (double) tfps);
+                                    final long __spNs = (long)(1_000_000_000L / __hz);
+                                    final long lastAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                    long dropThresholdNs = (long)(__spNs * 1.35);
+                                    // ensure at least one vsync worth when available (fallback: period + 1 ms)
+                                    dropThresholdNs = Math.max(dropThresholdNs, (vsyncPeriodNs > 0 ? vsyncPeriodNs : (__spNs + 1_000_000L)));
+                                    if (lastAgeNs >= dropThresholdNs) {
+                                        int __idxOnce = videoDecoder.dequeueOutputBuffer(info, 0);
+                                        if (__idxOnce >= 0) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                            frameDropped = true; // coalesce one older frame only (justified)
+                                            numFramesOut++;
+                                            lastIndex = __idxOnce;
+                                            presentationTimeUs = info.presentationTimeUs;
+                                        }
+                                    }
                                 }
-
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
                                     // In max smoothness or cap FPS mode, we want to never drop frames
@@ -1360,17 +1370,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                         // Smoothness: soglia più stretta 1.05..1.2×
                                         double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
-                                        double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
-                                        factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
+                                        double factorSmooth = 1.30 - 0.20 * (1.0 - pressure);
+                                        factorSmooth = Math.max(1.10, Math.min(1.30, factorSmooth));
 
                                         long dropThresholdSmoothNs = (long)(periodNs * factorSmooth);
 
                                         final long dropThresholdHardNs = Math.max(dropThresholdSmoothNs * 5 / 2, dropThresholdSmoothNs + 1_000_000L);
                                         final boolean isLate = frameAgeNs >= dropThresholdSmoothNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
-                                        final boolean backlogLikely = (lateStreak >= 1) || (recentDrops >= 2);
+                                        final long __cooldownNs = (vsyncPeriodNs > 0 ? vsyncPeriodNs : periodNs);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= __cooldownNs;
+                                        final boolean backlogLikely = (lateStreak >= 2) || (recentDrops >= 3);
                                         final boolean tooOldHard = frameAgeNs >= (dropThresholdHardNs - 250_000L);
-                                        if (tooOldHard || (isLate && backlogLikely)) {
+                                        if (tooOldHard || (isLate && backlogLikely && dropCooldownOk)) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
@@ -1426,14 +1438,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
                                         final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
+                                        final long __cooldownNs = (vsyncPeriodNs > 0 ? vsyncPeriodNs : periodNs);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= __cooldownNs;
                                         final boolean isLate = frameAgeNs >= dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
 
                                         final boolean shouldDrop =
                                                 (tooOldHard) || (
                                                         isLate &&
-                                                                (lateStreak >= 1) &&
+                                                                (lateStreak >= 2) &&
                                                                 (sinceLastPresent < (long)(periodNs * 0.5)) &&
                                                                 dropCooldownOk);
 
