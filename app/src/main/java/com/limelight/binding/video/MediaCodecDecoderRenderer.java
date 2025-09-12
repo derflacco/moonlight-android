@@ -57,7 +57,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private android.os.HandlerThread codecCallbackThread;
     private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(16);
     private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue = new java.util.concurrent.LinkedBlockingQueue<>(OUTPUT_BUFFER_QUEUE_LIMIT);
-    private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo = new android.util.SparseArray<>(16);
+    private final BufferInfoLite[] outInfoByIndex = new BufferInfoLite[BUFFER_INFO_SLOTS];
     private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
@@ -218,7 +218,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private long lastNetDataNum;
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
-    private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
+    private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 3;
+    private static final int BUFFER_INFO_SLOTS = 128;
+    private static final class BufferInfoLite {
+        int offset;
+        int size;
+        long ptsUs;
+        int flags;
+        void set(android.media.MediaCodec.BufferInfo s) {
+            if (s != null) { this.offset = s.offset; this.size = s.size; this.ptsUs = s.presentationTimeUs; this.flags = s.flags; }
+        }
+    }
+
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
@@ -688,16 +699,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     @Override
                     public void onOutputBufferAvailable(android.media.MediaCodec codec, int index, android.media.MediaCodec.BufferInfo info) {
                         try {
-                            synchronized (asyncOutInfo) { asyncOutInfo.put(index, cloneInfo(info)); }
+                            // Write BufferInfo into compact per-index slot (cache-friendly)
+                            if (index >= 0 && index < BUFFER_INFO_SLOTS) {
+                                BufferInfoLite slot = outInfoByIndex[index];
+                                if (slot == null) { slot = new BufferInfoLite(); outInfoByIndex[index] = slot; }
+                                slot.set(info);
+                            }
+                            // Offer index into bounded queue; if full, drop the oldest (latest-wins)
                             if (!asyncOutputQueue.offer(index)) {
                                 Integer oldIdx = asyncOutputQueue.poll();
                                 if (oldIdx != null && oldIdx >= 0) {
                                     try { codec.releaseOutputBuffer(oldIdx, false); } catch (Throwable ignored) {}
-                                    synchronized (asyncOutInfo) { asyncOutInfo.remove(oldIdx); }
                                 }
                                 if (!asyncOutputQueue.offer(index)) {
                                     try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
-                                    synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
                                 }
                             }
                         } catch (Throwable ignored) {}
@@ -939,7 +954,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             try { if (codecCallbackThread != null) { codecCallbackThread.quitSafely(); codecCallbackThread = null; } } catch (Throwable ignored) {}
                             try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
                             try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
-                            try { synchronized (asyncOutInfo) { asyncOutInfo.clear(); } } catch (Throwable ignored) {}
+                            try { java.util.Arrays.fill(outInfoByIndex, null); } catch (Throwable ignored) {}
                         }
 
                         videoDecoder.stop();
@@ -2712,13 +2727,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         try {
             Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
             if (idx == null) return -1;
-            synchronized (asyncOutInfo) {
-                android.media.MediaCodec.BufferInfo bi = asyncOutInfo.get(idx);
-                if (bi != null && outInfo != null) {
-                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
-                }
-                asyncOutInfo.remove(idx);
-            }
+            if (outInfo != null && idx >= 0 && idx < BUFFER_INFO_SLOTS) { BufferInfoLite __bi = outInfoByIndex[idx]; if (__bi != null) { outInfo.set(__bi.offset, __bi.size, __bi.ptsUs, __bi.flags); } }
             return idx;
         } catch (InterruptedException e) {
             try { LimeLog.warning("[Video] asyncOutputQueue.poll interrupted"); } catch (Throwable ignored) {}
