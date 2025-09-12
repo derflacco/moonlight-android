@@ -13,7 +13,17 @@ import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 
+import android.os.Process;
+
 public class AndroidAudioRenderer implements AudioRenderer {
+
+// Ensure audio thread runs with highest real-time priority to avoid glitches
+private static void bumpAudioPriority() {
+    try {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
+    } catch (Throwable ignored) {}
+}
+
 
     private final Context context;
     private final boolean enableAudioFx;
@@ -192,6 +202,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
             // This will block until the write is completed. That can cause a backlog
             // of pending audio data, so we do the above check to be able to bound
             // latency at 40 ms in that situation.
+            bumpAudioPriority();
             track.write(audioData, 0, audioData.length);
         }
         else {
