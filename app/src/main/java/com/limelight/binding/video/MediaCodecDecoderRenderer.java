@@ -1411,15 +1411,35 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             int drained = 0;
                             boolean drainedMultiple = false;
 
+                            // Soft drop policy (gentler to avoid visible stutter)
+                            // - allow at most 1 "soft" drop per burst
+                            // - if a frame is older than ~1 vsync, allow extra drop to catch up
+                            final long __vsyncNs = (vsyncPeriodNs > 0L) ? vsyncPeriodNs : 16_666_667L;
+                            final long __ageCatchupNs = __vsyncNs; // 1 vsync
+
                             // First attempt: current adaptive timeout (usually 0us at start)
                             int idx = nextOutputIndex(lfrInfo, firstTimeoutUs);
 
                             while (idx >= 0) {
-                                // Keep only the newest; drop intermediates
+                                // Keep only the newest; drop intermediates conservatively
                                 if (last >= 0) {
-                                    try { videoDecoder.releaseOutputBuffer(last, false); } catch (Throwable ignored) {}
-                                    drained++;
-                                    drainedMultiple = true;
+                                    long curPtsNs = lfrInfo.presentationTimeUs * 1000L;
+                                    long prevPtsNs = lastPtsUs * 1000L;
+                                    long nowNsSafe = System.nanoTime();
+                                    long prevAgeNs = nowNsSafe - prevPtsNs;
+
+                                    boolean allowAnotherDrop =
+                                            (drained == 0) // first soft drop is okay
+                                                    || (prevAgeNs > __ageCatchupNs); // if previous is already stale
+
+                                    if (allowAnotherDrop) {
+                                        try { videoDecoder.releaseOutputBuffer(last, false); } catch (Throwable ignored) {}
+                                        drained++;
+                                        drainedMultiple = drained > 1;
+                                    } else {
+                                        // Keep the previous one to avoid aggressive skipping
+                                        break;
+                                    }
                                 }
 
                                 last = idx;
@@ -1431,7 +1451,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
 
                                 // Soft cap to avoid long loops (more lenient when timeout is tiny)
-                                final int drainSoftCap = (firstTimeoutUs <= 500) ? 6 : 4;
+                                final int drainSoftCap = (firstTimeoutUs <= 500) ? 4 : 3;
                                 if (drained >= drainSoftCap) {
                                     break;
                                 }
@@ -1455,12 +1475,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
                             }
 
-                            // Present ONLY the newest frame
+                            // Present ONLY the newest (or the kept one if we broke early)
                             if (last >= 0) {
                                 final long nowNs = System.nanoTime();
+                                long desiredNs = nowNs;
+                                try {
+                                    long ptsNs = lastPtsUs * 1000L;
+                                    // Never schedule in the past; cap to small lead (<= 0.5 vsync)
+                                    desiredNs = Math.max(nowNs, ptsNs);
+                                    long maxLead = __vsyncNs / 2;
+                                    if (desiredNs - nowNs > maxLead) desiredNs = nowNs + maxLead;
+                                } catch (Throwable ignored) {}
+
                                 try {
                                     if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                        videoDecoder.releaseOutputBuffer(last, nowNs);
+                                        videoDecoder.releaseOutputBuffer(last, desiredNs);
                                     } else {
                                         videoDecoder.releaseOutputBuffer(last, true);
                                     }
@@ -1554,7 +1583,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         final boolean dropCooldownOk = (nowNs - lastDropNs) >= __cooldownNs;
                                         final boolean backlogLikely = (lateStreak >= 2) || (recentDrops >= 3);
                                         final boolean tooOldHard = frameAgeNs >= (dropThresholdHardNs - 250_000L);
-                                        if (tooOldHard || (isLate && backlogLikely && dropCooldownOk)) {
+                                        final long __vsyncNs = (vsyncPeriodNs > 0 ? vsyncPeriodNs : periodNs);
+                                        final boolean __allowSoftDrop = (recentDrops == 0) || (frameAgeNs >= __vsyncNs);
+                                        if ((tooOldHard || (isLate && backlogLikely && dropCooldownOk)) && __allowSoftDrop) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
@@ -1622,7 +1653,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                                 (sinceLastPresent < (long)(periodNs * 0.5)) &&
                                                                 dropCooldownOk);
 
-                                        if (shouldDrop) {
+                                        final long __vsyncNs = (vsyncPeriodNs > 0 ? vsyncPeriodNs : periodNs);
+                                        final boolean __allowSoftDrop = (recentDrops == 0) || (frameAgeNs >= __vsyncNs);
+                                        if (shouldDrop && __allowSoftDrop) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
