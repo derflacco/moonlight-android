@@ -731,4 +731,7 @@
     <string name="summary_checkbox_full_screen">Hide system bars with immersive mode</string>
     <string name="title_checkbox_antilag">Balanced-LFR</string>
     <string name="summary_checkbox_antilag">LFR for Balanced Frame Pacing</string>
+    <string name="title_checkbox_enable_async_decoder">Use async video decoder (experimental)</string>
+    <string name="summary_checkbox_enable_async_decoder">Enable MediaCodec callback mode to reduce blocking on the app thread. Recommended on recent Snapdragon devices.</string>
+
 </resources>

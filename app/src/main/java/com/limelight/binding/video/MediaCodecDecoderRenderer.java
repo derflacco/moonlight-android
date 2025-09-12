@@ -44,9 +44,17 @@ import android.view.Choreographer;
 import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
-    // Latency profile: favor minimal end-to-end delay over absolute smoothness.
+
+      // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
+    // Async codec runtime flag from preferences
+    private boolean useAsyncCodec = false;
+    private android.os.HandlerThread codecCallbackThread;
+    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(16);
+    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue = new java.util.concurrent.LinkedBlockingQueue<>(OUTPUT_BUFFER_QUEUE_LIMIT);
+    private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo = new android.util.SparseArray<>(16);
+    private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
  // Considera Balanced-class: usa pacing via Choreographer
 
          private boolean isBalancedClass() {
@@ -383,6 +391,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         this.activeWindowVideoStats = new VideoStats();
         this.lastWindowVideoStats = new VideoStats();
+        this.useAsyncCodec = (prefs != null && prefs.enableAsyncDecoder && android.os.Build.VERSION.SDK_INT >= 23);
         this.globalVideoStats = new VideoStats();
 
         avcDecoder = findAvcDecoder();
@@ -638,6 +647,48 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         videoDecoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
 
         // Start the decoder
+
+        if (useAsyncCodec) {
+            try {
+                if (codecCallbackThread == null) {
+                    codecCallbackThread = new android.os.HandlerThread("CodecCb");
+                    codecCallbackThread.start();
+                }
+                android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
+                videoDecoder.setCallback(new android.media.MediaCodec.Callback() {
+                    @Override
+                    public void onInputBufferAvailable(android.media.MediaCodec codec, int index) {
+                        try { asyncInputQueue.offer(index); } catch (Throwable ignored) {}
+                    }
+                    @Override
+                    public void onOutputBufferAvailable(android.media.MediaCodec codec, int index, android.media.MediaCodec.BufferInfo info) {
+                        try {
+                            synchronized (asyncOutInfo) { asyncOutInfo.put(index, cloneInfo(info)); }
+                            if (!asyncOutputQueue.offer(index)) {
+                                Integer oldIdx = asyncOutputQueue.poll();
+                                if (oldIdx != null && oldIdx >= 0) {
+                                    try { codec.releaseOutputBuffer(oldIdx, false); } catch (Throwable ignored) {}
+                                    synchronized (asyncOutInfo) { asyncOutInfo.remove(oldIdx); }
+                                }
+                                if (!asyncOutputQueue.offer(index)) {
+                                    try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+                                    synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                    @Override
+                    public void onError(android.media.MediaCodec codec, android.media.MediaCodec.CodecException e) {
+                        try { LimeLog.warning("[Video] MediaCodec async error: " + e); } catch (Throwable ignored) {}
+                    }
+                    @Override
+                    public void onOutputFormatChanged(android.media.MediaCodec codec, android.media.MediaFormat format) {
+                        try { LimeLog.info("[Video] MediaCodec async output format changed"); } catch (Throwable ignored) {}
+                    }
+                }, cb);
+            } catch (Throwable ignored) {}
+        }
+
         videoDecoder.start();
 
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
@@ -857,6 +908,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESTART) {
                     LimeLog.warning("Trying to restart decoder after CodecException");
                     try {
+
+                        if (useAsyncCodec) {
+                            try { videoDecoder.setCallback(null, null); } catch (Throwable ignored) {}
+                            try { if (codecCallbackThread != null) { codecCallbackThread.quitSafely(); codecCallbackThread = null; } } catch (Throwable ignored) {}
+                            try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
+                            try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
+                            try { synchronized (asyncOutInfo) { asyncOutInfo.clear(); } } catch (Throwable ignored) {}
+                        }
+
                         videoDecoder.stop();
                         configureAndStartDecoder(configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
@@ -1148,7 +1208,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        choreographerHandlerThread = new android.os.HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY);
         choreographerHandlerThread.start();
 
         // Start the frame callbacks
@@ -1225,7 +1285,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     if (preferLowerDelays) {
                         try {
                             final android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
-                            int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                            int __idx = nextOutputIndex(__tmpInfo, 0); // <-- async-safe
                             int __last = -1;
                             long __lastPtsUs = -1L;
 
@@ -1236,15 +1296,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
                                 __last = __idx;
                                 __lastPtsUs = __tmpInfo.presentationTimeUs;
-                                __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                __idx = nextOutputIndex(__tmpInfo, 0); // <-- async-safe
                             }
 
                             if (__last >= 0) {
-                                // Present ASAP (booleano): il compositor allinea al prossimo VSYNC
+                                // Present ASAP (boolean): il compositor allinea al prossimo VSYNC
                                 try { videoDecoder.releaseOutputBuffer(__last, true); } catch (Throwable ignored) {}
 
                                 // --- STATISTICHE: ≤1 incremento per periodo reale, senza Choreographer ---
-                                final float rr = Math.max(1f, refreshRate); // refreshRate è già un campo (float/int)
+                                final float rr = Math.max(1f, refreshRate);
                                 vsyncPeriodNs = (long) (1_000_000_000.0 / rr);
 
                                 final long nowNs = System.nanoTime();
@@ -1259,13 +1319,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     // Conta al massimo 1 frame ogni periodo
                                     if (lfrAccumNs >= vsyncPeriodNs) {
                                         activeWindowVideoStats.totalFramesRendered++;
-                                        // conserva l'errore frazionario per non "perdere" fps (119.88 etc.)
+                                        // conserva l'errore frazionario (es. 119.88 Hz)
                                         lfrAccumNs -= vsyncPeriodNs;
                                         if (lfrAccumNs < 0) lfrAccumNs = 0;
                                     }
                                 }
 
-// Telemetria (opzionale): D2P basato su nowNs
+                                // Telemetria (opzionale): D2P basato su nowNs
                                 if (__lastPtsUs >= 0) {
                                     long d2pNs = nowNs - (__lastPtsUs * 1000L);
                                     if (d2pNs < 0) d2pNs = 0;
@@ -1283,13 +1343,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
+                        int outIndex = nextOutputIndex(info, getOutputDequeueTimeoutUs());
 
                         if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                             // reduced backoff 0–2000 µs
                             tryAgainStreak++;
                             int backoffUs = Math.min(getOutputDequeueTimeoutUs(), (tryAgainStreak <= 2) ? 0 : 2000);
-                            outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
+                            outIndex = nextOutputIndex(info, backoffUs);
                         } else {
                             tryAgainStreak = 0;
                         }
@@ -1314,17 +1374,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             }
                             lastDecoderPtsUs = presentationTimeUs;
 
-                            // Render the latest frame now if frame pacing isn't in balanced mode
+// Render the latest frame now if frame pacing isn't in balanced mode
                             if (!isBalancedClass()) {
-                                // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
-                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                    frameDropped = true; // we're discarding the oldest one
+                                // Get the last output buffer in the queue (async-safe)
+                                int __idx = nextOutputIndex(info, getOutputDequeueTimeoutUs());
+                                while (__idx >= 0) {
+                                    if (lastIndex >= 0) {
+                                        try { videoDecoder.releaseOutputBuffer(lastIndex, false); } catch (Throwable ignored) {}
+                                        frameDropped = true; // we're discarding the oldest one
+                                    }
 
                                     numFramesOut++;
-                                    lastIndex = outIndex;
+                                    lastIndex = __idx;
                                     presentationTimeUs = info.presentationTimeUs;
+
+                                    // drain the rest with 0 µs to keep it tight
+                                    __idx = nextOutputIndex(info, 0);
                                 }
+
 
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
@@ -1512,7 +1579,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         try {
             // If we don't have an input buffer index yet, fetch one now
             while (nextInputBufferIndex < 0 && !stopping) {
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+                nextInputBufferIndex = nextInputIndex(10000);
             }
 
             // Get the backing ByteBuffer for the input buffer index
@@ -2413,6 +2480,49 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (name == null) return false;
         String n = name.toLowerCase();
         return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
+    }
+
+
+    // === Wrappers to unify sync/async ===
+    private int nextInputIndex(int timeoutUs) {if (!useAsyncCodec) { return videoDecoder.dequeueInputBuffer(timeoutUs); }
+
+        if (!useAsyncCodec) {
+            return videoDecoder.dequeueInputBuffer(timeoutUs);
+        }
+        try {
+            Integer idx = asyncInputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
+            return (idx != null) ? idx : -1;
+        } catch (InterruptedException e) {
+            try { LimeLog.warning("[Video] asyncInputQueue.poll interrupted"); } catch (Throwable ignored) {}
+            Thread.currentThread().interrupt();
+            return -1;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+    private int nextOutputIndex(android.media.MediaCodec.BufferInfo outInfo, int timeoutUs) {if (!useAsyncCodec) { return videoDecoder.dequeueOutputBuffer(outInfo, timeoutUs); }
+
+        if (!useAsyncCodec) {
+            return videoDecoder.dequeueOutputBuffer(outInfo, timeoutUs);
+        }
+        try {
+            Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
+            if (idx == null) return -1;
+            synchronized (asyncOutInfo) {
+                android.media.MediaCodec.BufferInfo bi = asyncOutInfo.get(idx);
+                if (bi != null && outInfo != null) {
+                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                }
+                asyncOutInfo.remove(idx);
+            }
+            return idx;
+        } catch (InterruptedException e) {
+            try { LimeLog.warning("[Video] asyncOutputQueue.poll interrupted"); } catch (Throwable ignored) {}
+            Thread.currentThread().interrupt();
+            return -1;
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
 }
