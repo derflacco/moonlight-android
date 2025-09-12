@@ -711,4 +711,7 @@
     <string name="title_low_latency_frame_balance">LFR (Experimental)</string>
     <string name="summary_low_latency_frame_balance">Minimizes delay by dropping queued frames.</string>
     <string name="category_perf_monitor_settings">Performance Monitor</string>
+    <string name="title_checkbox_enable_async_decoder">Use async video decoder (experimental)</string>
+    <string name="summary_checkbox_enable_async_decoder">Enable MediaCodec callback mode to reduce blocking on the app thread. Recommended on recent Snapdragon devices.</string>
+
 </resources>

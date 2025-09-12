@@ -77,6 +77,13 @@
             android:summary="@string/summary_checkbox_forceTightThresholds"
             android:title="@string/title_checkbox_forceTightThresholds"
             app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_enable_async_decoder"
+            android:title="@string/title_checkbox_enable_async_decoder"
+            android:summary="@string/summary_checkbox_enable_async_decoder"
+            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_use_virtual_display"
