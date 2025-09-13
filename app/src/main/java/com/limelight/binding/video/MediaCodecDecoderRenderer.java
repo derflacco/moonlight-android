@@ -454,6 +454,59 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         nextPacingDeadlineNs = 0;
         lastEvaluationNs = 0;
     }
+    // END: nanopacer
+
+
+    // Decoder output timeouts configurable at runtime.
+
+    // Clamp an integer to a closed interval to keep user-configured values within safe bounds.
+    private static int clampInt(int v, int min, int max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    // Read an int preference with a fallback for legacy/String-backed values (e.g., older builds or migrations).
+    private static int safeGetInt(SharedPreferences sp, String key, int def) {
+        try {
+            return sp.getInt(key, def);
+        } catch (ClassCastException e) {
+            try {
+                String s = sp.getString(key, null);
+                if (s != null) return Integer.parseInt(s.trim());
+            } catch (Throwable ignored) { }
+            return def;
+        }
+    }
+
+    // Periodically poll decoder timing preferences to allow live tuning without restarting the stream.
+    private void maybeReloadDecoderTimingPrefs() {
+        final long nowNs = System.nanoTime();
+        if (nowNs < nextDecoderTimingPollNs) {
+            return;
+        }
+        nextDecoderTimingPollNs = nowNs + DECODER_TIMING_POLL_INTERVAL_NS;
+
+        final SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(context);
+
+        final int dequeueUs = clampInt(
+                safeGetInt(sp, "seekbar_decoder_output_timeout_us", 50000),
+                0, 50000);
+
+        final int drainUs = clampInt(
+                safeGetInt(sp, "seekbar_decoder_output_drain_timeout_us", 0),
+                0, 50000);
+
+        runtimeOutputDequeueTimeoutUs = dequeueUs;
+        runtimeOutputDrainTimeoutUs = drainUs;
+
+        // Keep the runtime snapshot in sync for code paths that read from PreferenceConfiguration.
+        if (prefs != null) {
+            prefs.decoderOutputDequeueTimeoutUs = dequeueUs;
+            prefs.decoderOutputDrainTimeoutUs = drainUs;
+        }
+    }
+    // END: Decoder output timeouts configurable at runtime.
 
     private static final int CR_MAX_TRIES = 10;
     private static final int CR_RECOVERY_TYPE_NONE = 0;
@@ -490,6 +543,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private float minDecodeTime = Float.MAX_VALUE;
     private String minDecodeTimeFullLog = "";
+    // ---- Runtime decoder timing prefs (poll to allow live tuning) ----
+    private static final long DECODER_TIMING_POLL_INTERVAL_NS = 250_000_000L; // 250 ms
+    private long nextDecoderTimingPollNs = 0L;
+
+    private volatile int runtimeOutputDequeueTimeoutUs = 50000;
+    private volatile int runtimeOutputDrainTimeoutUs = 0;
 
 //    private long lastNetDataNum;
     private volatile long lastNetDataNum;
@@ -693,6 +752,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.context = activity;
         this.activity = activity;
         this.prefs = prefs;
+        runtimeOutputDequeueTimeoutUs = (prefs != null) ? prefs.decoderOutputDequeueTimeoutUs : 50000;
+        runtimeOutputDrainTimeoutUs = (prefs != null) ? prefs.decoderOutputDrainTimeoutUs : 0;
+        nextDecoderTimingPollNs = 0L;
+
         this.crashListener = crashListener;
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
@@ -1525,8 +1588,13 @@ try {
                     // Apply settings changes while streaming (frame pacing hot-reload)
                     maybeApplyRuntimeFramePacing();
 
-                    // Timeout: 0 for immediate delivery, otherwise a small wait to reduce busy looping
-                    final int decodeTimeout = (prefs != null && prefs.immediateFrameDelivery) ? 0 : 50000;
+                    // Live-tune decoder timeouts from app settings
+                    maybeReloadDecoderTimingPrefs();
+
+                    // Timeout: 0 for immediate delivery, otherwise user-configurable wait
+                    final int decodeTimeout = (prefs != null && prefs.immediateFrameDelivery)
+                            ? 0
+                            : runtimeOutputDequeueTimeoutUs;
 
                     // Throttle cleanup to avoid performance spikes
                     final long nowNs = System.nanoTime();
@@ -1553,7 +1621,7 @@ try {
                                 long lastDequeueTimeNs = System.nanoTime();
 
 // Latest-only: drain all available buffers, keep only the newest
-                                while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
+                                while ((outIndex = nextOutputIndex(info, runtimeOutputDrainTimeoutUs)) >= 0) {
                                     final long thisDequeueTimeNs = System.nanoTime();
 
                                     try { videoDecoder.releaseOutputBuffer(lastIndex, false); }

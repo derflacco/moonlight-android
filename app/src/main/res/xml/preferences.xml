@@ -73,6 +73,32 @@
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="50000"
+            android:key="seekbar_decoder_output_timeout_us"
+            android:max="50000"
+            android:title="Decoder output dequeue timeout"
+            android:summary="MediaCodec output dequeue timeout (µs) when Immediate frame delivery is OFF."
+            android:dialogMessage="Sets MediaCodec output dequeue timeout in microseconds. Lower can reduce latency but increases CPU usage."
+            android:text="µs"
+            app:iconSpaceReserved="false"
+            seekbar:min="0"
+            seekbar:step="1000"
+            seekbar:keyStep="1000" />
+
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="0"
+            android:key="seekbar_decoder_output_drain_timeout_us"
+            android:max="50000"
+            android:title="Decoder output drain timeout"
+            android:summary="Timeout (µs) used in the latest-only drain loop. 0 = non-blocking."
+            android:dialogMessage="Sets the timeout used while draining additional output buffers. Non-zero values can increase latency."
+            android:text="µs"
+            app:iconSpaceReserved="false"
+            seekbar:min="0"
+            seekbar:step="1000"
+            seekbar:keyStep="1000" />
+
         <CheckBoxPreference
             android:key="checkbox_gpu_path_mode"
             android:title="@string/gpu_path_mode_title"

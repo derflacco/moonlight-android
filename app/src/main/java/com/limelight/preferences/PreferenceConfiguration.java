@@ -19,6 +19,23 @@ public class PreferenceConfiguration {
     private static final String IMMEDIATE_FRAME_DELIVERY_PREF_STRING = "checkbox_immediate_frame_delivery";
     private static final boolean DEFAULT_IMMEDIATE_FRAME_DELIVERY = false;
 
+    // Decoder output dequeue timeout (µs) used when immediateFrameDelivery=false
+    public int decoderOutputDequeueTimeoutUs = 50000;
+    private static final String DECODER_OUTPUT_DEQUEUE_TIMEOUT_US_PREF_STRING =
+            "seekbar_decoder_output_timeout_us";
+    private static final int DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_US = 50000;
+
+    // Decoder output drain timeout (µs) used in latest-only drain loop
+    public int decoderOutputDrainTimeoutUs = 0;
+    private static final String DECODER_OUTPUT_DRAIN_TIMEOUT_US_PREF_STRING =
+            "seekbar_decoder_output_drain_timeout_us";
+    private static final int DEFAULT_DECODER_OUTPUT_DRAIN_TIMEOUT_US = 0;
+    private static int clampInt(int v, int min, int max) {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
     // CpuWarmUp (read from prefs)
     public boolean cpuWarmUpEnable;
 
@@ -1110,6 +1127,14 @@ public class PreferenceConfiguration {
         config.preventPacketLoss = prefs.getBoolean(PREVENT_PACKET_LOSS_PREF_STRING, DEFAULT_PREVENT_PACKET_LOSS);
         config.snappyInput = prefs.getBoolean(SNAPPY_INPUT_PREF_STRING, DEFAULT_SNAPPY_INPUT);
         config.immediateFrameDelivery = prefs.getBoolean(IMMEDIATE_FRAME_DELIVERY_PREF_STRING, DEFAULT_IMMEDIATE_FRAME_DELIVERY);
+        config.decoderOutputDequeueTimeoutUs =
+                clampInt(prefs.getInt(DECODER_OUTPUT_DEQUEUE_TIMEOUT_US_PREF_STRING, DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_US),
+                        0, 50000);
+
+        config.decoderOutputDrainTimeoutUs =
+                clampInt(prefs.getInt(DECODER_OUTPUT_DRAIN_TIMEOUT_US_PREF_STRING, DEFAULT_DECODER_OUTPUT_DRAIN_TIMEOUT_US),
+                        0, 50000);
+
         // Read custom values
         config.customResolution = prefs.getString(CUSTOM_RESOLUTION_PREF_STRING, null);
         config.customRefreshRate = prefs.getString(CUSTOM_REFRESH_RATE_PREF_STRING, null);
@@ -1154,6 +1179,7 @@ public class PreferenceConfiguration {
         }
  // FastVsync
         config.fastVsync = prefs.getBoolean(PREF_FASTVSYNC, false);
+
 
         return config;
     }
