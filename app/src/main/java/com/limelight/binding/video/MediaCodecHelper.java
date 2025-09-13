@@ -1136,12 +1136,185 @@ public class MediaCodecHelper {
     }
 
 
-    // --- Helpers to safely set vendor-specific flags without crashing ---
+
+
+    // ====== Decoder/Vendor Key Audit (lightweight) ======
+    // Collects vendor keys we attempt to set and whether they appear accepted.
+    // Enable with beginDecoderAudit(format) before applying vendor options; call
+    // finalizeDecoderAudit(decoderName, codec, format) after start() to attempt runtime setParameters checks.
+    private static final java.util.ArrayList<String> __auditKey = new java.util.ArrayList<>(64);
+    private static final java.util.ArrayList<String> __auditVal = new java.util.ArrayList<>(64);
+    private static final java.util.ArrayList<Integer> __auditTry = new java.util.ArrayList<>(64);
+    private static volatile int __auditCurrentTry = -1;
+
+    // 0=int, 1=bool, 2=long, 3=string
+    private static final java.util.ArrayList<Integer> __auditType = new java.util.ArrayList<>(64);
+    private static final java.util.ArrayList<Boolean> __auditPutOk = new java.util.ArrayList<>(64);
+    private static volatile boolean __auditEnabled = false;
+
+    private static void __vAudit(String msg) {
+        try { com.limelight.LimeLog.info("[DecoderAudit] " + msg); } catch (Throwable ignored) {}
+        try { android.util.Log.i("DecoderAudit", msg); } catch (Throwable ignored) {}
+    }
+
+    public static void beginDecoderAudit(android.media.MediaFormat format) {
+        __auditEnabled = true;
+        try { __auditKey.clear(); __auditVal.clear(); __auditType.clear(); __auditPutOk.clear(); __auditTry.clear(); __auditCurrentTry = -1; } catch (Throwable ignored) {}
+        // Log a compact snapshot of key format params we care about up front
+        try {
+            String mime = null; int w = -1, h = -1, op = -1, prio = -1;
+            try { mime = format.containsKey(android.media.MediaFormat.KEY_MIME) ? format.getString(android.media.MediaFormat.KEY_MIME) : null; } catch (Throwable ignored2) {}
+            try { w = format.containsKey(android.media.MediaFormat.KEY_WIDTH) ? format.getInteger(android.media.MediaFormat.KEY_WIDTH) : -1; } catch (Throwable ignored2) {}
+            try { h = format.containsKey(android.media.MediaFormat.KEY_HEIGHT) ? format.getInteger(android.media.MediaFormat.KEY_HEIGHT) : -1; } catch (Throwable ignored2) {}
+            try { op = format.containsKey(android.media.MediaFormat.KEY_OPERATING_RATE) ? format.getInteger(android.media.MediaFormat.KEY_OPERATING_RATE) : -1; } catch (Throwable ignored2) {}
+            try { prio = format.containsKey(android.media.MediaFormat.KEY_PRIORITY) ? format.getInteger(android.media.MediaFormat.KEY_PRIORITY) : -1; } catch (Throwable ignored2) {}
+            __vAudit("BEGIN mime=" + (mime==null?"<null>":mime) + " size=" + w + "x" + h + " operatingRate=" + op + " priority=" + prio);
+        } catch (Throwable ignored) {}
+    }
+    // Track current configuration try number for audit aggregation
+    public static void auditSetTryNumber(int tryNumber) {
+        __auditCurrentTry = tryNumber;
+        try { __vAudit("TRY " + tryNumber); } catch (Throwable ignored) {}
+    }
+
+
+    private static void __auditRecord(String key, Object value, int type, boolean putOk) {
+        if (!__auditEnabled) return;
+        try {
+            __auditKey.add(key);
+            __auditVal.add(String.valueOf(value));
+            __auditType.add(type);
+            __auditPutOk.add(putOk);
+        } catch (Throwable ignored) {}
+    }
+
+    public static void finalizeDecoderAudit(String decoderName, android.media.MediaCodec codec, android.media.MediaFormat baseFormat, android.media.MediaFormat inputFormat, android.media.MediaFormat outputFormat){
+        if (!__auditEnabled) return;
+        StringBuilder sb = new StringBuilder(256);
+        try {
+            sb.append("SELECTED=").append(decoderName == null ? "<unknown>" : decoderName);
+            try {
+                int op = baseFormat.containsKey(android.media.MediaFormat.KEY_OPERATING_RATE) ? baseFormat.getInteger(android.media.MediaFormat.KEY_OPERATING_RATE) : -1;
+                int prio = baseFormat.containsKey(android.media.MediaFormat.KEY_PRIORITY) ? baseFormat.getInteger(android.media.MediaFormat.KEY_PRIORITY) : -1;
+                sb.append(" operatingRate=").append(op).append(" priority=").append(prio);
+            } catch (Throwable ignored2) {}
+        } catch (Throwable ignored) {}
+
+
+
+        // Deduplicate attempts, track presence in input/output, and test runtime setParameters once per key
+        java.util.LinkedHashMap<String, int[]> agg = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, java.util.HashSet<Integer>> tries = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, String> rtStatus = new java.util.LinkedHashMap<>();
+
+        for (int i = 0; i < __auditKey.size(); i++) {
+            String k = __auditKey.get(i);
+            String v = __auditVal.get(i);
+            boolean putOk = __auditPutOk.get(i) != null ? __auditPutOk.get(i) : false;
+            int tnum = (i < __auditTry.size() && __auditTry.get(i) != null) ? __auditTry.get(i) : -1;
+
+            // presence in formats
+            String inState = "n/a";
+            String outState = "n/a";
+            try { if (inputFormat != null) inState = inputFormat.containsKey(k) ? "in" : "n/a"; } catch (Throwable ignored) {}
+            try { if (outputFormat != null) outState = outputFormat.containsKey(k) ? "out" : "n/a"; } catch (Throwable ignored) {}
+
+            String key = k + "=" + v;
+            int[] arr = agg.get(key);
+            if (arr == null) { arr = new int[]{0,0,0,0}; agg.put(key, arr); tries.put(key, new java.util.HashSet<Integer>()); }
+            arr[0] += 1;                 // count
+            arr[1] |= putOk ? 1 : 0;     // any put ok
+            arr[2] |= "in".equals(inState) ? 1 : 0;   // present in input
+            arr[3] |= "out".equals(outState) ? 1 : 0; // present in output
+            tries.get(key).add(tnum);
+
+            // runtime check only once per unique key
+            if (!rtStatus.containsKey(key)) {
+                String runtime = "n/a";
+                if (codec != null) {
+                    try {
+                        android.os.Bundle b = new android.os.Bundle();
+                        // Guess type from stored type array by scanning same (k,v) pair
+                        int typeGuess = -1;
+                        for (int j = 0; j < __auditKey.size(); j++) {
+                            if (__auditKey.get(j).equals(k) && __auditVal.get(j).equals(v)) { typeGuess = __auditType.get(j); break; }
+                        }
+                        switch (typeGuess) {
+                            case 0: // int
+                                try { b.putInt(k, Integer.parseInt(v)); } catch (Throwable ignored) { b.putInt(k, 1); }
+                                break;
+                            case 1: // bool
+                                b.putInt(k, ("true".equalsIgnoreCase(v) || "1".equals(v)) ? 1 : 0);
+                                break;
+                            case 2: // long
+                                try { b.putLong(k, Long.parseLong(v)); } catch (Throwable ignored) { b.putLong(k, 1L); }
+                                break;
+                            case 3: // string
+                                b.putString(k, v);
+                                break;
+                            default:
+                                // fallback try as int
+                                try { b.putInt(k, Integer.parseInt(v)); } catch (Throwable ignored) { b.putString(k, v); }
+                        }
+                        try {
+                            codec.setParameters(b);
+                            runtime = "ok";
+                        } catch (Throwable t2) {
+                            runtime = "fail";
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                rtStatus.put(key, runtime);
+            }
+        }
+
+        java.util.ArrayList<String> results = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<String,int[]> e : agg.entrySet()) {
+            String key = e.getKey();
+            int[] arr = e.getValue();
+            java.util.Set<Integer> ts = tries.get(key);
+            String rt = rtStatus.containsKey(key) ? rtStatus.get(key) : "n/a";
+            StringBuilder tag = new StringBuilder();
+            tag.append(key);
+            if (arr[0] > 1) tag.append(" x").append(arr[0]);
+            tag.append(" (put=").append((arr[1]==1) ? "ok" : "fail")
+               .append(", rt=").append(rt)
+               .append(", fmt=").append(arr[2]==1 ? "in" : "-").append("/").append(arr[3]==1 ? "out" : "-")
+               .append(", T=").append(ts==null||ts.isEmpty() ? "-" : ts.toString())
+               .append(")");
+            results.add(tag.toString());
+        }
+    // Emit final line
+        try {
+            if (!results.isEmpty()) {
+                sb.append(" | ATTEMPTS(").append(results.size()).append(")=");
+                for (int i = 0; i < results.size(); i++) {
+                    if (i > 0) sb.append(", ");
+                    sb.append(results.get(i));
+                }
+            } else {
+                sb.append(" | ATTEMPTS(0)=<none>");
+            }
+            __vAudit(sb.toString());
+        } catch (Throwable ignored6) {}
+
+        __auditEnabled = false;
+        try { __auditKey.clear(); __auditVal.clear(); __auditType.clear(); __auditPutOk.clear(); } catch (Throwable ignored7) {}
+    }
+
+    // Back-compat overload
+    public static void finalizeDecoderAudit(String decoderName, android.media.MediaCodec codec, android.media.MediaFormat finalFormat) {
+        finalizeDecoderAudit(decoderName, codec, finalFormat, null, null);
+    }
+
+// --- Helpers to safely set vendor-specific flags without crashing ---
 
     private static void safeSet(MediaFormat format, String key, int value) {
         try {
             format.setInteger(key, value);
+            __auditRecord(key, value, 0, true);
         } catch (Throwable ignored) {
+            __auditRecord(key, value, 0, false);
             // key not supported, ignore
         }
     }
@@ -1149,7 +1322,9 @@ public class MediaCodecHelper {
     private static void safeSet(MediaFormat format, String key, boolean value) {
         try {
             format.setInteger(key, value ? 1 : 0);
+            __auditRecord(key, value, 1, true);
         } catch (Throwable ignored) {
+            __auditRecord(key, value, 0, false);
             // key not supported, ignore
         }
     }
@@ -1157,7 +1332,9 @@ public class MediaCodecHelper {
     private static void safeSet(MediaFormat format, String key, long value) {
         try {
             format.setLong(key, value);
+            __auditRecord(key, value, 2, true);
         } catch (Throwable ignored) {
+            __auditRecord(key, value, 0, false);
             // key not supported, ignore
         }
     }
@@ -1165,7 +1342,9 @@ public class MediaCodecHelper {
     private static void safeSet(MediaFormat format, String key, String value) {
         try {
             format.setString(key, value);
+            __auditRecord(key, value, 3, true);
         } catch (Throwable ignored) {
+            __auditRecord(key, value, 0, false);
             // key not supported, ignore
         }
     }
