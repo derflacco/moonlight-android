@@ -59,7 +59,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue = new java.util.concurrent.LinkedBlockingQueue<>(OUTPUT_BUFFER_QUEUE_LIMIT);
     private final BufferInfoLite[] outInfoByIndex = new BufferInfoLite[BUFFER_INFO_SLOTS];
     private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
-
+    private static final long DEFAULT_VSYNC_NS = 16_666_667L; // 60 Hz
+    private volatile long vsyncPeriodNsCached = DEFAULT_VSYNC_NS;
+    private volatile long streamPeriodNsCached = DEFAULT_VSYNC_NS;
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
@@ -88,6 +90,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         } else {
             return Math.max(0, preferLowerDelaysTimeoutUs);
         }
+    }
+    private void refreshTimingSafely(android.content.Context context) {
+        long vsyncPeriodNs;
+        float displayHz = 60f;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 17 && context != null) {
+                android.view.Display d =
+                        ((android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE))
+                                .getDefaultDisplay();
+                if (d != null) displayHz = d.getRefreshRate();
+            }
+        } catch (Throwable ignored) {}
+        if (displayHz <= 0f) displayHz = 60f;
+        vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
+
+        // Stream cadence (targetFps set in setup(...))
+        final int tfps = (targetFps > 0 ? targetFps : 60);
+        final long streamPeriodNs = (long) (1_000_000_000L / Math.max(1, tfps));
+
+        // publish (visibile da tutti i thread)
+        vsyncPeriodNsCached = (vsyncPeriodNs > 0 ? vsyncPeriodNs : DEFAULT_VSYNC_NS);
+        streamPeriodNsCached = (streamPeriodNs > 0 ? streamPeriodNs : DEFAULT_VSYNC_NS);
     }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
@@ -416,13 +440,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         this.context = activity;
         this.activity = activity;
-        this.prefs = prefs;
+        
+        try { refreshTimingSafely(activity); } catch (Throwable ignored) {}
+this.prefs = prefs;
         this.crashListener = crashListener;
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
         this.perfListener = perfListener;
         this.invertResolution = invertResolution;
-        this.useAsyncCodec = (prefs != null && prefs.enableAsyncDecoder && android.os.Build.VERSION.SDK_INT >= 23);
+        this.useAsyncCodec =
+                (prefs != null && prefs.enableAsyncDecoder && android.os.Build.VERSION.SDK_INT >= 23)
+                        && !(prefs != null && prefs.preferLowerDelays);
 
         this.activeWindowVideoStats = new VideoStats();
         this.lastWindowVideoStats = new VideoStats();
@@ -707,16 +735,34 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 if (slot == null) { slot = new BufferInfoLite(); outInfoByIndex[index] = slot; }
                                 slot.set(info);
                             }
-                            // Offer index into bounded queue; if full, drop the oldest (latest-wins)
-                            if (!asyncOutputQueue.offer(index)) {
-                                Integer oldIdx = asyncOutputQueue.poll();
-                                if (oldIdx != null && oldIdx >= 0) {
-                                    try { codec.releaseOutputBuffer(oldIdx, false); } catch (Throwable ignored) {}
+                             // Bounded queue: be conservative. If full, drop oldest only if the newcomer is meaningfully newer.
+                                     if (!asyncOutputQueue.offer(index)) {
+                                         // dentro MediaCodec.Callback, dove prima falliva:
+                                         long vsyncNs = vsyncPeriodNsCached;
+                                         long minDeltaNs = Math.max(1_000_000L, vsyncNs / 4L); // ≥1 ms guard
+// se serve la cadenza stream:
+                                         long streamNs = streamPeriodNsCached;
+                                   long newPtsNs = (info != null ? info.presentationTimeUs : 0L) * 1000L;
+                                    Integer oldest = asyncOutputQueue.peek();
+                                   long oldPtsNs = 0L;
+                                   if (oldest != null && oldest >= 0 && oldest < BUFFER_INFO_SLOTS) {
+                                             BufferInfoLite bi = outInfoByIndex[oldest];
+                                           if (bi != null) oldPtsNs = bi.ptsUs * 1000L;
+                                        }
+                                     if (newPtsNs - oldPtsNs >= minDeltaNs) {
+                                             Integer oldIdx = asyncOutputQueue.poll();
+                                            if (oldIdx != null && oldIdx >= 0) {
+                                                   try { codec.releaseOutputBuffer(oldIdx, false); } catch (Throwable ignored) {}
+                                                }
+                                            if (!asyncOutputQueue.offer(index)) {
+                                                    try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+                                                }
+                                        } else {
+                                             // Keep the current queue; drop the newcomer to avoid thrash
+                                                    try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+                                        }
                                 }
-                                if (!asyncOutputQueue.offer(index)) {
-                                    try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
-                                }
-                            }
+
                         } catch (Throwable ignored) {}
                     }
                     @Override
@@ -911,7 +957,9 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
         this.targetFps = (redrawRate > 0 ? redrawRate : 60);
-        this.initialWidth = invertResolution ? height : width;
+        
+        try { refreshTimingSafely(activity); } catch (Throwable ignored) {}
+this.initialWidth = invertResolution ? height : width;
         this.initialHeight = invertResolution ? width : height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
@@ -1456,113 +1504,81 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
                         }
                     }
                     /* LATEST_ONLY_LOW_LATENCY */
-                    if (preferLowerDelays) {
-                        try {
-                            final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
+if (preferLowerDelays) {
+    try {
+        final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
 
-                            // Use existing field as adaptive timeout state (starts at 0us)
-                            int firstTimeoutUs = Math.max(0, Math.min(3000, preferLowerDelaysTimeoutUs));
+        // Tiny bounded wait to avoid spin; aim for slight latency reduction, not aggression
+        int tUs = preferLowerDelaysTimeoutUs;
+        if (tUs < 0) tUs = 0;
+        if (tUs > 1000) tUs = 1000; // cap at 1.0 ms
 
-                            int last = -1;
-                            long lastPtsUs = -1L;
-                            int drained = 0;
-                            boolean drainedMultiple = false;
+        // 1) Get first available frame (async/sync-aware)
+        final int first = nextOutputIndex(lfrInfo, tUs);
+        if (first < 0) {
+            // Nothing ready: gently expand micro-timeout
+            preferLowerDelaysTimeoutUs = Math.min(1000, preferLowerDelaysTimeoutUs + 125);
+        } else {
+            final long firstPtsUs = lfrInfo.presentationTimeUs;
+            final long nowNs = System.nanoTime();
+            final long vsyncNs = (vsyncPeriodNsCached > 0L) ? vsyncPeriodNsCached : 16_666_667L;
 
-                            // Soft drop policy (gentler to avoid visible stutter)
-                            // - allow at most 1 "soft" drop per burst
-                            // - if a frame is older than ~1 vsync, allow extra drop to catch up
-                            final long __vsyncNs = (vsyncPeriodNs > 0L) ? vsyncPeriodNs : 16_666_667L;
-                            final long __ageCatchupNs = __vsyncNs; // 1 vsync
+            // Conservative drop policy:
+            // - By default DO NOT drop.
+            // - Allow at most ONE drop and only if the first frame is already "old".
+            //   Threshold ~0.75 * vsync (tunable). This keeps fluidity on all SoCs.
+            final long oldForDropNs = (vsyncNs * 3L) / 4L; // ~0.75 vsync
+            final long ageNs = nowNs - (firstPtsUs * 1000L);
 
-                            // First attempt: current adaptive timeout (usually 0us at start)
-                            int idx = nextOutputIndex(lfrInfo, firstTimeoutUs);
+            int toPresent = first;
+            boolean droppedFirst = false;
 
-                            while (idx >= 0) {
-                                // Keep only the newest; drop intermediates conservatively
-                                if (last >= 0) {
-                                    long curPtsNs = lfrInfo.presentationTimeUs * 1000L;
-                                    long prevPtsNs = lastPtsUs * 1000L;
-                                    long nowNsSafe = System.nanoTime();
-                                    long prevAgeNs = nowNsSafe - prevPtsNs;
+            if (ageNs > oldForDropNs) {
+                // Frame is getting old: try to fetch ONE newer frame non-blocking
+                final int maybeNewer = nextOutputIndex(lfrInfo, 0);
+                if (maybeNewer >= 0) {
+                    // Only drop if the newer is meaningfully newer (avoid 2 frames in same vsync)
+                    final long newerPtsUs = lfrInfo.presentationTimeUs;
+                    final long deltaNs = (newerPtsUs - firstPtsUs) * 1000L;
+                    final long minIfdNs = vsyncNs / 4L; // need at least ~0.25 vsync spacing
 
-                                    boolean allowAnotherDrop =
-                                            (drained == 0) // first soft drop is okay
-                                                    || (prevAgeNs > __ageCatchupNs); // if previous is already stale
-
-                                    if (allowAnotherDrop) {
-                                        try { videoDecoder.releaseOutputBuffer(last, false); } catch (Throwable ignored) {}
-                                        drained++;
-                                        drainedMultiple = drained > 1;
-                                    } else {
-                                        // Keep the previous one to avoid aggressive skipping
-                                        break;
-                                    }
-                                }
-
-                                last = idx;
-                                lastPtsUs = lfrInfo.presentationTimeUs;
-
-                                // EOS: present this one and leave
-                                if ((lfrInfo.flags & android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                    break;
-                                }
-
-                                // Soft cap to avoid long loops (more lenient when timeout is tiny)
-                                final int drainSoftCap = (firstTimeoutUs <= 500) ? 4 : 3;
-                                if (drained >= drainSoftCap) {
-                                    break;
-                                }
-
-                                // Follow-ups: non-blocking to chase an even newer frame
-                                idx = nextOutputIndex(lfrInfo, 0);
-                            }
-
-                            // Adaptive tweak using the existing field:
-                            // - Empty often -> bump +250us (up to 3ms)
-                            // - Frequent bursts -> nudge -250us (toward 0)
-                            if (idx == android.media.MediaCodec.INFO_TRY_AGAIN_LATER) {
-                                preferLowerDelaysTimeoutUs = Math.min(3000, preferLowerDelaysTimeoutUs + 250);
-                            } else if (idx == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                                try { android.media.MediaFormat __fmt = videoDecoder.getOutputFormat(); } catch (Throwable ignored) {}
-                            } else if (idx == android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                                // pre-21: ignore
-                            } else {
-                                if (drainedMultiple) {
-                                    preferLowerDelaysTimeoutUs = Math.max(0, preferLowerDelaysTimeoutUs - 250);
-                                }
-                            }
-
-                            // Present ONLY the newest (or the kept one if we broke early)
-                            if (last >= 0) {
-                                final long nowNs = System.nanoTime();
-                                long desiredNs = nowNs;
-                                try {
-                                    long ptsNs = lastPtsUs * 1000L;
-                                    // Never schedule in the past; cap to small lead (<= 0.5 vsync)
-                                    desiredNs = Math.max(nowNs, ptsNs);
-                                    long maxLead = __vsyncNs / 2;
-                                    if (desiredNs - nowNs > maxLead) desiredNs = nowNs + maxLead;
-                                } catch (Throwable ignored) {}
-
-                                try {
-                                    if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                        videoDecoder.releaseOutputBuffer(last, desiredNs);
-                                    } else {
-                                        videoDecoder.releaseOutputBuffer(last, true);
-                                    }
-                                } catch (Throwable ignored) {}
-
-                                // Safe metrics
-                                if (lastPtsUs >= 0L) {
-                                    final long d2pRaw = nowNs - (lastPtsUs * 1000L);
-                                    final long d2p = (d2pRaw >= 0L) ? d2pRaw : 0L;
-                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (d2p - ewmaDecodeToPresentNs);
-                                    try { updateDecodeLatencyStats(lastPtsUs); } catch (Throwable ignored) {}
-                                }
-                            }
-                        } catch (Throwable ignored) {}
+                    if (deltaNs >= minIfdNs) {
+                        // Drop the old one, keep the newer
+                        try { videoDecoder.releaseOutputBuffer(first, /*render*/ false); } catch (Throwable ignored) {}
+                        toPresent = maybeNewer;
+                        droppedFirst = true;
+                    } else {
+                        // Not worth dropping: release the newer silently, present the first
+                        try { videoDecoder.releaseOutputBuffer(maybeNewer, /*render*/ false); } catch (Throwable ignored) {}
                     }
-                    /* /LATEST_ONLY_LOW_LATENCY */
+                }
+            }
+
+            // Present immediately (boolean path) to avoid timestamp scheduling black screens
+            try {
+                videoDecoder.releaseOutputBuffer(toPresent, /*render*/ true);
+            } catch (Throwable ignored) {}
+
+            // Lightly adapt micro-timeout: if we dropped, shrink; otherwise grow a bit
+            if (droppedFirst) {
+                preferLowerDelaysTimeoutUs = Math.max(0, preferLowerDelaysTimeoutUs - 125);
+            } else {
+                preferLowerDelaysTimeoutUs = Math.min(1000, preferLowerDelaysTimeoutUs + 62);
+            }
+
+            // Stats: decode→present EWMA (defensive)
+            long usedPtsUs = (toPresent == first) ? firstPtsUs : lfrInfo.presentationTimeUs;
+            final long d2pRaw = System.nanoTime() - (usedPtsUs * 1000L);
+            final long d2p = (d2pRaw >= 0L) ? d2pRaw : 0L;
+            ewmaDecodeToPresentNs += EWMA_ALPHA * (d2p - ewmaDecodeToPresentNs);
+            try { updateDecodeLatencyStats(usedPtsUs); } catch (Throwable ignored) {}
+
+            // We handled output here; skip generic drain for this loop
+            continue;
+        }
+    } catch (Throwable ignored) {}
+}
+/* /LATEST_ONLY_LOW_LATENCY */
 
                     try {
                         // Try to output a frame

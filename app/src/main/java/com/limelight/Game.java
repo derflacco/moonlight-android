@@ -678,16 +678,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         } catch (Throwable ignored) {}
 
-// --- Selezione profilo latenza ---
-// Delego al decoder la policy (0µs vs 2000µs) tramite applyLatencyProfile()
-        try {
-            boolean wantLatestOnly = (prefConfig != null && prefConfig.preferLowerDelays);
-            decoderRenderer.applyLatencyProfile(wantLatestOnly);
-            if (prefConfig != null) {
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-            }
-        } catch (Throwable ignored) {}
-
         // Don't stream HDR if the decoder can't support it
         if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
             willStreamHdr = false;
@@ -4359,18 +4349,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void applyLatencyPolicy(com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
                                     com.limelight.preferences.PreferenceConfiguration prefConfig) {
         try {
-            boolean isLowLatency = true;
+            final boolean lfrOn = (prefConfig != null && prefConfig.preferLowerDelays);
+
             if (prefConfig != null) {
-                // Consider Ultra/Reactive/ULL as low-latency, Balanced/Smooth as non-low-latency
-                int pacing = prefConfig.framePacing;
-                // Heuristic: if user selected Balanced/Smooth keep some timeout
-                isLowLatency = (pacing != com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED);
+                prefConfig.framePacing = lfrOn
+                        ? PreferenceConfiguration.FRAME_PACING_MIN_LATENCY
+                        : PreferenceConfiguration.FRAME_PACING_BALANCED;
             }
-            decoderRenderer.applyLatencyProfile(isLowLatency);
-            // Tighten thresholds to VSYNC when low-latency is requested
-            decoderRenderer.setForceTightThresholds(isLowLatency);
-        } catch (Throwable ignored) {
+
+            decoderRenderer.applyLatencyProfile(lfrOn);
+            decoderRenderer.setForceTightThresholds(lfrOn);
+        } catch (Throwable ignored) {}
         }
     }
-
-}
