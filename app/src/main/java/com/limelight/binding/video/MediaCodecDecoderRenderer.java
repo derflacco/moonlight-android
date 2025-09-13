@@ -661,7 +661,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             MediaCodecInfo __info = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
             String __name = (__info != null) ? __info.getName() : "<unknown>";
             LimeLog.info("Decoder name: " + __name);
-        } catch (Throwable t) {
+        
+            try {  } catch (Throwable ignored) {}
+} catch (Throwable t) {
             LimeLog.info("Decoder name: <unavailable>");
         }
 
@@ -730,6 +732,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         videoDecoder.start();
+
+            // Vendor key audit: try runtime acceptance via setParameters
+            try {
+                String __auditName = null;
+                try {
+                    android.media.MediaCodecInfo __i = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
+                    __auditName = (__i != null) ? __i.getName() : null;
+                } catch (Throwable ignored) {}
+                
+android.media.MediaFormat __inF = null, __outF = null;
+                try { __inF = videoDecoder.getInputFormat(); } catch (Throwable ignored) {}
+                try { __outF = videoDecoder.getOutputFormat(); } catch (Throwable ignored) {}
+                MediaCodecHelper.finalizeDecoderAudit(__auditName, videoDecoder, format, __inF, __outF);
+            } catch (Throwable ignored) {}
+
 
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
         try {
@@ -849,7 +866,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         for (int tryNumber = 0;; tryNumber++) {
             LimeLog.info("Decoder configuration try: "+tryNumber);
 
-            MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
+            try { MediaCodecHelper.auditSetTryNumber(tryNumber); } catch (Throwable ignored) {}
+MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
+            
+            try { MediaCodecHelper.beginDecoderAudit(mediaFormat); } catch (Throwable ignored) {}
             // This will try low latency options until we find one that works (or we give up).
             boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
             //todo 色彩格式
