@@ -1198,12 +1198,13 @@ try {
                                     String __nameQR = com.limelight.utils.CpuAffinity.readThreadName(__tidQR);
                                     if (__nameQR == null) __nameQR = "";
                                     boolean __hotQR =
-                                            __nameQR.contains("Renderer") ||
-                                                    __nameQR.contains("RenderThread") ||
-                                                    __nameQR.contains("GL") ||
-                                                    __nameQR.contains("Choreographer") ||
-                                                    __nameQR.contains("MediaCodec") ||
-                                                    __nameQR.startsWith("Binder:");
+                                         __nameQR.contains("Renderer") ||
+                                                 __nameQR.contains("RenderThread") ||
+                                                 __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
+                                                 __nameQR.contains("Choreographer") ||
+                                                 __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
+                                                 __nameQR.contains("CodecCb") ||
+                                                 __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
                                     if (__hotQR) {
                                         try {
                                             android.os.Process.setThreadPriority(__tidQR,
