@@ -1096,12 +1096,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 // Best-effort: pin renderer thread to big cores if requested (non-root, optional JNI)
                 try {
                     if (prefs != null && prefs.preferBigCores) {
-                        com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+                        try { int[] __perfMask = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly(); } catch (Throwable ignored) {}
+                        int[] __perfMask = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
+                        if (__perfMask != null && __perfMask.length >= 2) {
+                            com.limelight.utils.CpuAffinity.setAffinity(__perfMask);
+                        } else {
+                            int[] __perfMask2 = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
+                            if (__perfMask2 != null && __perfMask2.length >= 2) {
+                                com.limelight.utils.CpuAffinity.setAffinity(__perfMask2);
+                            } else {
+                                com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+                            }
+                        }
 
 
                         // pin process-wide + boost hot threads (renderer/GL/Choreographer/Binder/MediaCodec) ---
                         try {
-                            int[] __bigQR = com.limelight.utils.CpuAffinity.detectBigCores();
+                            int[] __bigQR = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
+                            if (__bigQR == null || __bigQR.length < 2) __bigQR = com.limelight.utils.CpuAffinity.detectBigCores();
                             if (__bigQR != null && __bigQR.length > 0) {
                                 // Mass pin for all threads in this process
                                 com.limelight.utils.CpuAffinity.pinAllThreadsToCores(__bigQR);
@@ -1150,6 +1162,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 } catch (Throwable ignored) {}
 
                 android.os.PerformanceHintManager.Session __hs = null;
+
+// Performance Hint session (API 30+): guide scheduler to budget for our frame work
+                if (android.os.Build.VERSION.SDK_INT >= 31 && context != null) {
+                    try {
+                        final long targetWorkNs = (long) (1_000_000_000L / Math.max(1, (targetFps > 0 ? targetFps : 60)));
+                        android.os.PerformanceHintManager phm =
+                                context.getSystemService(android.os.PerformanceHintManager.class);
+                        if (phm != null) {
+                            long rateNs = 0L;
+                            try { rateNs = phm.getPreferredUpdateRateNanos(); } catch (Throwable ignored) {}
+                            if (rateNs > 0L) {
+                                int tid = android.os.Process.myTid();
+                                android.os.PerformanceHintManager.Session hs =
+                                        phm.createHintSession(new int[]{ tid }, targetWorkNs);
+                                if (hs != null) {
+                                    try { hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
+                                    LimeLog.info("PHM: session active (targetNs=" + targetWorkNs + ", rateNs=" + rateNs + ")");
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
 //* Pin hot threads to big cluster *//
                 while (!stopping) {
                     //* Pin hot threads to big cluster *//
