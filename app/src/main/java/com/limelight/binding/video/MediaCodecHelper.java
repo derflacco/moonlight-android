@@ -639,10 +639,10 @@ public class MediaCodecHelper {
 
                     // Boost/DVFS: moderate profile
                     safeSet(videoFormat, "vdec-lowlatency", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 2);
 
                     // Pipeline / code path
                     safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
