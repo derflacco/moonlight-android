@@ -689,7 +689,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (useAsyncCodec) {
             try {
                 if (codecCallbackThread == null) {
-                    codecCallbackThread = new android.os.HandlerThread("CodecCb");
+                    codecCallbackThread = new android.os.HandlerThread("CodecCb", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
                     codecCallbackThread.start();
                 }
                 android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
@@ -1323,12 +1323,13 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
                                     String __nameQR = com.limelight.utils.CpuAffinity.readThreadName(__tidQR);
                                     if (__nameQR == null) __nameQR = "";
                                     boolean __hotQR =
-                                            __nameQR.contains("Renderer") ||
-                                                    __nameQR.contains("RenderThread") ||
-                                                    __nameQR.contains("GL") ||
-                                                    __nameQR.contains("Choreographer") ||
-                                                    __nameQR.contains("MediaCodec") ||
-                                                    __nameQR.startsWith("Binder:");
+                                         __nameQR.contains("Renderer") ||
+                                                 __nameQR.contains("RenderThread") ||
+                                                 __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
+                                                 __nameQR.contains("Choreographer") ||
+                                                 __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
+                                                 __nameQR.contains("CodecCb") ||
+                                                 __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
                                     if (__hotQR) {
                                         try {
                                             android.os.Process.setThreadPriority(__tidQR,
