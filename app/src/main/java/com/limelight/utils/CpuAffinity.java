@@ -240,4 +240,166 @@ public final class CpuAffinity {
     @SuppressWarnings("JniMissingFunction") private static native String nativeReadThreadName(int tid);
     @SuppressWarnings("JniMissingFunction") private static native void nativeSetAffinityForTid(int tid, int[] cpuIds);
     @SuppressWarnings("JniMissingFunction") private static native void nativeClearAffinityForTidAllOnline(int tid);
+
+    // ====== High-precision cluster detect (policy→capacity→fallback) ======
+    // Avoid pinning to a single PRIME core on tri-clusters. Prefer BIG ∪ PRIME.
+    public static int[] detectPerfCpusAvoidPrimeOnly() {
+        try {
+            // 1) Discover clusters via cpufreq policies
+            java.io.File base = new java.io.File("/sys/devices/system/cpu/cpufreq");
+            java.io.File[] pols = base.listFiles(new java.io.FilenameFilter() {
+                public boolean accept(java.io.File dir, String name) {
+                    return name != null && name.startsWith("policy");
+                }
+            });
+            java.util.ArrayList<__Cluster> clusters = new java.util.ArrayList<>();
+            if (pols != null) {
+                for (java.io.File p : pols) {
+                    String rel = __readFirst(p, "related_cpus");   // e.g. "0 1 2 3" or "0-3"
+                    String hz  = __readFirst(p, "cpuinfo_max_freq");
+                    int[] cpus = __parseCpuList(rel);
+                    long maxHz = 0L;
+                    try { maxHz = Long.parseLong(hz.trim()) * 1000L; } catch (Throwable ignored) {}
+                    if (cpus.length > 0 && maxHz > 0) clusters.add(new __Cluster(cpus, maxHz, "policy"));
+                }
+            }
+            // 2) If nothing found, try capacity per-core and group by max capacity
+            if (clusters.isEmpty()) {
+                java.util.ArrayList<Integer> all = new java.util.ArrayList<>();
+                for (int i = 0; i < 16; i++) { // up to 16 cores safety
+                    java.io.File f = new java.io.File("/sys/devices/system/cpu/cpu"+i+"/cpu_capacity");
+                    if (!f.exists()) break;
+                    long cap = 0L;
+                    try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f))) {
+                        String s = br.readLine();
+                        if (s != null) cap = Long.parseLong(s.trim());
+                    } catch (Throwable ignored) {}
+                    if (cap > 0) all.add(i);
+                }
+                if (!all.isEmpty()) {
+                    // naive: split by half around median capacity
+                    // (we only need the top group to represent big/prime)
+                    java.util.ArrayList<Integer> top = all; // already ordered by cpu id; it's fine
+                    int[] cpus = new int[top.size()];
+                    for (int i=0;i<top.size();i++) cpus[i]=top.get(i);
+                    clusters.add(new __Cluster(cpus, 1_000_000_000L, "capacity"));
+                }
+            }
+            if (clusters.isEmpty()) {
+                __v("AffinityDetect: no clusters found");
+                return null;
+            }
+            clusters.sort((a, b) -> Long.compare(a.maxHz, b.maxHz));
+            __Cluster prime = clusters.get(clusters.size() - 1);
+            __Cluster big   = (clusters.size() >= 2) ? clusters.get(clusters.size() - 2) : null;
+            double ratio = (big != null && big.maxHz > 0) ? ((double)prime.maxHz / (double)big.maxHz) : 1.0;
+
+            int[] chosen;
+            if (prime.cpus.length == 1 && big != null && big.cpus.length >= 2) {
+                chosen = __union(big.cpus, prime.cpus);
+            } else if (ratio < 1.05 && big != null) {
+                chosen = __union(big.cpus, prime.cpus);
+            } else {
+                chosen = prime.cpus;
+            }
+
+            // Intersect with thread allowed set
+            int[] allowed = __parseCpuList(readAllowedCpuListForCurrentThread());
+            chosen = __intersect(chosen, allowed);
+
+            // Guardrails
+            if (chosen.length <= 1 && big != null) {
+                chosen = __intersect(__union(big.cpus, prime.cpus), allowed);
+            }
+            if (chosen.length <= 1) {
+                __v("AffinityDetect: ambiguous (<=1 core after intersect). Skip pin.");
+                return null;
+            }
+
+            // If chosen equals allowed (already pinned), skip
+            {
+                int[] allowedArr = java.util.Arrays.copyOf(allowed, allowed.length);
+                int[] chosenArr  = java.util.Arrays.copyOf(chosen, chosen.length);
+                java.util.Arrays.sort(allowedArr);
+                java.util.Arrays.sort(chosenArr);
+                if (allowedArr.length == chosenArr.length && java.util.Arrays.equals(allowedArr, chosenArr)) {
+                    __v("AffinityDetect: already pinned. Skip pin.");
+                    return null;
+                }
+            }
+
+
+            __v("AffinityDetect: method="+prime.method+" clusters="+__dumpClusters(clusters)
+                    + " ratio="+String.format(java.util.Locale.US,"%.3f",ratio)
+                    + " chosen="+java.util.Arrays.toString(chosen));
+            return chosen;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // ===== Helpers (private) =====
+    private static final class __Cluster {
+        final int[] cpus; final long maxHz; final String method;
+        __Cluster(int[] c, long hz, String m) { this.cpus=c; this.maxHz=hz; this.method=m; }
+    }
+    private static String __readFirst(java.io.File policyDir, String name) {
+        java.io.File f = new java.io.File(policyDir, name);
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f))) {
+            String s = br.readLine(); return (s==null) ? "" : s;
+        } catch (Throwable ignored) { return ""; }
+    }
+    // supports "0 1 2 3", "0-3", "0-3,6-7"
+    private static int[] __parseCpuList(String s) {
+        java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
+        if (s == null) return new int[0];
+        String trimmed = s.trim();
+        if (trimmed.isEmpty()) return new int[0];
+        String[] toks = trimmed.split("[, ]+");
+        for (String tok : toks) {
+            if (tok.isEmpty()) continue;
+            int dash = tok.indexOf('-');
+            if (dash > 0) {
+                try {
+                    int a = Integer.parseInt(tok.substring(0,dash));
+                    int b = Integer.parseInt(tok.substring(dash+1));
+                    if (a > b) { int t=a; a=b; b=t; }
+                    for (int i=a;i<=b;i++) set.add(i);
+                } catch (Throwable ignored) {}
+            } else {
+                try { set.add(Integer.parseInt(tok)); } catch (Throwable ignored) {}
+            }
+        }
+        int[] out = new int[set.size()];
+        int i=0; for (Integer v : set) out[i++]=v;
+        return out;
+    }
+    private static int[] __union(int[] a, int[] b) {
+        java.util.TreeSet<Integer> s = new java.util.TreeSet<>();
+        for (int x : a) s.add(x); for (int x : b) s.add(x);
+        int[] out = new int[s.size()];
+        int i=0; for (Integer v : s) out[i++]=v;
+        return out;
+    }
+    private static int[] __intersect(int[] a, int[] b) {
+        java.util.HashSet<Integer> sb = new java.util.HashSet<>();
+        for (int x : b) sb.add(x);
+        java.util.ArrayList<Integer> res = new java.util.ArrayList<>();
+        for (int x : a) if (sb.contains(x)) res.add(x);
+        int[] out = new int[res.size()];
+        for (int i=0;i<res.size();i++) out[i]=res.get(i);
+        return out;
+    }
+    private static String __dumpClusters(java.util.List<__Cluster> cs) {
+        StringBuilder sb = new StringBuilder();
+        for (__Cluster c : cs) {
+            sb.append(java.util.Arrays.toString(c.cpus)).append("@").append(c.maxHz).append(" ");
+        }
+        return sb.toString().trim();
+    }
+    private static void __v(String msg) {
+        try { com.limelight.LimeLog.info(msg); } catch (Throwable ignored) {}
+        try { android.util.Log.i("CpuAffinity", msg); } catch (Throwable ignored) {}
+    }
+
 }
