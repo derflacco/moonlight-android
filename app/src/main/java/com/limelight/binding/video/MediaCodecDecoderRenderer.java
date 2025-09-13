@@ -1182,12 +1182,24 @@ try {
 // Best-effort: pin renderer thread to big cores if requested (non-root, optional JNI)
                 try {
                     if (prefs != null && prefs.preferBigCores) {
-                        com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+                        try { int[] __perfMask = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly(); } catch (Throwable ignored) {}
+                        int[] __perfMask = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
+                        if (__perfMask != null && __perfMask.length >= 2) {
+                            com.limelight.utils.CpuAffinity.setAffinity(__perfMask);
+                        } else {
+                            int[] __perfMask2 = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
+                            if (__perfMask2 != null && __perfMask2.length >= 2) {
+                                com.limelight.utils.CpuAffinity.setAffinity(__perfMask2);
+                            } else {
+                                com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+                            }
+                        }
 
 
                         // pin process-wide + boost hot threads (renderer/GL/Choreographer/Binder/MediaCodec) ---
                         try {
-                            int[] __bigQR = com.limelight.utils.CpuAffinity.detectBigCores();
+                            int[] __bigQR = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
+                            if (__bigQR == null || __bigQR.length < 2) __bigQR = com.limelight.utils.CpuAffinity.detectBigCores();
                             if (__bigQR != null && __bigQR.length > 0) {
                                 // Mass pin for all threads in this process
                                 com.limelight.utils.CpuAffinity.pinAllThreadsToCores(__bigQR);
@@ -1236,19 +1248,25 @@ try {
                 } catch (Throwable ignored) {}
 
                 android.os.PerformanceHintManager.Session __hs = null;
+
 // Performance Hint session (API 30+): guide scheduler to budget for our frame work
-                if (android.os.Build.VERSION.SDK_INT >= 30 && context != null) {
+                if (android.os.Build.VERSION.SDK_INT >= 31 && context != null) {
                     try {
-                        float __fps = (targetFps > 0 ? targetFps : 60f);
-                        long targetWorkNs = (long) (1_000_000_000L / Math.max(30f, __fps));
+                        final long targetWorkNs = (long) (1_000_000_000L / Math.max(1, (targetFps > 0 ? targetFps : 60)));
                         android.os.PerformanceHintManager phm =
-                                (android.os.PerformanceHintManager) context.getSystemService(android.os.PerformanceHintManager.class);
+                                context.getSystemService(android.os.PerformanceHintManager.class);
                         if (phm != null) {
-                            LimeLog.info("PHM: session created for renderer, targetWorkNs=" + targetWorkNs);
-                            int tid = android.os.Process.myTid();
-                            __hs =
-                                    phm.createHintSession(new int[]{ tid }, targetWorkNs);
-                            try { __hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
+                            long rateNs = 0L;
+                            try { rateNs = phm.getPreferredUpdateRateNanos(); } catch (Throwable ignored) {}
+                            if (rateNs > 0L) {
+                                int tid = android.os.Process.myTid();
+                                android.os.PerformanceHintManager.Session hs =
+                                        phm.createHintSession(new int[]{ tid }, targetWorkNs);
+                                if (hs != null) {
+                                    try { hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
+                                    LimeLog.info("PHM: session active (targetNs=" + targetWorkNs + ", rateNs=" + rateNs + ")");
+                                }
+                            }
                         }
                     } catch (Throwable ignored) {}
                 }
