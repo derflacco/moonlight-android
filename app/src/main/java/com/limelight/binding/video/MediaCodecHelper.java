@@ -224,6 +224,15 @@ public class MediaCodecHelper {
         knownVendorLowLatencyOptions.add("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req");
         knownVendorLowLatencyOptions.add("vendor.rtc-ext-dec-low-latency.enable");
         knownVendorLowLatencyOptions.add("vendor.low-latency.enable");
+        //derflacco
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.low-latency.strict.enable");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.early.output.enable");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.no.reorder.enable");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.disable.reorder");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.output.delay.frames");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.dpb.output.delay.frames");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.buffer.fetch.timeout.ms");
+        knownVendorLowLatencyOptions.add("vendor.mtk.vdec.no.clock.adjust");
     }
 
     static {
@@ -812,15 +821,19 @@ public class MediaCodecHelper {
     }
 
     public static boolean decoderSupportsRefFrameInvalidationAv1(MediaCodecInfo decoderInfo) {
-        // We'll use the same heuristics as HEVC for now
-        if (decoderSupportsAndroidRLowLatency(decoderInfo, "video/av01") ||
-                decoderSupportsKnownVendorLowLatencyOption(decoderInfo.getName())) {
-            LimeLog.info("Enabling AV1 RFI based on low latency option support");
-            return true;
-        }
-
-        return false;
-    }
+                final String mime = "video/av01";
+                try {
+                       if (decoderSupportsAndroidRLowLatency(decoderInfo, mime) ||
+                                    decoderSupportsKnownVendorLowLatencyOption(decoderInfo.getName()) ||
+                                   decoderSupportsAdaptivePlayback(decoderInfo, mime)) {
+                                LimeLog.info("Enabling AV1 RFI (low-latency/adaptive/vendor ok)");
+                                return true;
+                           }
+                  } catch (Throwable t) {
+                        try { t.printStackTrace(); } catch (Throwable ignored) {}
+                   }
+                return false;
+            }
 
     public static boolean decoderIsWhitelistedForHevc(MediaCodecInfo decoderInfo) {
         //
@@ -1136,8 +1149,8 @@ public class MediaCodecHelper {
     }
 
 
-    
-    
+
+
     // ====== Decoder/Vendor Key Audit (lightweight) ======
     // Collects vendor keys we attempt to set and whether they appear accepted.
     // Enable with beginDecoderAudit(format) before applying vendor options; call
@@ -1200,8 +1213,8 @@ public class MediaCodecHelper {
             } catch (Throwable ignored2) {}
         } catch (Throwable ignored) {}
 
-        
-        
+
+
         // Deduplicate attempts, track presence in input/output, and test runtime setParameters once per key
         java.util.LinkedHashMap<String, int[]> agg = new java.util.LinkedHashMap<>();
         java.util.LinkedHashMap<String, java.util.HashSet<Integer>> tries = new java.util.LinkedHashMap<>();
