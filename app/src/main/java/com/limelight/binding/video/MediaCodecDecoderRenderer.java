@@ -725,6 +725,7 @@ android.media.MediaFormat __inF = null, __outF = null;
             } catch (Throwable ignored) {}
 
 
+        MediaCodecHelper.applyFrameworkLowLatencyPostStart(videoDecoder);
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
         try {
             MediaFormat __inF = videoDecoder.getInputFormat();
