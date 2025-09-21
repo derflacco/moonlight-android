@@ -10,6 +10,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
+    public boolean enableAntiLag;
 
     public enum ScaleMode {
         FIT,

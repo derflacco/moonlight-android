@@ -729,4 +729,6 @@
 
     <string name="title_checkbox_full_screen">Enable Full Screen</string>
     <string name="summary_checkbox_full_screen">Hide system bars with immersive mode</string>
+    <string name="title_checkbox_antilag">Balanced-LFR</string>
+    <string name="summary_checkbox_antilag">LFR for Balanced Frame Pacing</string>
 </resources>

@@ -4141,9 +4141,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void applyMouseMode(int mode) {
         switch (mode) {
             case 0: // Multi-touch
-            prefConfig.enableMultiTouchScreen = true;
-            prefConfig.touchscreenTrackpad = false;
-            break;
+                prefConfig.enableMultiTouchScreen = true;
+                prefConfig.touchscreenTrackpad = false;
+                break;
             case 1: // Normal mouse
             case 5: // Normal mouse with swapped buttons
                 prefConfig.enableMultiTouchScreen = false;
@@ -4344,25 +4344,70 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             com.limelight.preferences.PreferenceConfiguration prefConfig) {
         if (decoderRenderer == null) return;
         try {
-            // UI semantics:
-            // preferLowerDelays = TRUE  → latest-only (0 µs dequeue)  [ULL]
-            // preferLowerDelays = FALSE → managed (+ small timeout)   [Balanced]
-            final boolean latestOnly = (prefConfig != null) && prefConfig.preferLowerDelays;
+            // Nuova semantica LFR + AntiLag:
+            // - Se l'utente abilita LFR ma il pacing è Balanced-class (BALANCED | CAP_FPS | MAX_SMOOTHNESS)
+            //   → attiva SOLO AntiLag (percorso managed), NON latest-only
+            // - Altrimenti (altri pacing) con LFR attivo
+            //   → LFR puro (latest-only, timeout 0 µs)
+            // - Se LFR è OFF → percorso managed standard (no AntiLag)
+            final boolean lfrRequested = (prefConfig != null) && prefConfig.preferLowerDelays;
 
-            // Balanced: 500 µs, ULL: 0 µs
-            final int timeoutUs = latestOnly ? 0 : 500;
+            int fp = (prefConfig != null) ? prefConfig.framePacing : -1;
+            boolean balancedClass =
+                    (fp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) ||
+                            (fp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS) ||
+                            (fp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
 
-            // Renderer API: TRUE=latest-only (LFR), FALSE=managed (Balanced)
-            decoderRenderer.setPreferLowerDelays(latestOnly);
+            // Nome leggibile del pacing selezionato
+            String pacingName = "Unknown";
+            try {
+                switch (fp) {
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED:
+                        pacingName = "Balanced";
+                        break;
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+                        pacingName = "CapFPS";
+                        break;
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+                        pacingName = "MaxSmoothness";
+                        break;
+                    default:
+                        pacingName = "Other";
+                }
+            } catch (Throwable ignored) { }
+
+            boolean lfrPure = lfrRequested && !balancedClass;          // latest-only (ULL)
+            boolean antiLagEffective = lfrRequested && balancedClass;   // AntiLag-only
+
+            // Timeout coda: 0 µs SOLO per LFR puro; altrimenti piccolo timeout per stabilità
+            final int timeoutUs = lfrPure ? 0 : 500;
+
+            // Renderer API: TRUE=latest-only (LFR puro), FALSE=managed
+            decoderRenderer.setPreferLowerDelays(lfrPure);
             decoderRenderer.setPreferLowerDelaysTimeoutUs(timeoutUs);
 
-            // Tight thresholds ON se: ULL oppure toggle "Tight VSync" attivo in UI
+            // Scrivi stato effettivo di AntiLag nei prefs (così il decoder lo vede subito)
+            try {
+                if (prefConfig != null) {
+                    prefConfig.enableAntiLag = antiLagEffective;
+                }
+            } catch (Throwable ignored) { }
+
+            // Log compatto per debugging
+            try {
+                LimeLog.info("LFR: AntiLag=" + (antiLagEffective ? "on" : "off")
+                        + (lfrPure ? " | LFR=pure" : (lfrRequested ? " | LFR=antilag-only" : " | LFR=off"))
+                        + " | pacing=" + pacingName + " (class=" + (balancedClass ? "Balanced" : "Other") + ")");
+            } catch (Throwable ignored) { }
+
+// Tight thresholds ON se: ULL oppure toggle "Tight VSync" attivo in UI
             final boolean tightFromUi = (prefConfig != null) && prefConfig.forceTightThresholds;
             decoderRenderer.setForceTightThresholds(tightFromUi);
 
             LimeLog.info("Latency policy → " +
-                    (latestOnly ? "latest-only, timeout=0us" : ("managed, timeout=" + timeoutUs + "us")) +
+                    (lfrPure ? "latest-only, timeout=0us" : ("managed, timeout=" + timeoutUs + "us")) +
                     " | forceTight=" + (tightFromUi));
         } catch (Throwable ignored) { }
     }
+
 }
