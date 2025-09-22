@@ -4380,7 +4380,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             boolean antiLagEffective = lfrRequested && balancedClass;   // AntiLag-only
 
             // Timeout coda: 0 µs SOLO per LFR puro; altrimenti piccolo timeout per stabilità
-            final int timeoutUs = lfrPure ? 0 : 150;
+            final int timeoutUs = lfrPure ? 0 : 500;
 
             // Renderer API: TRUE=latest-only (LFR puro), FALSE=managed
             decoderRenderer.setPreferLowerDelays(lfrPure);

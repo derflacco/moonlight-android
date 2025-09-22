@@ -47,7 +47,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
+ // Considera Balanced-class: usa pacing via Choreographer
 
+         private boolean isBalancedClass() {
+            int fp = (prefs != null) ? prefs.framePacing : -1;
+            return fp == PreferenceConfiguration.FRAME_PACING_BALANCED
+                         || fp == PreferenceConfiguration.FRAME_PACING_CAP_FPS
+                        || fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
+         }
 
     // Force tight thresholds regardless of device refresh (use vsyncPeriodNs always)
     private volatile boolean forceTightThresholds = false;
@@ -61,16 +68,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // When preferLowerDelays = false (Balanced/managed): use this configurable timeout (µs) for output dequeue.
     private volatile int preferLowerDelaysTimeoutUs = 2000; // default for managed; policy sets 0 µs when LFR
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
+
     private int getOutputDequeueTimeoutUs() {
         // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
 
-        if (prefs != null) {
-            // AntiLag (Balanced+LFR attivo): 150 µs
-            if (prefs.enableAntiLag) return 150;
-
-            // Balanced senza AntiLag: micro-timeout (opzionale; puoi rimettere 0 se lo preferisci)
-            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 2000;
+        // Balanced-class (Balanced | CapFPS | MaxSmoothness)
+        if (isBalancedClass()) {
+            final boolean antiLag = (prefs != null) && prefs.enableAntiLag;
+            // AntiLag: 500 µs | senza AntiLag: 2000 µs
+            return antiLag ? 500 : 2000;
         }
 
         // Altri pacing: non-blocking
@@ -1135,7 +1142,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void startChoreographerThread() {
-        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        if (!isBalancedClass()) {
             // Not using Choreographer in this pacing mode
             return;
         }
@@ -1308,7 +1315,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             lastDecoderPtsUs = presentationTimeUs;
 
                             // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            if (!isBalancedClass()) {
                                 // Get the last output buffer in the queue
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
