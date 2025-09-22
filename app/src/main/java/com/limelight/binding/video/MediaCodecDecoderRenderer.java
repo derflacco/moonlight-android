@@ -57,11 +57,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
-    // When preferLowerDelays=true we use this configurable timeout (µs) for output dequeue.
-// When preferLowerDelays=false we force 0µs (non-blocking, latest-frame rendering).
-    private volatile int preferLowerDelaysTimeoutUs = 500; // align with applyLatencyPolicy() default
+    // When preferLowerDelays = true (LFR/ULL): force 0 µs (non-blocking, latest-only).
+    // When preferLowerDelays = false (Balanced/managed): use this configurable timeout (µs) for output dequeue.
+    private volatile int preferLowerDelaysTimeoutUs = 2000; // default for managed; policy sets 0 µs when LFR
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
-
     private int getOutputDequeueTimeoutUs() {
         // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
@@ -71,7 +70,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (prefs.enableAntiLag) return 150;
 
             // Balanced senza AntiLag: micro-timeout (opzionale; puoi rimettere 0 se lo preferisci)
-            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 500;
+            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 2000;
         }
 
         // Altri pacing: non-blocking
@@ -191,7 +190,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numFramesOut;
 
     private int targetFps = 0;
-
+    private long lastLfrCountNs = 0L;
+    private long lfrLastCountNs = 0L;
+    private long lfrAccumNs = 0L;
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
         if (decoder == null) {
@@ -1212,15 +1213,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 BufferInfo info = new BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
-                    /* LATEST_ONLY_LOW_LATENCY */
+
+                    /* LATEST_ONLY_LOW_LATENCY (drain newest + ASAP present; stats 1xVSYNC) */
                     if (preferLowerDelays) {
                         try {
-                            android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
+                            final android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
                             int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
                             int __last = -1;
                             long __lastPtsUs = -1L;
 
-                            // Drain non-blocking; keep only the newest buffer
+                            // Drena tutto, tieni solo l'ultimo valido
                             while (__idx >= 0) {
                                 if (__last >= 0) {
                                     try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
@@ -1231,25 +1233,45 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             }
 
                             if (__last >= 0) {
-                                long __nowNs = System.nanoTime();
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                    videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                                // Present ASAP (booleano): il compositor allinea al prossimo VSYNC
+                                try { videoDecoder.releaseOutputBuffer(__last, true); } catch (Throwable ignored) {}
+
+                                // --- STATISTICHE: ≤1 incremento per periodo reale, senza Choreographer ---
+                                final float rr = Math.max(1f, refreshRate); // refreshRate è già un campo (float/int)
+                                vsyncPeriodNs = (long) (1_000_000_000.0 / rr);
+
+                                final long nowNs = System.nanoTime();
+                                if (lfrLastCountNs == 0L) {
+                                    lfrLastCountNs = nowNs;
                                 } else {
-                                    videoDecoder.releaseOutputBuffer(__last, true);
+                                    long delta = nowNs - lfrLastCountNs;
+                                    if (delta < 0) delta = 0;
+                                    lfrAccumNs += delta;
+                                    lfrLastCountNs = nowNs;
+
+                                    // Conta al massimo 1 frame ogni periodo
+                                    if (lfrAccumNs >= vsyncPeriodNs) {
+                                        activeWindowVideoStats.totalFramesRendered++;
+                                        // conserva l'errore frazionario per non "perdere" fps (119.88 etc.)
+                                        lfrAccumNs -= vsyncPeriodNs;
+                                        if (lfrAccumNs < 0) lfrAccumNs = 0;
+                                    }
                                 }
 
-                                // Update decode->present EWMA and decode stats if we have a valid PTS
+// Telemetria (opzionale): D2P basato su nowNs
                                 if (__lastPtsUs >= 0) {
-                                    long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (__d2pNs - ewmaDecodeToPresentNs);
+                                    long d2pNs = nowNs - (__lastPtsUs * 1000L);
+                                    if (d2pNs < 0) d2pNs = 0;
+                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (d2pNs - ewmaDecodeToPresentNs);
                                     try { updateDecodeLatencyStats(__lastPtsUs); } catch (Throwable ignored) {}
                                 }
 
-                                continue; // handled this iteration
+                                continue; // gestito questo giro
                             }
                         } catch (Throwable ignored) {}
                     }
                     /* /LATEST_ONLY_LOW_LATENCY */
+
 
 
                     try {
@@ -1257,9 +1279,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
 
                         if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                            // reduced backoff 0–500 µs
+                            // reduced backoff 0–2000 µs
                             tryAgainStreak++;
-                            int backoffUs = Math.min(getOutputDequeueTimeoutUs(), (tryAgainStreak <= 2) ? 250 : 500);
+                            int backoffUs = Math.min(getOutputDequeueTimeoutUs(), (tryAgainStreak <= 2) ? 0 : 2000);
                             outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
                         } else {
                             tryAgainStreak = 0;
