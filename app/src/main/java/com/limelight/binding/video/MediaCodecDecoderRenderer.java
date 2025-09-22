@@ -63,12 +63,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
 
     private int getOutputDequeueTimeoutUs() {
-        // LFR pure (latest-only): preferLowerDelays=true → use configured timeout (usually 0 µs)
+        // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
-        // AntiLag-only (Balanced class): preferLowerDelays=false but prefs.enableAntiLag=true →
-        // use the managed small timeout injected by Game.applyLatencyPolicy (e.g., 500 µs)
-        if (prefs != null && prefs.enableAntiLag) return preferLowerDelaysTimeoutUs;
-        // Otherwise (no LFR/AntiLag): non-blocking dequeue
+
+        if (prefs != null) {
+            // AntiLag (Balanced+LFR attivo): 150 µs
+            if (prefs.enableAntiLag) return 150;
+
+            // Balanced senza AntiLag: micro-timeout (opzionale; puoi rimettere 0 se lo preferisci)
+            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 500;
+        }
+
+        // Altri pacing: non-blocking
         return 0;
     }
 
@@ -1074,8 +1080,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
             // by holding onto them for too long. This also ensures we will have that 1 extra
             // frame of buffer to smooth over network/rendering jitter.
-            if (prefs != null && prefs.enableAntiLag) {
-                // Non-blocking drain: keep at most 1 output buffer queued
+            if (preferLowerDelays) {
                 while (outputBufferQueue.size() > 1) {
                     Integer __idx = outputBufferQueue.poll();
                     if (__idx != null) {
@@ -1416,7 +1421,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // NB: We have to do this on the producer side because the consumer may not
                                 // run for a while (if there is a huge mismatch between stream FPS and display
                                 // refresh rate).
-                                if (outputBufferQueue.size() == ((prefs != null && prefs.enableAntiLag) ? 1 : OUTPUT_BUFFER_QUEUE_LIMIT)) {
+                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         Integer __idx = outputBufferQueue.poll();
                                         if (__idx != null) { videoDecoder.releaseOutputBuffer(__idx, false); }
