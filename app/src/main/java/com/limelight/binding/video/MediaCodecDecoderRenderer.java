@@ -1965,6 +1965,12 @@ boolean isC2Decoder = false;
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    // Also show per-window incoming and rendered FPS (same window of 'lastTwo')
+                    // IN = frames received per second; R = frames rendered per second
+                    sb.append("  IN:");
+                    sb.append((int) fps.receivedFps);
+                    sb.append("  R:");
+                    sb.append((int) fps.renderedFps);
                     // Show SDR/HDR mode in Perf Lite
                     sb.append("  ").append(hdrActive ? "HDR" : "SDR");
                     if(Stereo3DRenderer.isActive) {
