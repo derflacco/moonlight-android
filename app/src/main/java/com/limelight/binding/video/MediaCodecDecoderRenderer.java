@@ -651,7 +651,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (useAsyncCodec) {
             try {
                 if (codecCallbackThread == null) {
-                    codecCallbackThread = new android.os.HandlerThread("CodecCb");
+                    codecCallbackThread = new android.os.HandlerThread(
+                            "CodecCb", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY
+                    );
                     codecCallbackThread.start();
                 }
                 android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
