@@ -1532,7 +1532,9 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
                                 if (lastAllowedMask == null || !__maskBefore.equals(lastAllowedMask)) {
                                     com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
                                     String __maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                                    if (BuildConfig.DEBUG) {
                                     LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + __maskBefore + " allowed_after=" + __maskAfter);
+                                    }
                                     lastAllowedMask = __maskAfter;
                                 }
                             } catch (Throwable ignored) {}
