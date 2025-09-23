@@ -258,8 +258,7 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
     private int numFramesIn;
     private int numFramesOut;
 
-    private int targetFps = 0;
-
+    private float targetFps = 0f; // 0f = auto
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
         if (decoder == null) {
@@ -901,7 +900,7 @@ try {
 
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
-        this.targetFps = (redrawRate > 0 ? redrawRate : 60);
+        this.targetFps = (redrawRate > 0 ? (float) redrawRate : 60f);
         this.initialWidth = invertResolution ? height : width;
         this.initialHeight = invertResolution ? width : height;
         this.videoFormat = format;
@@ -1308,13 +1307,13 @@ try {
                                     String __nameQR = com.limelight.utils.CpuAffinity.readThreadName(__tidQR);
                                     if (__nameQR == null) __nameQR = "";
                                     boolean __hotQR =
-                                         __nameQR.contains("Renderer") ||
-                                                 __nameQR.contains("RenderThread") ||
-                                                 __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
-                                                 __nameQR.contains("Choreographer") ||
-                                                 __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
-                                                 __nameQR.contains("CodecCb") ||
-                                                 __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
+                                            __nameQR.contains("Renderer") ||
+                                                    __nameQR.contains("RenderThread") ||
+                                                    __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
+                                                    __nameQR.contains("Choreographer") ||
+                                                    __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
+                                                    __nameQR.contains("CodecCb") ||
+                                                    __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
                                     if (__hotQR) {
                                         try {
                                             android.os.Process.setThreadPriority(__tidQR,
@@ -1350,7 +1349,7 @@ try {
 // Performance Hint session (API 30+): guide scheduler to budget for our frame work
                 if (android.os.Build.VERSION.SDK_INT >= 31 && context != null) {
                     try {
-                        final long targetWorkNs = (long) (1_000_000_000L / Math.max(1, (targetFps > 0 ? targetFps : 60)));
+                        final long targetWorkNs = (long) (1_000_000_000.0 / Math.max(1f, (targetFps > 0f ? targetFps : 60f)));
                         android.os.PerformanceHintManager phm =
                                 context.getSystemService(android.os.PerformanceHintManager.class);
                         if (phm != null) {
@@ -1383,8 +1382,8 @@ try {
                 vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
 
                 // Stream cadence (targetFps set in setup(...))
-                final int tfps = (targetFps > 0 ? targetFps : 60);
-                final long streamPeriodNs = (long) (1_000_000_000L / Math.max(1, tfps));
+                final float tfps = (targetFps > 0f ? targetFps : 60f);
+                final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
 
                 // Adaptive period selection to avoid added latency on high-refresh devices
                 final boolean highRefresh = displayHz >= 90f;
@@ -1413,9 +1412,9 @@ boolean isC2Decoder = false;
                 int    tryAgainStreak          = 0;
                 int    recentDrops             = 0;
 
-                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1, tfps));
-                double ewmaDecodeToPresentNs   = periodNs * 0.7;
-                double ewmaJitterNs            = periodNs * 0.1;
+                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1f, tfps));
+                double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
+                double ewmaJitterNs = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
                 while (!stopping) {
