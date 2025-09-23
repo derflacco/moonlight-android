@@ -51,7 +51,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Async codec runtime flag from preferences
     private boolean useAsyncCodec = false;
     private android.os.HandlerThread codecCallbackThread;
-    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(16);
+    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(32);
     private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue = new java.util.concurrent.LinkedBlockingQueue<>(OUTPUT_BUFFER_QUEUE_LIMIT);
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo = new android.util.SparseArray<>(16);
     private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
@@ -660,8 +660,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 videoDecoder.setCallback(new android.media.MediaCodec.Callback() {
                     @Override
                     public void onInputBufferAvailable(android.media.MediaCodec codec, int index) {
-                        try { asyncInputQueue.offer(index); } catch (Throwable ignored) {}
+                        try {
+                            if (!asyncInputQueue.offer(index)) {
+                                asyncInputQueue.poll();       // drop oldest
+                                asyncInputQueue.offer(index); // retry
+                            }
+                        } catch (Throwable ignored) {
+                            // opzionale: LimeLog.warning("[Video] asyncInputQueue.offer failed");
+                        }
                     }
+
+
                     @Override
                     public void onOutputBufferAvailable(android.media.MediaCodec codec, int index, android.media.MediaCodec.BufferInfo info) {
                         try {
