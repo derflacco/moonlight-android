@@ -52,7 +52,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean useAsyncCodec = false;
     private android.os.HandlerThread codecCallbackThread;
     private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(32);
-    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue = new java.util.concurrent.LinkedBlockingQueue<>(OUTPUT_BUFFER_QUEUE_LIMIT);
+    private final LinkedBlockingQueue<Integer> asyncOutputQueue = new LinkedBlockingQueue<>(Math.max(OUTPUT_BUFFER_QUEUE_LIMIT, 2)); // non scendere sotto 2
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo = new android.util.SparseArray<>(16);
     private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
  // Considera Balanced-class: usa pacing via Choreographer
