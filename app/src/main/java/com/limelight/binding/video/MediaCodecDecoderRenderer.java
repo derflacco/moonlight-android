@@ -44,6 +44,16 @@ import android.view.Choreographer;
 import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    private long lastDecodeAvgLogNs = 0L;
+
+    // --- Precise decode-time tracking (PTS -> enqueue timestamp) ---
+    private final Object decodeTimingLock = new Object();
+    private final android.util.LongSparseArray<Long> enqueueNsByPtsUs = new android.util.LongSparseArray<>(512);
+    private static final int ENQUEUE_TIME_BUCKET_CAP = 2048; // bound memory (drop oldest half when exceeded)
+
+    // Count of frames for which decode latency was measured on dequeue (independent of present/drop)
+    private long decodedFramesCount = 0;
+
 
 
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
@@ -79,9 +89,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile boolean forceTightThresholds = false;
     /** Toggle tight frame pacing thresholds globally. */
     public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
-    // Toggle at runtime if needed
-    // Decode latency tracking: map PTS(us) -> enqueue time (ns)
-    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
+
 
     // When preferLowerDelays = true (LFR/ULL): force 0 µs (non-blocking, latest-only).
     // When preferLowerDelays = false (Balanced/managed): use this configurable timeout (µs) for output dequeue.
@@ -1443,7 +1451,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                     com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
                                     String __maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
                                     if (BuildConfig.DEBUG) {
-                                    LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + __maskBefore + " allowed_after=" + __maskAfter);
+                                        LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + __maskBefore + " allowed_after=" + __maskAfter);
                                     }
                                     lastAllowedMask = __maskAfter;
                                 }
@@ -1527,6 +1535,14 @@ android.media.MediaFormat __inF = null, __outF = null;
                         }
 
                         if (outIndex >= 0) {
+                            // Decode latency (enqueue->dequeue), independent of present/drop
+                            {
+                                final long __ptsUs = info.presentationTimeUs;
+                                if ((info.flags & android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && info.size > 0) {
+                                    try { updateDecodeLatencyStats(__ptsUs); } catch (Throwable ignored) {}
+                                }
+                            }
+
                             // --- flags per gestire le statistiche in modo robusto ---
                             boolean statsUpdated = false;
                             boolean frameDropped = false;
@@ -1962,8 +1978,35 @@ android.media.MediaFormat __inF = null, __outF = null;
                     0, nextInputBuffer.position(),
                     timestampUs, codecFlags);
 
+            // Record enqueue time for precise decode latency tracking (bounded map; drop oldest half)
+            try {
+                final long nowNs = System.nanoTime();
+                synchronized (decodeTimingLock) {
+                    int sz = enqueueNsByPtsUs.size();
+                    if (sz >= ENQUEUE_TIME_BUCKET_CAP) {
+                        int drop = sz / 2; // remove oldest half (descending to avoid index shifts)
+                        for (int i = drop - 1; i >= 0; --i) {
+                            enqueueNsByPtsUs.removeAt(i);
+                        }
+                    }
+                    enqueueNsByPtsUs.put(timestampUs, nowNs);
+                }
+            } catch (Throwable ignored) {}
+
+
             // Track enqueue time for this PTS
-            try { enqueueNsByPtsUs.put(timestampUs, System.nanoTime()); } catch (Throwable ignored) {}
+// Track enqueue time for this PTS (bounded map; drop oldest half)
+            try {
+                final long nowNs = System.nanoTime();
+                int sz = enqueueNsByPtsUs.size();
+                if (sz >= ENQUEUE_TIME_BUCKET_CAP) {
+                    int drop = sz / 2; // remove oldest half (descending to avoid index shifts)
+                    for (int i = drop - 1; i >= 0; --i) {
+                        enqueueNsByPtsUs.removeAt(i);
+                    }
+                }
+                enqueueNsByPtsUs.put(timestampUs, nowNs);
+            } catch (Throwable ignored) {}
 
             // We need a new buffer now
             nextInputBufferIndex = -1;
