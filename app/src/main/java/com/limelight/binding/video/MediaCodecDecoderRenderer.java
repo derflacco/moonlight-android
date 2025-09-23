@@ -51,7 +51,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
-    private static final long AFFINITY_REFRESH_NS = 2_000_000_000L; // 2s
+    private static final long AFFINITY_REFRESH_NS = 10_000_000_000L; // 10s (was 2s)
     private volatile long lastAffinityRefreshNs = 0L;
     private volatile String lastAllowedMask = null;
     private volatile boolean affinityPinned = false;
