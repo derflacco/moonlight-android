@@ -215,7 +215,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numFramesIn;
     private int numFramesOut;
 
-    private int targetFps = 0;
+    private float targetFps = 0f; // 0f = auto
     private long lastLfrCountNs = 0L;
     private long lfrLastCountNs = 0L;
     private long lfrAccumNs = 0L;
@@ -848,7 +848,7 @@ android.media.MediaFormat __inF = null, __outF = null;
             LimeLog.info("Decoder configuration try: "+tryNumber);
 
             try { MediaCodecHelper.auditSetTryNumber(tryNumber); } catch (Throwable ignored) {}
-MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
+            MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
 
             try { MediaCodecHelper.beginDecoderAudit(mediaFormat); } catch (Throwable ignored) {}
             // This will try low latency options until we find one that works (or we give up).
@@ -890,7 +890,7 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
 
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
-        this.targetFps = (redrawRate > 0 ? redrawRate : 60);
+        this.targetFps = (redrawRate > 0 ? (float) redrawRate : 60f);
         this.initialWidth = invertResolution ? height : width;
         this.initialHeight = invertResolution ? width : height;
         this.videoFormat = format;
@@ -1318,13 +1318,13 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
                                     String __nameQR = com.limelight.utils.CpuAffinity.readThreadName(__tidQR);
                                     if (__nameQR == null) __nameQR = "";
                                     boolean __hotQR =
-                                         __nameQR.contains("Renderer") ||
-                                                 __nameQR.contains("RenderThread") ||
-                                                 __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
-                                                 __nameQR.contains("Choreographer") ||
-                                                 __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
-                                                 __nameQR.contains("CodecCb") ||
-                                                 __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
+                                            __nameQR.contains("Renderer") ||
+                                                    __nameQR.contains("RenderThread") ||
+                                                    __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
+                                                    __nameQR.contains("Choreographer") ||
+                                                    __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
+                                                    __nameQR.contains("CodecCb") ||
+                                                    __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
                                     if (__hotQR) {
                                         try {
                                             android.os.Process.setThreadPriority(__tidQR,
@@ -1360,7 +1360,7 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
 // Performance Hint session (API 30+): guide scheduler to budget for our frame work
                 if (android.os.Build.VERSION.SDK_INT >= 31 && context != null) {
                     try {
-                        final long targetWorkNs = (long) (1_000_000_000L / Math.max(1, (targetFps > 0 ? targetFps : 60)));
+                        final long targetWorkNs = (long) (1_000_000_000.0 / Math.max(1f, (targetFps > 0f ? targetFps : 60f)));
                         android.os.PerformanceHintManager phm =
                                 context.getSystemService(android.os.PerformanceHintManager.class);
                         if (phm != null) {
@@ -1393,8 +1393,8 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
                 vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
 
                 // Stream cadence (targetFps set in setup(...))
-                final int tfps = (targetFps > 0 ? targetFps : 60);
-                final long streamPeriodNs = (long) (1_000_000_000L / Math.max(1, tfps));
+                final float tfps = (targetFps > 0f ? targetFps : 60f);
+                final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
 
 
                 // Adaptive period selection to avoid added latency on high-refresh devices
@@ -1424,7 +1424,7 @@ MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
                 int    tryAgainStreak          = 0;
                 int    recentDrops             = 0;
 
-                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1, tfps));
+                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1f, tfps));
                 double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
                 double ewmaJitterNs = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
 
