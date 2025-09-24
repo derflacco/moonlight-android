@@ -81,10 +81,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                          || fp == PreferenceConfiguration.FRAME_PACING_CAP_FPS
                         || fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
          }
-    private boolean isMaxSmoothness() {
-        int fp = (prefs != null) ? prefs.framePacing : -1;
-        return fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
-    }
+
     // Force tight thresholds regardless of device refresh (use vsyncPeriodNs always)
     private volatile boolean forceTightThresholds = false;
     /** Toggle tight frame pacing thresholds globally. */
@@ -103,8 +100,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Balanced-class (Balanced | CapFPS | MaxSmoothness)
         if (isBalancedClass()) {
             final boolean antiLag = (prefs != null) && prefs.enableAntiLag;
-            // AntiLag: 250 µs | senza AntiLag: 2000 µs
-            return antiLag ? 250 : 2000;
+            // AntiLag: 500 µs | senza AntiLag: 2000 µs
+            return antiLag ? 500 : 2000;
         }
 
         // Altri pacing: non-blocking
@@ -1190,16 +1187,8 @@ android.media.MediaFormat __inF = null, __outF = null;
             return;
         }
 
-// Applica l'offset VSYNC solo per Max Smoothness (smooth puro).
-// In Balanced/CapFPS niente offset → meno ritardo percepito.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            if (isMaxSmoothness()) {
-                try {
-                    frameTimeNanos -= activity.getWindowManager()
-                            .getDefaultDisplay()
-                            .getAppVsyncOffsetNanos();
-                } catch (Throwable ignored) { }
-            }
+            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
         }
 
         // Don't render unless a new frame is due. This prevents microstutter when streaming
@@ -1226,27 +1215,30 @@ android.media.MediaFormat __inF = null, __outF = null;
             if (nextOutputBuffer != null) {
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        // MAX SMOOTHNESS: present con timestamp (preserva il vecchio margine)
-                        if (isMaxSmoothness()) {
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                            lastRenderedFrameTimeNanos = frameTimeNanos;
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                    }
+                    else {
+                        if (android.os.Build.VERSION.SDK_INT >= 21) {
+                            long __ts = System.nanoTime();
+                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
                         } else {
-                            // Balanced / CapFPS: ASAP; SurfaceFlinger allinea al prossimo VSYNC
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                            lastRenderedFrameTimeNanos = System.nanoTime();
+                            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                long __ts = System.nanoTime();
+                                videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
+                            } else {
+                                videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                            }
                         }
-                    } else {
-                        // Pre-21: solo boolean path disponibile → ASAP
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                        lastRenderedFrameTimeNanos = System.nanoTime();
                     }
 
+                    lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
                 } catch (IllegalStateException ignored) {
                     try {
-                        // Prova a non renderizzare per evitare leak del buffer
+                        // Try to avoid leaking the output buffer by releasing it without rendering
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
                     } catch (IllegalStateException e) {
+                        // This will leak nextOutputBuffer, but there's really nothing else we can do
                         e.printStackTrace();
                         handleDecoderException(e);
                     }
