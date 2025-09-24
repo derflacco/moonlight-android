@@ -164,19 +164,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
-    private void updateDecodeLatencyStats(long presentationTimeUs) {
-        Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
-        if (enqNs != null) {
-            enqueueNsByPtsUs.delete(presentationTimeUs);
-            long decMs = (System.nanoTime() - enqNs) / 1_000_000L;
-            if (decMs >= 0 && decMs < 1000) {
-                activeWindowVideoStats.decoderTimeMs += decMs;
-                if (!USE_FRAME_RENDER_TIME) {
-                    activeWindowVideoStats.totalTimeMs += decMs;
-                }
+            private void updateDecodeLatencyStats(long presentationTimeUs) {
+                final Long enqNs;
+                // Use the same lock used when writing into enqueueNsByPtsUs
+                        synchronized (decodeTimingLock) {
+                        enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
+                        if (enqNs != null) {
+                               enqueueNsByPtsUs.delete(presentationTimeUs);
+                            }
+                    }
+               if (enqNs != null) {
+                       long decMs = (System.nanoTime() - enqNs.longValue()) / 1_000_000L;
+                       // Clamp to sane window (0..1000 ms) to ignore outliers
+                              if (decMs >= 0 && decMs < 1000) {
+                                activeWindowVideoStats.decoderTimeMs += decMs;
+                               if (!USE_FRAME_RENDER_TIME) {
+                                   activeWindowVideoStats.totalTimeMs += decMs;
+                                    }
+                            }
+                    }
             }
-        }
-    }
 
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
 
@@ -2079,34 +2086,20 @@ android.media.MediaFormat __inF = null, __outF = null;
                     timestampUs, codecFlags);
 
             // Record enqueue time for precise decode latency tracking (bounded map; drop oldest half)
-            try {
-                final long nowNs = System.nanoTime();
-                synchronized (decodeTimingLock) {
-                    int sz = enqueueNsByPtsUs.size();
-                    if (sz >= ENQUEUE_TIME_BUCKET_CAP) {
-                        int drop = sz / 2; // remove oldest half (descending to avoid index shifts)
-                        for (int i = drop - 1; i >= 0; --i) {
-                            enqueueNsByPtsUs.removeAt(i);
-                        }
-                    }
-                    enqueueNsByPtsUs.put(timestampUs, nowNs);
-                }
-            } catch (Throwable ignored) {}
+                        try {
+                                synchronized (decodeTimingLock) {
+                                        final long nowNs = System.nanoTime();
+                                        int sz = enqueueNsByPtsUs.size();
+                                        if (sz >= ENQUEUE_TIME_BUCKET_CAP) {
+                                                int drop = sz / 2; // remove oldest half (descending to avoid index shifts)
+                                                for (int i = drop - 1; i >= 0; --i) {
+                                                        enqueueNsByPtsUs.removeAt(i);
+                                                    }
+                                            }
+                                        enqueueNsByPtsUs.put(timestampUs, nowNs);
+                                    }
+                            } catch (Throwable ignored) {}
 
-
-            // Track enqueue time for this PTS
-// Track enqueue time for this PTS (bounded map; drop oldest half)
-            try {
-                final long nowNs = System.nanoTime();
-                int sz = enqueueNsByPtsUs.size();
-                if (sz >= ENQUEUE_TIME_BUCKET_CAP) {
-                    int drop = sz / 2; // remove oldest half (descending to avoid index shifts)
-                    for (int i = drop - 1; i >= 0; --i) {
-                        enqueueNsByPtsUs.removeAt(i);
-                    }
-                }
-                enqueueNsByPtsUs.put(timestampUs, nowNs);
-            } catch (Throwable ignored) {}
 
             // We need a new buffer now
             nextInputBufferIndex = -1;
