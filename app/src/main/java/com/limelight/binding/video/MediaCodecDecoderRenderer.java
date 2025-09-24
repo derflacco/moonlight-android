@@ -75,12 +75,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
  // Considera Balanced-class: usa pacing via Choreographer
 
-         private boolean isBalancedClass() {
-            int fp = (prefs != null) ? prefs.framePacing : -1;
-            return fp == PreferenceConfiguration.FRAME_PACING_BALANCED
-                         || fp == PreferenceConfiguration.FRAME_PACING_CAP_FPS
-                        || fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
-         }
 
     // Force tight thresholds regardless of device refresh (use vsyncPeriodNs always)
     private volatile boolean forceTightThresholds = false;
@@ -92,16 +86,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // When preferLowerDelays = false (Balanced/managed): use this configurable timeout (µs) for output dequeue.
     private volatile int preferLowerDelaysTimeoutUs = 2000; // default for managed; policy sets 0 µs when LFR
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
-
     private int getOutputDequeueTimeoutUs() {
         // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
 
-        // Balanced-class (Balanced | CapFPS | MaxSmoothness)
-        if (isBalancedClass()) {
-            final boolean antiLag = (prefs != null) && prefs.enableAntiLag;
-            // AntiLag: 500 µs | senza AntiLag: 2000 µs
-            return antiLag ? 500 : 2000;
+        if (prefs != null) {
+            // AntiLag (Balanced+LFR attivo): 150 µs
+            if (prefs.enableAntiLag) return 150;
+
+            // Balanced senza AntiLag: micro-timeout (opzionale; puoi rimettere 0 se lo preferisci)
+            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 2000;
         }
 
         // Altri pacing: non-blocking
@@ -1255,7 +1249,7 @@ android.media.MediaFormat __inF = null, __outF = null;
     }
 
     private void startChoreographerThread() {
-        if (!isBalancedClass()) {
+        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
             // Not using Choreographer in this pacing mode
             return;
         }
@@ -1554,23 +1548,19 @@ android.media.MediaFormat __inF = null, __outF = null;
                             // aggiorna inter-arrival
                             // lastDecoderPtsUs = presentationTimeUs;
 
-// Render the latest frame now if frame pacing isn't in balanced mode
-                            if (!isBalancedClass()) {
-                                // Get the last output buffer in the queue (async-safe)
-                                int __idx = nextOutputIndex(info, getOutputDequeueTimeoutUs());
-                                while (__idx >= 0) {
-                                    if (lastIndex >= 0) {
-                                        try { videoDecoder.releaseOutputBuffer(lastIndex, false); } catch (Throwable ignored) {}
-                                        frameDropped = true; // we're discarding the oldest one
-                                    }
+
+                            // Render the latest frame now if frame pacing isn't in balanced mode
+                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                                // Get the last output buffer in the queue
+                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    frameDropped = true; // we're discarding the oldest one
 
                                     numFramesOut++;
-                                    lastIndex = __idx;
+                                    lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
-
-                                    // drain the rest with 0 µs to keep it tight
-                                    __idx = nextOutputIndex(info, 0);
                                 }
+
 
 
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
