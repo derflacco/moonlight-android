@@ -1412,6 +1412,11 @@ android.media.MediaFormat __inF = null, __outF = null;
                 final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
 
 
+
+                // Instant jitter hybrid (no EW-MA): compute small adaptive budget from instantaneous cadence
+                long   ijhLastPtsUs         = -1L;
+                long   ijhLastPresentNs     = 0L;
+                double ijhBudgetNs          = Math.max(vsyncPeriodNs * 0.10, Math.min(vsyncPeriodNs * 0.25, vsyncPeriodNs * 0.15)); // start at 15% of vsync
                 // Adaptive period selection to avoid added latency on high-refresh devices
                 final boolean highRefresh = displayHz >= 90f;
                 final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
@@ -1428,8 +1433,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                 } catch (Throwable ignored) {}
 
                 // Aggressive/adaptive state
-                final double EWMA_ALPHA = managedMode ? 0.15 : 0.25;
-                final double MIN_FACTOR = 1.00;
+                final double MIN_FACTOR = 1.04;
                 final double MAX_FACTOR = 1.20;
 
                 long   lastDecoderPtsUs        = 0L;
@@ -1438,12 +1442,9 @@ android.media.MediaFormat __inF = null, __outF = null;
                 int    lateStreak              = 0;
                 int    tryAgainStreak          = 0;
                 int    recentDrops             = 0;
-
-                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1f, tfps));
-                double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
-                double ewmaJitterNs = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
-
-                BufferInfo info = new BufferInfo();
+                // Instant Jitter state (EWMA removed)
+                double jitterBudgetNs = ijhBudgetNs;
+                android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
 
@@ -1516,7 +1517,6 @@ android.media.MediaFormat __inF = null, __outF = null;
                                 if (__lastPtsUs >= 0) {
                                     long d2pNs = nowNs - (__lastPtsUs * 1000L);
                                     if (d2pNs < 0) d2pNs = 0;
-                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (d2pNs - ewmaDecodeToPresentNs);
                                     try { updateDecodeLatencyStats(__lastPtsUs); } catch (Throwable ignored) {}
                                 }
 
@@ -1560,14 +1560,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                             numFramesOut++;
 
                             // aggiorna inter-arrival
-                            if (lastDecoderPtsUs != 0L) {
-                                long interUs = presentationTimeUs - lastDecoderPtsUs;
-                                if (interUs > 0) {
-                                    double sample = interUs * 1000.0;
-                                    ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
-                                }
-                            }
-                            lastDecoderPtsUs = presentationTimeUs;
+                            // lastDecoderPtsUs = presentationTimeUs;
 
 // Render the latest frame now if frame pacing isn't in balanced mode
                             if (!isBalancedClass()) {
@@ -1596,7 +1589,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
 
                                         // Smoothness: tighter threshold 1.05..1.2×
-                                        double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
+                                        double pressure = Math.min(1.0, (jitterBudgetNs / vsyncPeriodNs) + (recentDrops * 0.1));
                                         double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
                                         factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
 
@@ -1610,7 +1603,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                             continue;
                                         }
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
                                         lastPresentNs = nowNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
 
@@ -1647,7 +1640,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                         double mismatch = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
                                         mismatch = Math.min(2.0, mismatch);
 
-                                        double factorLatency = 1.02 + 0.13 * (0.5 * (ewmaJitterNs / vsyncPeriodNs)
+                                        double factorLatency = 1.02 + 0.13 * (0.5 * (jitterBudgetNs / vsyncPeriodNs)
                                                 + 0.3 * backPressure
                                                 + 0.2 * mismatch);
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
@@ -1673,7 +1666,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                             continue; // niente stats sui frame droppati
                                         }
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
                                         lastPresentNs = nowNs;
                                         if (!isLate) lateStreak = 0;
                                         recentDrops = Math.max(0, recentDrops - 1);
