@@ -194,6 +194,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Evita eglMakeCurrent e query dimensioni ogni frame
     private long lastSizeQueryNs = 0L;
     private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
+    private int swapFailStreak = 0;
     private boolean fixedStateApplied = false;
     // Temp per evitare allocazioni ripetute
     private final int[] tmpInt1 = new int[1];
@@ -400,7 +401,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
             try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
-            EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+            boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+            if (!__swapped) {
+                int err = EGL14.eglGetError();
+                try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
+                swapFailStreak++;
+                // If the window surface is gone, stop the loop; otherwise treat as transient and continue.
+                if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= 8) {
+                    running.set(false);
+                }
+                continue;
+            } else {
+                if (swapFailStreak != 0) swapFailStreak = 0;
+            }
         }
     }
 

@@ -376,7 +376,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
         }
         this.renderTarget = renderTarget;
-    
+
         // Re-apply presentation hint to upscaler when render target may change
         try { if (glUpscaler != null) {
             java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
@@ -1571,7 +1571,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             rendererThread.interrupt();
         }
 
-        // Stop any active codec recovery operations
+
+        // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
+        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
+        glUpscaler = null;
+        if (decoderInputSurfaceForUpscale != null) {
+            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+            decoderInputSurfaceForUpscale = null;
+        }
+// Stop any active codec recovery operations
         synchronized (codecRecoveryMonitor) {
             codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
             codecRecoveryMonitor.notifyAll();
@@ -1622,10 +1630,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // status back to true.
             Thread.currentThread().interrupt();
         }
+
+        // Final safety: ensure GL upscaler is torn down
+        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
+        glUpscaler = null;
+        if (decoderInputSurfaceForUpscale != null) {
+            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+            decoderInputSurfaceForUpscale = null;
+        }
+
     }
 
     @Override
     public void cleanup() {
+
+        // Ensure decoder and any GL upscaler resources are released
+        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
+        glUpscaler = null;
+        if (decoderInputSurfaceForUpscale != null) {
+            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+            decoderInputSurfaceForUpscale = null;
+        }
         videoDecoder.release();
     }
 
