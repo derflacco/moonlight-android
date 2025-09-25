@@ -1972,6 +1972,42 @@ android.media.MediaFormat __inF = null, __outF = null;
     public void stop() {
         // May be called already, but we'll call it now to be safe
         prepareForStop();
+                // --- Async codec teardown (avoid late callbacks/races) ---
+                        try {
+                        if (useAsyncCodec && videoDecoder != null) {
+                                try {
+                                        // Detach callback to stop new deliveries immediately
+                                                videoDecoder.setCallback(null);
+                                    } catch (Throwable ignored) { }
+                            // Detach frame-rendered listener (set in configure) to avoid late callbacks
+                            try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) videoDecoder.setOnFrameRenderedListener(null, null);
+                            } catch (Throwable ignored) {}
+
+                                        // Clear queues to drop any stale indices/info
+                                                try { asyncInputQueue.clear(); } catch (Throwable ignored) { }
+                                try { asyncOutputQueue.clear(); } catch (Throwable ignored) { }
+                                try { synchronized (asyncOutInfo) { asyncOutInfo.clear(); } } catch (Throwable ignored) { }
+                            }
+                    } catch (Throwable ignored) { }
+
+                        // Stop callback looper thread
+                                try {
+                        if (codecCallbackThread != null) {
+                                try {
+                                        codecCallbackThread.quitSafely();
+                                    } catch (Throwable ignored) {
+                                        try { codecCallbackThread.quit(); } catch (Throwable ignored2) { }
+                                    }
+                                try {
+                                        codecCallbackThread.join();
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                    } catch (Throwable ignored) { }
+                                codecCallbackThread = null;
+                            }
+                    } catch (Throwable ignored) { }
+                // --- end async teardown ---
 
         // Wait for the Choreographer looper to shut down (if we have one)
         if (choreographerHandlerThread != null) {
@@ -2012,14 +2048,54 @@ android.media.MediaFormat __inF = null, __outF = null;
     @Override
     public void cleanup() {
 
-        // Ensure decoder and any GL upscaler resources are released
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
+// --- Safe teardown: stop codec first, then GL, then Surface ---
+        try {
+            final android.media.MediaCodec dec = videoDecoder;
+
+            if (dec != null) {
+                if (useAsyncCodec) {
+                    // Detach listeners/callbacks to avoid late deliveries
+                    try {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                            dec.setOnFrameRenderedListener(null, null);
+                        }
+                    } catch (Throwable ignored) {}
+                    try { dec.setCallback(null); } catch (Throwable ignored) {}
+
+                    // Clear async queues/state
+                    try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
+                    try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
+                    try { synchronized (asyncOutInfo) { asyncOutInfo.clear(); } } catch (Throwable ignored) {}
+
+                    // Stop callback looper thread
+                    try {
+                        if (codecCallbackThread != null) {
+                            try { codecCallbackThread.quitSafely(); } catch (Throwable ignored) {}
+                            try { codecCallbackThread.join(100); } catch (Throwable ignored) {}
+                            codecCallbackThread = null;
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
+                // Stop + release codec (single release)
+                try { dec.stop(); } catch (Throwable ignored) {}
+                try { dec.release(); } catch (Throwable ignored) {}
+
+                videoDecoder = null;
+            }
+        } catch (Throwable ignored) {}
+
+// Release GL upscaler AFTER codec is gone
+        try {
+            if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); }
+        } catch (Throwable ignored) {}
         glUpscaler = null;
+
+// Finally release the decoder output Surface
         if (decoderInputSurfaceForUpscale != null) {
             try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
             decoderInputSurfaceForUpscale = null;
         }
-        videoDecoder.release();
     }
 
     @Override
