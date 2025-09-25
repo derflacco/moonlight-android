@@ -121,7 +121,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Async codec runtime flag from preferences
     private boolean useAsyncCodec = false;
     private android.os.HandlerThread codecCallbackThread;
-    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(32);
+    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue = new java.util.concurrent.LinkedBlockingQueue<>(64);
     private final LinkedBlockingQueue<Integer> asyncOutputQueue = new LinkedBlockingQueue<>(Math.max(OUTPUT_BUFFER_QUEUE_LIMIT, 2)); // non scendere sotto 2
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo = new android.util.SparseArray<>(16);
     private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo s) { android.media.MediaCodec.BufferInfo d = new android.media.MediaCodec.BufferInfo(); try { d.set(s.offset, s.size, s.presentationTimeUs, s.flags); } catch (Throwable ignored) {} return d; }
@@ -773,14 +773,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     @Override
                     public void onInputBufferAvailable(android.media.MediaCodec codec, int index) {
                         try {
-                            if (!asyncInputQueue.offer(index)) {
-                                asyncInputQueue.poll();       // drop oldest
-                                asyncInputQueue.offer(index); // retry
-                            }
-                        } catch (Throwable ignored) {
-                            // opzionale: LimeLog.warning("[Video] asyncInputQueue.offer failed");
-                        }
-                    }
+                    asyncInputQueue.put(index);
+        } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                } catch (Throwable ignored) {
+                    // opzionale: LimeLog.warning("[Video] asyncInputQueue.offer failed");
+                }
+            }
 
 
                     @Override
@@ -1650,7 +1649,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                while ((outIndex = nextOutputIndex(info, getOutputDequeueTimeoutUs())) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
                                     frameDropped = true; // we're discarding the oldest one
 
