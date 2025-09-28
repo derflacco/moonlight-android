@@ -1977,7 +1977,17 @@ android.media.MediaFormat __inF = null, __outF = null;
                         if (useAsyncCodec && videoDecoder != null) {
                                 try {
                                         // Detach callback to stop new deliveries immediately
-                                                videoDecoder.setCallback(null);
+                                                    try {
+                                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                                                    videoDecoder.setOnFrameRenderedListener(null, null);
+                                                                }
+                                                        } catch (Throwable ignored) { }
+                                                    // API compat: null handler variant
+                                                            try {
+                                                            videoDecoder.setCallback(null, null);
+                                                        } catch (Throwable ignored) {
+                                                            videoDecoder.setCallback(null);
+                                                        }
                                     } catch (Throwable ignored) { }
                             // Detach frame-rendered listener (set in configure) to avoid late callbacks
                             try {
