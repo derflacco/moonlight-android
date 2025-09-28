@@ -51,6 +51,8 @@
 -dontwarn com.github.mikephil.charting.**
 # Keep CpuAffinity (public wrappers called via reflection in places)
 -keep class com.limelight.utils.CpuAffinity { *; }
+#
+-keep class com.limelight.utils.RxBoost { *; }
 
 
 # FSR renderer (auto-hint)
