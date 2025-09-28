@@ -6,13 +6,15 @@ import android.os.PerformanceHintManager;
 import android.os.Process;
 
 /**
- * Boost & pin likely RX threads (UDP/RTP) to reduce saturation-induced packet loss.
+ * Boost & pin dei thread RX (UDP/RTP) per ridurre packet loss da saturazione.
  *
- * Usage (call once when streaming starts, then optional refresher):
- *   RxBoost.boostRxThreads(context, /*preferBigCores=*/ true_or_false);
- *   RxBoost.scheduleRxRefresh(context, /*preferBigCores=*/ true_or_false);
+ * <p><b>Usage</b> (chiamare quando parte lo streaming, poi opzionale refresher):</p>
+ * <pre>
+ *   RxBoost.boostRxThreads(context, true);   // oppure false se non vuoi pin sui big cores
+ *   RxBoost.scheduleRxRefresh(context, true);
+ * </pre>
  *
- * Requires CpuAffinity.java already present in com.limelight.utils.
+ * <p>Richiede la presenza di CpuAffinity.java in com.limelight.utils.</p>
  */
 public final class RxBoost {
     private RxBoost() {}
@@ -21,11 +23,11 @@ public final class RxBoost {
         if (name == null) return false;
         String n = name.toLowerCase(java.util.Locale.US);
         return n.contains("rx") || n.contains("recv") || n.contains("udp") ||
-               n.contains("rtp") || n.contains("net") || n.contains("gs-recv") ||
-               n.contains("gamestream") || n.contains("quic") || n.contains("socket");
+                n.contains("rtp") || n.contains("net") || n.contains("gs-recv") ||
+                n.contains("gamestream") || n.contains("quic") || n.contains("socket");
     }
 
-    /** Pin and boost threads that look like network RX (best-effort, safe on non-root). */
+    /** Pin e boost dei thread che sembrano RX di rete (best-effort, non richiede root). */
     public static void boostRxThreads(Context ctx, boolean preferBigCores) {
         try {
             int[] big = null;
@@ -41,23 +43,24 @@ public final class RxBoost {
                 String name = CpuAffinity.readThreadName(tid);
                 if (!isLikelyRxThread(name)) continue;
 
-                // Raise scheduling priority
+                // priorità alta
                 try { Process.setThreadPriority(tid, Process.THREAD_PRIORITY_URGENT_DISPLAY); } catch (Throwable ignored) {}
 
-                // Bind to big cores if requested and available
+                // pin sui big cores, se richiesto e disponibili
                 if (preferBigCores && big != null && big.length > 0) {
                     try { CpuAffinity.setAffinityForTid(tid, big); } catch (Throwable ignored) {}
                 }
             }
 
-            // PerformanceHint (API 31+): give scheduler a small budget hint (best-effort)
+            // PerformanceHint (API 31+): piccolo hint di budget (best-effort)
             if (Build.VERSION.SDK_INT >= 31 && ctx != null) {
                 try {
                     PerformanceHintManager phm = ctx.getSystemService(PerformanceHintManager.class);
                     if (phm != null) {
                         int tid = Process.myTid();
                         long targetWorkNs = 1_000_000L; // ~1 ms
-                        PerformanceHintManager.Session hs = phm.createHintSession(new int[]{ tid }, targetWorkNs);
+                        PerformanceHintManager.Session hs =
+                                phm.createHintSession(new int[]{ tid }, targetWorkNs);
                         if (hs != null) {
                             try { hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
                         }
@@ -67,7 +70,7 @@ public final class RxBoost {
         } catch (Throwable ignored) {}
     }
 
-    /** Re-pin and re-boost a few times to catch threads that spawn later. */
+    /** Re-pin/re-boost per qualche secondo per agganciare thread che nascono più tardi. */
     public static void scheduleRxRefresh(final Context ctx, final boolean preferBigCores) {
         new Thread(() -> {
             for (int i = 0; i < 10; i++) {
