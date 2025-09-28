@@ -1163,27 +1163,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                 android.os.PerformanceHintManager.Session __hs = null;
 
-// Performance Hint session (API 30+): guide scheduler to budget for our frame work
-                if (android.os.Build.VERSION.SDK_INT >= 31 && context != null) {
-                    try {
-                        final long targetWorkNs = (long) (1_000_000_000L / Math.max(1, (targetFps > 0 ? targetFps : 60)));
-                        android.os.PerformanceHintManager phm =
-                                context.getSystemService(android.os.PerformanceHintManager.class);
-                        if (phm != null) {
-                            long rateNs = 0L;
-                            try { rateNs = phm.getPreferredUpdateRateNanos(); } catch (Throwable ignored) {}
-                            if (rateNs > 0L) {
-                                int tid = android.os.Process.myTid();
-                                android.os.PerformanceHintManager.Session hs =
-                                        phm.createHintSession(new int[]{ tid }, targetWorkNs);
-                                if (hs != null) {
-                                    try { hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
-                                    LimeLog.info("PHM: session active (targetNs=" + targetWorkNs + ", rateNs=" + rateNs + ")");
-                                }
-                            }
-                        }
-                    } catch (Throwable ignored) {}
-                }
+
 //* Pin hot threads to big cluster *//
                 while (!stopping) {
                     //* Pin hot threads to big cluster *//

@@ -971,7 +971,7 @@
     
 
 <CheckBoxPreference
-    android:defaultValue="false"
+    android:defaultValue="true"
     android:key="checkbox_prefer_big_cores"
     android:title="@string/title_prefer_big_cores"
     android:summary="@string/summary_prefer_big_cores"
