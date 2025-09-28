@@ -39,7 +39,7 @@ static bool receivedFullFrame;
 // much kernel memory with larger packet sizes. It also
 // can smooth over transient pauses in network traffic
 // and subsequent packet/frame bursts that follow.
-#define RTP_RECV_PACKETS_BUFFERED 2048
+#define RTP_RECV_PACKETS_BUFFERED 4096
 
 // Initialize the video stream
 void initializeVideoStream(void) {
