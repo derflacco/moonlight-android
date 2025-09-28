@@ -189,3 +189,41 @@ dependencies {
     testImplementation 'org.robolectric:robolectric:4.16'
     testImplementation 'org.mockito:mockito-core:5.19.0'
 }
+
+/**
+ * Added non-debug 'perf' build type:
+ * - debuggable false (no debugger overhead)
+ * - minify + shrinkResources ON like release
+ * - signingConfig debug (easy adb install)
+ * - matchingFallbacks 'release' so it inherits release deps/variants
+ */
+android {
+    buildTypes {
+        perf {
+            initWith release
+            matchingFallbacks = ["release"]
+            debuggable false
+            minifyEnabled true
+            shrinkResources true
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+
+/**
+ * Configure log verbosity flags per build type.
+ * - perf: LOG_VERBOSE=false
+ * - debug: LOG_VERBOSE=true
+ */
+android {
+    buildTypes {
+        perf {
+            // Silence heavy logs in hot paths
+            buildConfigField "boolean", "LOG_VERBOSE", "false"
+        }
+        debug {
+            // Keep verbose logs for debugging
+            buildConfigField "boolean", "LOG_VERBOSE", "true"
+        }
+    }
+}
