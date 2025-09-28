@@ -51,7 +51,9 @@
 -dontwarn com.github.mikephil.charting.**
 # Keep CpuAffinity (public wrappers called via reflection in places)
 -keep class com.limelight.utils.CpuAffinity { *; }
-#
+
+# --- Moonlight: keep thread/affinity helpers & RX boost (used via reflection/JNI) ---
+-keep class com.limelight.utils.CpuAffinity { *; }
 -keep class com.limelight.utils.RxBoost { *; }
 
 
@@ -64,3 +66,30 @@
 -keep class com.limelight.utils.SurfaceViewSizer { *; }
 -keep class com.limelight.utils.FSRSizerInstaller { *; }
 -keep class com.limelight.utils.FSRSizerInstaller$AutoCloser { *; }
+
+# Keep any class with native methods (JNI signatures relied upon by NDK)
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# Keep NV connection layer & public APIs referenced by native code / reflection
+-keep class com.limelight.nvstream.** { public *; }
+-keep class com.limelight.binding.video.** { public *; }
+
+# Do not obfuscate enums used across process boundaries
+-keepclassmembers enum * { public static **[] values(); public static ** valueOf(java.lang.String); }
+
+# Keep names for parcelables (if any)
+-keep class * implements android.os.Parcelable {
+    public static final android.os.Parcelable$Creator *;
+}
+
+# Keep MediaCodec surface handling classes (if referenced reflectively)
+-keep class android.media.** { *; }
+
+# Keep annotations (helps with reflective frameworks)
+-keepattributes *Annotation*,InnerClasses,EnclosingMethod,Signature,Exceptions,SourceFile,LineNumberTable
+
+# Optimize but keep method names in utils for debugging (optional)
+-dontobfuscate class com.limelight.utils.CpuAffinity
+-dontobfuscate class com.limelight.utils.RxBoost
