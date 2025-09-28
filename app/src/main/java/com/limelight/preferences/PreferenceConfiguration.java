@@ -861,7 +861,7 @@ private static int getFramePacingValue(Context context) {
         config.framePacing = getFramePacingValue(context);
         config.preferLowerDelays = getPreferLowerDelays(context);
         // Big cores preference (non-root)
-        config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, false);
+        config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
