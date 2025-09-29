@@ -1660,50 +1660,48 @@ android.media.MediaFormat __inF = null, __outF = null;
 
 
 
-                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // In max smoothness or cap FPS mode, we want to never drop frames
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        // Smoothness: tighter threshold 1.05..1.2×
-                                        double pressure = Math.min(1.0, (jitterBudgetNs / vsyncPeriodNs) + (recentDrops * 0.1));
-                                        double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
-                                        factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
-
-                                        long dropThresholdSmoothNs = (long)(periodNs * factorSmooth);
-
-                                        if (frameAgeNs >= dropThresholdSmoothNs) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue;
+// --- Present policy per profilo di pacing ---
+                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
+                                    // Never drop; present ASAP in order
+                                    final long nowNs = System.nanoTime();
+                                    if (lastIndex >= 0) {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        } else {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                         }
-
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
                                         lastPresentNs = nowNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
-                                        // [STATS] update subito dopo il present
+                                        recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
+                                    }
 
-                                    } else {
-                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                            long __ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                } else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+                                    // Cap present rate to prefs.fps; never drop, present in order
+                                    final double capFps = Math.max(1.0, (double) prefs.fps);
+                                    final long capPeriodNs = (long) (1_000_000_000.0 / capFps);
+                                           final long nowNs = System.nanoTime();
+
+                                    if (lastIndex >= 0) {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                            final long tsNs = (lastPresentNs > 0L)
+                                                    ? Math.max(nowNs, lastPresentNs + capPeriodNs)
+                                                    : nowNs;
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            lastPresentNs = tsNs;
                                         } else {
-                                            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                                long __ts = System.nanoTime();
-                                                videoDecoder.releaseOutputBuffer(lastIndex, __ts);
-                                            } else {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                            if (lastPresentNs > 0L) {
+                                                long waitNs = (lastPresentNs + capPeriodNs) - nowNs;
+                                                if (waitNs > 0L && waitNs < 20_000_000L) {
+                                                    try { Thread.sleep(waitNs / 1_000_000L, (int)(waitNs % 1_000_000L)); }
+                                                    catch (InterruptedException ignored) {}
+                                                }
                                             }
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            lastPresentNs = System.nanoTime();
                                         }
 
-                                        // [STATS] anche su pre-Lollipop, dopo presentazione
+                                        recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
