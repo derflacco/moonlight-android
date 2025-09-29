@@ -90,6 +90,3 @@
 # Keep annotations (helps with reflective frameworks)
 -keepattributes *Annotation*,InnerClasses,EnclosingMethod,Signature,Exceptions,SourceFile,LineNumberTable
 
-# Optimize but keep method names in utils for debugging (optional)
--dontobfuscate class com.limelight.utils.CpuAffinity
--dontobfuscate class com.limelight.utils.RxBoost
