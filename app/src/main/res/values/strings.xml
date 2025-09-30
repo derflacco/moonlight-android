@@ -362,7 +362,7 @@
     <string name="pacing_smoothness">Prefer smoothest video (may significantly increase latency)</string>
     <string name="pacing_gpu_raw">GPU RAW (SurfaceFlinger)</string>
     <string name="gpu_path_mode_title">Direct Present</string>
-    <string name="gpu_path_mode_summary">uses system-driven vsync</string>
+    <string name="gpu_path_mode_summary">uses system-driven vsync; disable to use FSR; forces GPU RAW,FSR off</string>
 
 
 
@@ -741,7 +741,7 @@
     <string name="pref_fg_lite_motion_adapt_summary">Reduce ghosting by lowering blend on fast edges</string>
     <!-- Video Upscaling (FSR-like) -->
     <string name="pref_video_upscale_enable_title">Video upscaling (FSR‑like)</string>
-    <string name="pref_video_upscale_enable_summary">GPU spatial upscaling + optional sharpening. Adds a tiny GPU cost.</string>
+    <string name="pref_video_upscale_enable_summary">GPU spatial upscaling + optional sharpening.Forces GPU RAW, LFR off.</string>
     <string name="pref_video_upscale_mode_title">Upscaling mode</string>
     <string name="pref_video_upscale_sharpness_title">Sharpening</string>
     <string name="pref_video_upscale_sharpness_summary">RCAS intensity (0–100)</string>
