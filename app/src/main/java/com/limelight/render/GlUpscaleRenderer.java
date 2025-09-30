@@ -120,7 +120,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Uniform locations
     private int blit_uTex = -1, blit_uTexMat = -1;
-    private int easu_uTex = -1, easu_uSrcSize = -1, easu_uDstSize = -1, easu_uTexMat = -1;
+    private int easu_uTex = -1, easu_uInvSrcSize = -1, easu_uTexMat = -1;
     private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1;
     private int progRcasOes = 0, rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uTexMat = -1;
 
@@ -533,17 +533,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
 
         ensureViewport(dstW, dstH);
-        // EASU
+// EASU (lite)
         GLES20.glUseProgram(progEasu);
         bindQuad(progEasu);
         if (__fsr.enabled) { __fsr.ticEasu(); }
-        GLES20.glUniform2f(easu_uSrcSize, (float) srcW, (float) srcH);
-        GLES20.glUniform2f(easu_uDstSize, (float) dstW, (float) dstH);
-        GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
+
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
         setOesFilter(false);
+
         GLES20.glUniform1i(easu_uTex, 0);
+        GLES20.glUniform2f(easu_uInvSrcSize, 1.0f / srcW, 1.0f / srcH);
+        GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
+
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
         if (__fsr.enabled) { __fsr.tocEasu(); }
@@ -706,13 +708,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         progEasu = linkProgram(progVs, FS_EASU);
         progRcas = linkProgram(progVs, FS_RCAS);
         progRcasOes = 0; // disabled due to black screen on some GPUs
-
+        easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
+        easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
+        easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
         // Uniform cache
         blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
         blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
         easu_uTex     = GLES20.glGetUniformLocation(progEasu, "uTex");
-        easu_uSrcSize = GLES20.glGetUniformLocation(progEasu, "uSrcSize");
-        easu_uDstSize = GLES20.glGetUniformLocation(progEasu, "uDstSize");
+        //easu_uSrcSize = GLES20.glGetUniformLocation(progEasu, "uSrcSize");
+        //easu_uDstSize = GLES20.glGetUniformLocation(progEasu, "uDstSize");
         easu_uTexMat  = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
         rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
         rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
@@ -847,39 +851,49 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
                     "uniform mat4 uTexMatrix;\n" +
-                    "void main(){ vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy; fragColor=vec4(texture(uTex, uv).rgb,1.0);}";
-
-
+                    "uniform int uDoGamma; // 0 = no gamma, 1 = gamma 2.2 out\n" +
+                    "void main(){\n" +
+                    "  vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy;\n" +
+                    "  vec3 c = texture(uTex, uv).rgb;\n" +
+                    "  if (uDoGamma==1) c = pow(clamp(c,0.0,1.0), vec3(1.0/2.2));\n" +
+                    "  fragColor = vec4(c, 1.0);\n" +
+                    "}";
 
         // --- EASU minimal pass (OES -> 2D FBO) ---
-    private static final String FS_EASU =
+        private static final String FS_EASU =
                 "#version 300 es\n" +
                         "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                         "precision highp float;\n" +
                         "in vec2 vUv;\n" +
                         "layout(location=0) out vec4 fragColor;\n" +
                         "uniform samplerExternalOES uTex;\n" +
-                        "uniform vec2 uSrcSize;\n" +
-                        "uniform vec2 uDstSize;\n" +
+                        "uniform vec2 uInvSrcSize;   // 1.0/srcSize (precalcolato in Java)\n" +
                         "uniform mat4 uTexMatrix;\n" +
-                        "vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }\n" +
-                        "vec3 gamma(vec3 c){ return pow(max(c, vec3(0.0)), vec3(1.0/2.2)); }\n" +
                         "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
-                        "vec3 s(vec2 uv){ return lin(texture(uTex,(uTexMatrix*vec4(uv,0.0,1.0)).xy).rgb); }\n" +
                         "void main(){\n" +
-                        "  vec2 t = 1.0 / uSrcSize;\n" +
-                        "  vec2 uv = (gl_FragCoord.xy - 0.5) / uDstSize;" +
-                        "  vec3 c00=s(uv+t*vec2(-1,-1)); vec3 c10=s(uv+t*vec2(0,-1)); vec3 c20=s(uv+t*vec2(1,-1));\n" +
-                        "  vec3 c01=s(uv+t*vec2(-1, 0)); vec3 c11=s(uv);            vec3 c21=s(uv+t*vec2(1, 0));\n" +
-                        "  vec3 c02=s(uv+t*vec2(-1, 1)); vec3 c12=s(uv+t*vec2(0, 1)); vec3 c22=s(uv+t*vec2(1, 1));\n" +
-                        "  float gx=(luma(c20)+2.0*luma(c21)+luma(c22))-(luma(c00)+2.0*luma(c01)+luma(c02));\n" +
-                        "  float gy=(luma(c02)+2.0*luma(c12)+luma(c22))-(luma(c00)+2.0*luma(c10)+luma(c20));\n" +
-                        "  vec2 dir=normalize(vec2(gx,gy)+1e-5);\n" +
-                        "  vec2 off=vec2(-dir.y,dir.x)*t*0.5;\n" +
-                        "  vec3 a=s(uv-off); vec3 b=s(uv+off);\n" +
-                        "  vec3 base=(c11+c12+c21+c10)*0.25;\n" +
-                        "  vec3 up=mix(base,(a+b)*0.5,0.6);\n" +
-                        "  fragColor=vec4(gamma(clamp(up,0.0,1.0)),1.0);\n" +
+                        "  // Upscale via raster: vUv è già spaziale dst. Applica solo texMatrix.\n" +
+                        "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                        "  // 4-neighborhood (cardinali) per edge/dir + base center\n" +
+                        "  vec3 c  = texture(uTex, uv).rgb;\n" +
+                        "  vec3 rx = texture(uTex, uv + vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
+                        "  vec3 lx = texture(uTex, uv - vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
+                        "  vec3 ty = texture(uTex, uv + vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                        "  vec3 by = texture(uTex, uv - vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                        "  // Gradiente semplice (Sobel-lite)\n" +
+                        "  float gx = luma(rx) - luma(lx);\n" +
+                        "  float gy = luma(ty) - luma(by);\n" +
+                        "  float edge = clamp((abs(gx)+abs(gy))*1.5, 0.0, 1.0);\n" +
+                        "  // Base: bilineare hw (center)\n" +
+                        "  vec3 base = c;\n" +
+                        "  // Ricostruzione edge-aware: media dei due lati lungo gradiente dominante\n" +
+                        "  vec3 alongX = 0.5*(rx+lx);\n" +
+                        "  vec3 alongY = 0.5*(ty+by);\n" +
+                        "  float wx = smoothstep(0.1, 0.6, abs(gx));\n" +
+                        "  float wy = smoothstep(0.1, 0.6, abs(gy));\n" +
+                        "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
+                        "  // Mix leggero verso la ricostruzione sui bordi (0.0–0.35)\n" +
+                        "  vec3 up = mix(base, guided, 0.35*edge);\n" +
+                        "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
                         "}";
 
 private static final String FS_RCAS =
