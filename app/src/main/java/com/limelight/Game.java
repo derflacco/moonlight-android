@@ -4356,7 +4356,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
             com.limelight.preferences.PreferenceConfiguration prefConfig) {
         if (decoderRenderer == null || prefConfig == null) return;
-
         try {
             final boolean userLfr = prefConfig.preferLowerDelays;
             final int fp = prefConfig.framePacing;

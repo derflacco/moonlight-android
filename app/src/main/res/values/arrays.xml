@@ -126,6 +126,7 @@
         <item>@string/pacing_balanced</item>
         <item>@string/pacing_balanced_alt</item>
         <item>@string/pacing_smoothness</item>
+        <item>@string/pacing_gpu_raw</item>
     </string-array>
     <string-array name="video_frame_pacing_values" translatable="false">
         <item>warp2</item>
@@ -134,6 +135,7 @@
         <item>balanced</item>
         <item>cap-fps</item>
         <item>smoothness</item>
+        <item>gpu-raw</item>
     </string-array>
 
     <string-array name="analog_scrolling_names">
