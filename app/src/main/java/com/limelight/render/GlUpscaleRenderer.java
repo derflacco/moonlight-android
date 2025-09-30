@@ -288,6 +288,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             final boolean modeEasuRcas = "easu_rcas".equals(mode);
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
 
+            if (prefs != null && prefs.gpuPathMode) {
+                // Hard-bypass FSR paths in GPU Path mode
+                drawOesToScreen();
+            }
+
+            // Decide target size for *policy/telemetry*: prefer display hint if provided
             final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
             final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
             float scaleX = (float) dstTargetW / (float) srcW;

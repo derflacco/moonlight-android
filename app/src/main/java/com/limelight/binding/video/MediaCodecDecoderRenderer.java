@@ -1376,7 +1376,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
                                 }
-
+// --- Present policy per profilo di pacing ---
+                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+                                    // Immediate present using frame PTS; no decoder-side pacing
+                                    if (lastIndex >= 0) {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                            final long tsNs = presentationTimeUs * 1000L;
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                        } else {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                        }
+                                    }
+                                }
+                                else
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
                                     // Never-drop policy (do not hold output buffers)
