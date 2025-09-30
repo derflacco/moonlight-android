@@ -152,7 +152,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         int w = 0, h = 0;
         // API 30+: WindowMetrics (rotation-aware)
         try {
-            android.view.WindowManager wm = (android.view.WindowManager) ctx.getSystemService(android.view.WindowManager.class);
+            android.view.WindowManager wm = ctx.getSystemService(android.view.WindowManager.class);
             if (wm != null) {
                 try {
                     android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
@@ -486,7 +486,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glUseProgram(progRcasOes);
             bindQuad(progRcasOes);
 
-            GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / dstW, 1.0f / dstH);
+            GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
             GLES20.glUniform1f(rcasOes_uSharp, clamp01(sharp));
             GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
 
@@ -579,7 +579,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
         setTex2DFilter(true);
         GLES20.glUniform1i(rcas_uTex, 0);
-        GLES20.glUniform2f(rcas_uInvDst, 1.0f / dstW, 1.0f / dstH);
+        GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         setTex2DFilter(false);
@@ -621,13 +621,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private boolean ensureFbo(int w, int h) {
+        if (w <= 0 || h <= 0) return false;
         if (w == fbW && h == fbH && upscaledTex != 0 && fbo != 0) return true;
         createOrResizeFbo(w, h);
         return (upscaledTex != 0 && fbo != 0);
     }
 
-    private void createOrResizeFbo(int w, int h) {
-        destroyFbo();
+    private void createOrResizeFbo(int w, int h) {destroyFbo();
         fbW = w; fbH = h; curVpW = -1; curVpH = -1;
 
         GLES20.glGenFramebuffers(1, tmpIntArray, 0); fbo = tmpIntArray[0];
@@ -640,6 +640,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
 
+
+        // Bind FBO and attach color texture
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, upscaledTex, 0);
+        if (!isFboComplete()) {
+            // Tear down broken FBO
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            destroyFbo();
+            return;
+        }
+        // Unbind FBO to avoid leaking state
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         twoDNearest = false;
     }
 
