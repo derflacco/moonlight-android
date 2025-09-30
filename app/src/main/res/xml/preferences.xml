@@ -228,6 +228,13 @@
 
 
         <!-- Video Upscaling (FSR-like) -->
+
+<CheckBoxPreference
+    android:key="checkbox_gpu_path_mode"
+    android:title="@string/gpu_path_mode_title"
+    android:summary="@string/gpu_path_mode_summary"
+    android:defaultValue="false"
+    app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:key="pref_video_upscale_enable"
             android:title="@string/pref_video_upscale_enable_title"

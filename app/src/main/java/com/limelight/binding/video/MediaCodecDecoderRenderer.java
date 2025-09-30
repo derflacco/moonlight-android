@@ -1661,6 +1661,24 @@ android.media.MediaFormat __inF = null, __outF = null;
 
 
 // --- Present policy per profilo di pacing ---
+                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+                                    // Immediate present using frame PTS; no decoder-side pacing
+                                    if (lastIndex >= 0) {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                            final long tsNs = presentationTimeUs * 1000L;
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            lastPresentNs = System.nanoTime();
+                                        } else {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            lastPresentNs = System.nanoTime();
+                                        }
+                                        recentDrops = 0;
+                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        statsUpdated = true;
+                                    }
+                                }
+                                else
+
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
                                     // Never drop; present ASAP in order
                                     final long nowNs = System.nanoTime();

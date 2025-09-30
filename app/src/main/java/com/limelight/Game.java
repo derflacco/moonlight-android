@@ -4391,6 +4391,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             com.limelight.preferences.PreferenceConfiguration prefConfig) {
         if (decoderRenderer == null) return;
         try {
+            if (prefConfig != null && prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+                try {
+                    decoderRenderer.setPreferLowerDelays(false);
+                    decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
+                    decoderRenderer.setForceTightThresholds(true);
+                    com.limelight.LimeLog.info("Pacing=GPU_RAW: decoder immediate-present, no decoder-side pacing");
+                } catch (Throwable ignored) {}
+                return;
+            }
+
             // Nuova semantica LFR + AntiLag:
             // - Se l'utente abilita LFR ma il pacing è Balanced-class (BALANCED | CAP_FPS | MAX_SMOOTHNESS)
             //   → attiva SOLO AntiLag (percorso managed), NON latest-only

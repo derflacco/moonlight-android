@@ -15,6 +15,7 @@ public class PreferenceConfiguration {
     public boolean enableAsyncDecoder = false;
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
+    public boolean gpuPathMode;
     public String  videoUpscaleMode;     // "none", "rcas", or "easu_rcas"
     public int     videoUpscaleSharpness; // 0..100
 
@@ -42,6 +43,8 @@ public class PreferenceConfiguration {
     private static final String VIDEO_UPSCALE_ENABLE_PREF_STRING = "pref_video_upscale_enable";
     private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "none", "rcas", or "easu_rcas"
     private static final String VIDEO_UPSCALE_SHARP_PREF_STRING  = "pref_video_upscale_sharpness"; // 0..100
+
+    public static final String CHECKBOX_GPU_PATH_MODE = "checkbox_gpu_path_mode";
 
     private static final String DEFAULT_VIDEO_UPSCALE_MODE = "rcas";
     private static final int    DEFAULT_VIDEO_UPSCALE_SHARP = 35;
@@ -237,6 +240,7 @@ public class PreferenceConfiguration {
     public static final int FRAME_PACING_BALANCED = 1;
     public static final int FRAME_PACING_CAP_FPS = 2;
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
+    public static final int FRAME_PACING_GPU_RAW = 4;
 
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
@@ -679,6 +683,9 @@ private static int getFramePacingValue(Context context) {
         else if (str.equals("smoothness")) {
             return FRAME_PACING_MAX_SMOOTHNESS;
         }
+        else if (str.equals("gpu-raw")) {
+            return FRAME_PACING_GPU_RAW;
+        }
         else {
             // Should never get here
             return FRAME_PACING_MIN_LATENCY;
@@ -1071,6 +1078,17 @@ private static int getFramePacingValue(Context context) {
             try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
         }
+
+        // GPU Path Mode (forces FSR None and GPU_RAW pacing)
+        try {
+            config.gpuPathMode = prefs.getBoolean(CHECKBOX_GPU_PATH_MODE, false);
+        } catch (Throwable ignored) { config.gpuPathMode = false; }
+        if (config.gpuPathMode) {
+            config.videoUpscaleEnable = false;
+            config.videoUpscaleMode = "none";
+            config.framePacing = FRAME_PACING_GPU_RAW;
+        }
+
         return config;
     }
 
