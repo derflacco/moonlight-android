@@ -890,6 +890,22 @@ try {
                     "  gl_Position = vec4(aPos, 0.0, 1.0);\n" +
                     "}";
 
+    private static final String FS_OES_BLIT =
+            "#version 300 es\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "precision highp float;\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "uniform int uDoGamma; // 0 = no gamma, 1 = gamma 2.2 out\n" +
+                    "void main(){\n" +
+                    "  vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy;\n" +
+                    "  vec3 c = texture(uTex, uv).rgb;\n" +
+                    "  if (uDoGamma==1) c = pow(clamp(c,0.0,1.0), vec3(1.0/2.2));\n" +
+                    "  fragColor = vec4(c, 1.0);\n" +
+                    "}";
+
         // --- EASU minimal pass (OES -> 2D FBO) ---
         private static final String FS_EASU =
                 "#version 300 es\n" +
