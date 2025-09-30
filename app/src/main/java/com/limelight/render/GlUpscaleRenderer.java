@@ -530,7 +530,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
         setTex2DFilter(true);
         GLES20.glUniform1i(rcas_uTex, 0);
-        GLES20.glUniform2f(rcas_uInvDst, 1.0f / dstW, 1.0f / dstH);
+        GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         if (__fsr.enabled) { __fsr.tocRcas(); }
