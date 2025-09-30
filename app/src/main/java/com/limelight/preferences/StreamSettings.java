@@ -162,6 +162,55 @@ public class StreamSettings extends AppCompatActivity {
     }
 
     public static class SettingsFragment extends PreferenceFragmentCompat {
+
+// --- UI lock helpers (Direct Present / FSR) ---
+private final SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
+        (sp, key) -> {
+            if ("checkbox_gpu_path_mode".equals(key)
+                    || "pref_video_upscale_enable".equals(key)) {
+                updateLocks();
+            }
+        };
+
+private void updateLocks() {
+    SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
+    boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);   // Direct Present
+    boolean fsrOn   = sp.getBoolean("pref_video_upscale_enable", false);
+
+    // Rules:
+    // - Direct Present ON -> lock: frame pacing, LFR balance, Tight VSync, FSR enable
+    // - FSR ON (no gpuPath) -> lock: frame pacing, LFR balance (Tight free)
+    boolean lockAll   = gpuPath;
+    boolean lockFromF = (!gpuPath && fsrOn);
+
+    boolean lockPacing = lockAll || lockFromF; // frame_pacing
+    boolean lockLfr    = lockAll || lockFromF; // pref_low_latency_frame_balance
+    boolean lockFsrEn  = lockAll;              // pref_video_upscale_enable
+
+    Preference pacing = findPreference("frame_pacing");
+    Preference lfrBal = findPreference("pref_low_latency_frame_balance");
+    Preference fsrEn  = findPreference("pref_video_upscale_enable");
+
+    if (pacing != null) pacing.setEnabled(!lockPacing);
+    if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
+    if (fsrEn  != null)  fsrEn.setEnabled(!lockFsrEn);
+}
+
+@Override
+public void onResume() {
+    super.onResume();
+    SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
+    sp.registerOnSharedPreferenceChangeListener(lockWatcher);
+    updateLocks();
+}
+
+@Override
+public void onPause() {
+    super.onPause();
+    SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
+    sp.unregisterOnSharedPreferenceChangeListener(lockWatcher);
+}
+
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
         private boolean nativeFramerateShown = false;
 
@@ -956,6 +1005,9 @@ public class StreamSettings extends AppCompatActivity {
                     }
                 });
             }
+            // Apply locks after building the screen
+            updateLocks();
+
         }
 
         private void removeEntryFromListAndSetValue(String resolutionPrefString, String entryToRemove, String nextDefault) {
