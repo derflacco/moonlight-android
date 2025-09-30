@@ -123,11 +123,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // SurfaceTexture transform
     private final float[] texMatrix = new float[16];
-    // Timestamp dell’ultimo frame acquisito da SurfaceTexture (ns, clock monotonic)
+    // Timestamp dell'ultimo frame acquisito da SurfaceTexture (ns, clock monotonic)
     private long lastFrameTexTimestampNs = 0L;
 
     // Presentation size hint (display-sized buffer), if known
     private volatile int hintOutW = 0, hintOutH = 0;
+
+    // Performance optimizations
+    private final int[] tmpIntArray = new int[1]; // Reusable int array
+
     /** Optional: tell the renderer the actual on-screen buffer size (e.g., display resolution).
      *  Used only for policy/telemetry. Actual upscale still needs a display-sized window surface. */
     public void setPresentationSizeHint(int w, int h) {
@@ -191,8 +195,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
     private int swapFailStreak = 0;
     private boolean fixedStateApplied = false;
-    // Temp per evitare allocazioni ripetute
-    private final int[] tmpInt1 = new int[1];
+
 
     // Threading
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -228,9 +231,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (decoderInputSurface != null) return decoderInputSurface;
 
         // Create OES texture + SurfaceTexture
-        int[] ids = new int[1];
-        GLES20.glGenTextures(1, ids, 0);
-        oesTexId = ids[0];
+        GLES20.glGenTextures(1, tmpIntArray, 0);
+        oesTexId = tmpIntArray[0];
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
@@ -597,8 +599,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!isGlReady()) return;
         int w = 0, h = 0;
         try {
-            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_WIDTH,  tmpInt1, 0);  w = tmpInt1[0];
-            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_HEIGHT, tmpInt1, 0); h = tmpInt1[0];
+            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_WIDTH,  tmpIntArray, 0);  w = tmpIntArray[0];
+            EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_HEIGHT, tmpIntArray, 0); h = tmpIntArray[0];
         } catch (Throwable ignored) {}
         if (w > 0 && h > 0 && (w != fbW || h != fbH)) {
             createOrResizeFbo(w, h);
@@ -628,10 +630,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         destroyFbo();
         fbW = w; fbH = h; curVpW = -1; curVpH = -1;
 
-        int[] ids = new int[1];
-        GLES20.glGenFramebuffers(1, ids, 0); fbo = ids[0];
+        GLES20.glGenFramebuffers(1, tmpIntArray, 0); fbo = tmpIntArray[0];
 
-        GLES20.glGenTextures(1, ids, 0); upscaledTex = ids[0];
+        GLES20.glGenTextures(1, tmpIntArray, 0); upscaledTex = tmpIntArray[0];
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
         GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
@@ -652,9 +653,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void destroyFbo() {
-        int[] ids = new int[1];
-        if (upscaledTex != 0) { ids[0] = upscaledTex; GLES20.glDeleteTextures(1, ids, 0); upscaledTex = 0; }
-        if (fbo != 0)        { ids[0] = fbo;        GLES20.glDeleteFramebuffers(1, ids, 0); fbo = 0; }
+        if (upscaledTex != 0) { tmpIntArray[0] = upscaledTex; GLES20.glDeleteTextures(1, tmpIntArray, 0); upscaledTex = 0; }
+        if (fbo != 0)        { tmpIntArray[0] = fbo;        GLES20.glDeleteFramebuffers(1, tmpIntArray, 0); fbo = 0; }
     }
 
     private void initEglAndGl() {
@@ -691,12 +691,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         quadPos.put(POS).position(0);
         quadUv.put(UV).position(0);
 
-        int[] ids = new int[1];
         // VBOs
-        GLES20.glGenBuffers(1, ids, 0); vboPos = ids[0];
+        GLES20.glGenBuffers(1, tmpIntArray, 0); vboPos = tmpIntArray[0];
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadPos.capacity()*4, quadPos, GLES20.GL_STATIC_DRAW);
-        GLES20.glGenBuffers(1, ids, 0); vboUv = ids[0];
+        GLES20.glGenBuffers(1, tmpIntArray, 0); vboUv = tmpIntArray[0];
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadUv.capacity()*4, quadUv, GLES20.GL_STATIC_DRAW);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
@@ -752,10 +751,9 @@ try {
 
     private void destroyGl() {
         destroyFbo();
-        int[] ids = new int[1];
         if (hasVao && vao != 0) { int[] vaoId = new int[]{vao}; try { GLES30.glDeleteVertexArrays(1, vaoId, 0); } catch (Throwable ignored) {} vao = 0; hasVao = false; }
-        if (vboPos != 0) { ids[0] = vboPos; GLES20.glDeleteBuffers(1, ids, 0); vboPos = 0; }
-        if (vboUv  != 0) { ids[0] = vboUv;  GLES20.glDeleteBuffers(1, ids, 0); vboUv  = 0; }
+        if (vboPos != 0) { tmpIntArray[0] = vboPos; GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboPos = 0; }
+        if (vboUv  != 0) { tmpIntArray[0] = vboUv;  GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboUv  = 0; }
         if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
         if (progEasu != 0) { GLES20.glDeleteProgram(progEasu); progEasu = 0; }
         if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
