@@ -33,13 +33,20 @@ static bool receivedFullFrame;
 #define RTP_QUEUE_DELAY 12
 
 // This is the desired number of video packets that can be
-// stored in the socket's receive buffer. 2048 is chosen
-// because it should be large enough for all reasonable
-// frame sizes (probably 2 or 3 frames) without using too
-// much kernel memory with larger packet sizes. It also
-// can smooth over transient pauses in network traffic
-// and subsequent packet/frame bursts that follow.
-#define RTP_RECV_PACKETS_BUFFERED 4096
+// stored in the socket's receive buffer.
+// Make it dynamic via a target that depends on session hints (bitrate/FPS/HDR)
+// and falls within a safe clamp range.
+#define RTP_RECV_PACKETS_MIN   2048
+#define RTP_RECV_PACKETS_MAX   8192
+
+static int g_recv_packets_auto = 4096;  // auto start
+static int clampi_vs(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+// Auto-only sizing: start at 2048, clamp 1k–8k
+static int compute_recv_packets_buffered(void) {
+    int base = g_recv_packets_auto > 0 ? g_recv_packets_auto : 4096;
+    return clampi_vs(base, RTP_RECV_PACKETS_MIN, RTP_RECV_PACKETS_MAX);
+}
 
 // Initialize the video stream
 void initializeVideoStream(void) {
@@ -352,8 +359,9 @@ int startVideoStream(void* rendererContext, int drFlags) {
         return err;
     }
 
+    int recv_packets = compute_recv_packets_buffered();
     rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen,
-                              RTP_RECV_PACKETS_BUFFERED * (StreamConfig.packetSize + MAX_RTP_HEADER_SIZE),
+                              recv_packets * (StreamConfig.packetSize + MAX_RTP_HEADER_SIZE),
                               SOCK_QOS_TYPE_VIDEO);
     if (rtpSocket == INVALID_SOCKET) {
         VideoCallbacks.cleanup();
