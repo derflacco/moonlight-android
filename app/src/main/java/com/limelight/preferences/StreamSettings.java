@@ -185,14 +185,17 @@ private void updateLocks() {
 
     boolean lockPacing = lockAll || lockFromF; // frame_pacing
     boolean lockLfr    = lockAll || lockFromF; // pref_low_latency_frame_balance
+    //boolean lockTight  = lockAll;              // checkbox_forceTightThresholds
     boolean lockFsrEn  = lockAll;              // pref_video_upscale_enable
 
     Preference pacing = findPreference("frame_pacing");
     Preference lfrBal = findPreference("pref_low_latency_frame_balance");
+    //Preference tight  = findPreference("checkbox_forceTightThresholds");
     Preference fsrEn  = findPreference("pref_video_upscale_enable");
 
     if (pacing != null) pacing.setEnabled(!lockPacing);
     if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
+    //if (tight  != null) tight.setEnabled(!lockTight);
     if (fsrEn  != null)  fsrEn.setEnabled(!lockFsrEn);
 }
 
