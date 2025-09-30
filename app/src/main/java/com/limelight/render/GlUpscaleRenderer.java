@@ -528,8 +528,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (__fsr.enabled) { __fsr.ticRcas(); }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+        setTex2DFilter(true);
         GLES20.glUniform1i(rcas_uTex, 0);
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / dstW, 1.0f / dstH);
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
@@ -725,7 +724,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         progBlit = linkProgram(progVs, FS_OES_BLIT);
         progEasu = linkProgram(progVs, FS_EASU);
         progRcas = linkProgram(progVs, FS_RCAS);
-        progRcasOes = 0; // disabled due to black screen on some GPUs
+// Try to link OES variant (single-pass RCAS) with specialized VS to precompute steps
+try {
+    int vsRcasOes = compileShader(GLES20.GL_VERTEX_SHADER, VS_RCAS_OES);
+    progRcasOes = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n" + FS_RCAS);
+    rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
+    rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
+    rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
+    rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
+} catch (Throwable t) {
+    progRcasOes = 0; // keep fallback 2D path
+}
         easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
         easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
         easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
@@ -860,20 +869,25 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "out vec2 vUv;\n" +
                     "void main(){ vUv=aUv; gl_Position=vec4(aPos,0.0,1.0);}";
 
-    private static final String FS_OES_BLIT =
+    // Specialized VS for RCAS_OES: precompute uv0/stepX/stepY in vertex to reduce per-fragment ALU
+    private static final String VS_RCAS_OES =
             "#version 300 es\n" +
-                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "precision highp float;\n" +
-                    "in vec2 vUv;\n" +
-                    "layout(location=0) out vec4 fragColor;\n" +
-                    "uniform samplerExternalOES uTex;\n" +
+                    "layout(location=0) in vec2 aPos;\n" +
+                    "layout(location=1) in vec2 aUv;\n" +
+                    "out vec2 vUv;\n" +
+                    "out vec2 vUv0;\n" +
+                    "out vec2 vStepX;\n" +
+                    "out vec2 vStepY;\n" +
                     "uniform mat4 uTexMatrix;\n" +
-                    "uniform int uDoGamma; // 0 = no gamma, 1 = gamma 2.2 out\n" +
+                    "uniform vec2 uInvDstSize;\n" +
                     "void main(){\n" +
-                    "  vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy;\n" +
-                    "  vec3 c = texture(uTex, uv).rgb;\n" +
-                    "  if (uDoGamma==1) c = pow(clamp(c,0.0,1.0), vec3(1.0/2.2));\n" +
-                    "  fragColor = vec4(c, 1.0);\n" +
+                    "  vUv = aUv;\n" +
+                    "  vec2 texel = uInvDstSize;\n" +
+                    "  vUv0   = (uTexMatrix * vec4(aUv, 0.0, 1.0)).xy;\n" +
+                    "  vStepX = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  vStepY = (uTexMatrix * vec4(0.0, texel.y, 0.0, 0.0)).xy;\n" +
+                    "  gl_Position = vec4(aPos, 0.0, 1.0);\n" +
                     "}";
 
         // --- EASU minimal pass (OES -> 2D FBO) ---
@@ -912,61 +926,61 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                         "  vec3 up = mix(base, guided, 0.35*edge);\n" +
                         "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
                         "}";
-
-private static final String FS_RCAS =
+    private static final String FS_RCAS =
             "#version 300 es\n" +
-                    "precision highp float;\n" +
+                    "#ifdef USE_OES\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "#endif\n" +
+                    "precision mediump float;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
+                    "#ifdef USE_OES\n" +
+                    "uniform samplerExternalOES uTexOES;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "#else\n" +
                     "uniform sampler2D uUpscaled;\n" +
-                    "uniform vec2 uInvDstSize;\n" +
+                    "#endif\n" +
+                    "uniform vec2  uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
                     "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "#ifdef USE_OES\n" +
                     "void main(){\n" +
-                    "  vec2 texel=uInvDstSize; vec2 uv=vUv;\n" +
-                    "  vec3 c = texture(uUpscaled, uv).rgb;\n" +
-                    "  if(uSharp<=0.001){ fragColor=vec4(c,1.0); return; }\n" +
-                    "  // 4 neighbors\n" +
-                    "  vec3 rx = texture(uUpscaled, uv + vec2(texel.x, 0.0)).rgb;\n" +
-                    "  vec3 lx = texture(uUpscaled, uv - vec2(texel.x, 0.0)).rgb;\n" +
-                    "  vec3 ty = texture(uUpscaled, uv + vec2(0.0, texel.y)).rgb;\n" +
-                    "  vec3 by = texture(uUpscaled, uv - vec2(0.0, texel.y)).rgb;\n" +
-                    "  float lc = luma(c); float lrx=luma(rx); float llx=luma(lx); float lty=luma(ty); float lby=luma(by);\n" +
-                    "  // Bilateral base (no extra fetches)\n" +
-                    "  float inv2SigR2=1.0/(2.0*0.15*0.15);\n" +
-                    "  float ws=0.9; float wsum=1.0; vec3 sum=c; float dr; float w;\n" +
-                    "  dr=lrx-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=rx*w; wsum+=w;\n" +
-                    "  dr=llx-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=lx*w; wsum+=w;\n" +
-                    "  dr=lty-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=ty*w; wsum+=w;\n" +
-                    "  dr=lby-lc; w=exp(-(dr*dr)*inv2SigR2)*ws; sum+=by*w; wsum+=w;\n" +
-                    "  vec3 b = sum / max(wsum, 1e-5);\n" +
-                    "  // Gradients (axis + diagonal approximations)\n" +
-                    "  float gx = lrx - llx;\n" +
-                    "  float gy = lty - lby;\n" +
-                    "  float g45  = 0.5*((lrx+lty) - (llx+lby));\n" +
-                    "  float g135 = 0.5*((lrx+lby) - (llx+lty));\n" +
-                    "  float edge = sqrt(gx*gx + gy*gy);\n" +
-                    "  float edgeW = 1.0/(1.0 + 3.0*edge);\n" +
-                    "  float k = 1.6*pow(clamp(uSharp,0.0,1.0),0.85);\n" +
-                    "  // Detail with deadzone\n" +
-                    "  vec3 detail = c - b; vec3 sgn=sign(detail);\n" +
+                    "  vec2 texel = uInvDstSize;\n" +
+                    "  // Precompute base uv and steps in texture space to evitare 5 moltiplicazioni di matrice\n" +
+                    "  vec2 uv0    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  vec2 stepX  = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  vec2 stepY  = (uTexMatrix * vec4(0.0, texel.y, 0.0, 0.0)).xy;\n" +
+                    "  vec3 c  = texture(uTexOES, uv0).rgb;\n" +
+                    "  vec3 rx = texture(uTexOES, uv0 + stepX).rgb;\n" +
+                    "  vec3 lx = texture(uTexOES, uv0 - stepX).rgb;\n" +
+                    "  vec3 ty = texture(uTexOES, uv0 + stepY).rgb;\n" +
+                    "  vec3 by = texture(uTexOES, uv0 - stepY).rgb;\n" +
+                    "#else\n" +
+                    "void main(){\n" +
+                    "  vec2 texel = uInvDstSize;\n" +
+                    "  vec2 uv0 = vUv;\n" +
+                    "  vec3 c  = texture(uUpscaled, uv0).rgb;\n" +
+                    "  vec3 rx = texture(uUpscaled, uv0 + vec2(texel.x, 0.0)).rgb;\n" +
+                    "  vec3 lx = texture(uUpscaled, uv0 - vec2(texel.x, 0.0)).rgb;\n" +
+                    "  vec3 ty = texture(uUpscaled, uv0 + vec2(0.0, texel.y)).rgb;\n" +
+                    "  vec3 by = texture(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
+                    "#endif\n" +
+                    "  // 4-tap unsharp mask (molto cheap)\n" +
+                    "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
+                    "  vec3 detail = c - blur4;\n" +
+                    "  // deadzone soft per rumore + clamp envelope anti-halo\n" +
+                    "  vec3 sgn = sign(detail);\n" +
                     "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
+                    "  float gx = luma(rx) - luma(lx);\n" +
+                    "  float gy = luma(ty) - luma(by);\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy)); // cheap, niente sqrt\n" +
+                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);        // niente pow()\n" +
                     "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
-                    "  // Local envelope clamp to reduce overshoot\n" +
                     "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
                     "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
-                    "  float pad = 0.02 + 0.10*clamp(uSharp,0.0,1.0);\n" +
+                    "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
                     "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
-                    "  // AA-lite: include diagonal edge cues, very small mix\n" +
-                    "  float ax = abs(gx), ay = abs(gy);\n" +
-                    "  float a45 = abs(g45), a135 = abs(g135);\n" +
-                    "  float ex = smoothstep(0.04, 0.16, ax) * (1.0 - smoothstep(0.04, 0.16, ay));\n" +
-                    "  float ey = smoothstep(0.04, 0.16, ay) * (1.0 - smoothstep(0.04, 0.16, ax));\n" +
-                    "  float e45  = smoothstep(0.04, 0.16, a45);\n" +
-                    "  float e135 = smoothstep(0.04, 0.16, a135);\n" +
-                    "  float aaMix = 0.07 * clamp(ex + ey + 0.7*(e45+e135), 0.0, 1.0);\n" +
-                    "  vec3 outaa = mix(outc, b, aaMix);\n" +
-                    "  fragColor = vec4(outaa,1.0);\n" +
+                    "  fragColor = vec4(outc, 1.0);\n" +
                     "}";
 
     // ===== FSR telemetry controls =====
