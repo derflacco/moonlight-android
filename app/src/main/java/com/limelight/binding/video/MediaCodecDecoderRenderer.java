@@ -1,5 +1,7 @@
 package com.limelight.binding.video;
 
+
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -875,7 +877,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                     @Override
                     public void onOutputFormatChanged(android.media.MediaCodec codec, android.media.MediaFormat format) {
-                        try { LimeLog.info("[Video] MediaCodec async output format changed"); } catch (Throwable ignored) {}
+                        try { LimeLog.info("[Video] MediaCodec async output format changed");
+                            try {
+                                int __std = format.containsKey(android.media.MediaFormat.KEY_COLOR_STANDARD) ? format.getInteger(android.media.MediaFormat.KEY_COLOR_STANDARD) : -1;
+                                int __tr  = format.containsKey(android.media.MediaFormat.KEY_COLOR_TRANSFER) ? format.getInteger(android.media.MediaFormat.KEY_COLOR_TRANSFER) : -1;
+                                int __rng = format.containsKey(android.media.MediaFormat.KEY_COLOR_RANGE) ? format.getInteger(android.media.MediaFormat.KEY_COLOR_RANGE) : -1;
+                                java.nio.ByteBuffer __hdr = null;
+                                try { __hdr = format.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+                                byte[] __hdrArr = null; if (__hdr != null) { __hdrArr = new byte[__hdr.remaining()]; __hdr.get(__hdrArr); }
+                                // Inform GL upscaler if supported
+                                try { if (glUpscaler != null) __fsrSetHdrColorInfo(glUpscaler, __std, __tr, __rng, __hdrArr); } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {}
+                        } catch (Throwable ignored) {}
                     }
                 }, cb);
             } catch (Throwable ignored) {}
@@ -1072,10 +1085,74 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return initializeDecoder(false);
     }
     private Object glUpscaler; // usato via reflection
+    // HDR transition guard
+    private final AtomicBoolean hdrTransition = new AtomicBoolean(false);
+    private long hdrTransitionEndMs = 0L;
+
     private android.view.Surface decoderInputSurfaceForUpscale;
 
 
     // All threads that interact with the MediaCodec instance must call this function regularly!
+
+    // Begin a short window where we avoid presenting frames (to prevent RTP backlog during HDR switch)
+    private void beginHdrTransitionWindow(int durationMs) {
+        try {
+            hdrTransition.set(true);
+            hdrTransitionEndMs = android.os.SystemClock.elapsedRealtime() + Math.max(200, durationMs);
+            if (videoDecoder != null) {
+                try { videoDecoder.flush(); } catch (Throwable ignored) {}
+            }
+            // Try to soften the GL upscaler to reduce GPU spikes
+            try { if (glUpscaler != null) __fsrCall(glUpscaler, "temporarilyBypassEasu"); } catch (Throwable ignored) {}
+            try { if (glUpscaler != null) __fsrCallWithInt(glUpscaler, "temporarilyBypassEasu", 1000); } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
+    }
+
+    // Wrapper to safely release output buffer considering HDR transition window
+    private void safeReleaseOutputBufferNow(android.media.MediaCodec dec, int index, boolean render) {
+        if (hdrTransition.get()) {
+            if (android.os.SystemClock.elapsedRealtime() < hdrTransitionEndMs) {
+                render = false;
+            } else {
+                hdrTransition.set(false);
+            }
+        }
+        try { dec.releaseOutputBuffer(index, render); } catch (Throwable ignored) {}
+    }
+    private void safeReleaseOutputBufferAt(android.media.MediaCodec dec, int index, long renderTimeNs) {
+        boolean doRender = true;
+        if (hdrTransition.get()) {
+            if (android.os.SystemClock.elapsedRealtime() < hdrTransitionEndMs) {
+                doRender = false;
+            } else {
+                hdrTransition.set(false);
+            }
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                if (doRender) dec.releaseOutputBuffer(index, renderTimeNs);
+                else dec.releaseOutputBuffer(index, /*render*/ false);
+            } else {
+                dec.releaseOutputBuffer(index, doRender);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // Reflection helper: set HDR color info on upscaler if present
+    private void __fsrSetHdrColorInfo(Object upscaler, int std, int tr, int rng, byte[] hdr10) {
+        if (upscaler == null) return;
+        try {
+            java.lang.reflect.Method m = upscaler.getClass().getMethod("setHdrColorInfo", int.class, int.class, int.class, byte[].class);
+            m.invoke(upscaler, std, tr, rng, hdr10);
+        } catch (Throwable ignored) {}
+    }
+    private void __fsrCallWithInt(Object upscaler, String method, int val) {
+        if (upscaler == null) return;
+        try {
+            java.lang.reflect.Method m = upscaler.getClass().getMethod(method, int.class);
+            m.invoke(upscaler, val);
+        } catch (Throwable ignored) {}
+    }
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
         // NB: We cannot check 'stopping' here because we could end up bailing in a partially
         // quiesced state that will cause the quiesced threads to never wake up.
@@ -1660,7 +1737,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             // Drena tutto, tieni solo l'ultimo valido
                             while (__idx >= 0) {
                                 if (__last >= 0) {
-                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                    try { safeReleaseOutputBufferNow(videoDecoder, __last, false); } catch (Throwable ignored) {}
                                 }
                                 __last = __idx;
                                 __lastPtsUs = __tmpInfo.presentationTimeUs;
@@ -1669,7 +1746,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                             if (__last >= 0) {
                                 // Present ASAP (boolean): il compositor allinea al prossimo VSYNC
-                                try { videoDecoder.releaseOutputBuffer(__last, true); } catch (Throwable ignored) {}
+                                try { safeReleaseOutputBufferNow(videoDecoder, __last, true); } catch (Throwable ignored) {}
 
                                 // --- STATISTICHE: ≤1 incremento per periodo reale, senza Choreographer ---
                                 final float rr = Math.max(1f, refreshRate);
@@ -1747,7 +1824,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
                                 while ((outIndex = nextOutputIndex(info, getOutputDequeueTimeoutUs())) >= 0) {
-                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    safeReleaseOutputBufferNow(videoDecoder, lastIndex, false);
                                     frameDropped = true; // we're discarding the oldest one
 
                                     numFramesOut++;
@@ -1763,7 +1840,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     if (lastIndex >= 0) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                             final long tsNs = presentationTimeUs * 1000L;
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
                                             lastPresentNs = System.nanoTime();
                                             try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         } else {
@@ -1801,7 +1878,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                     if (lastIndex >= 0) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
                                         } else {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                         }
@@ -1841,7 +1918,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                     if (lastIndex >= 0) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
                                             lastPresentNs = tsNs;
                                             try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         } else {
@@ -1899,7 +1976,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             continue; // niente stats sui frame droppati
                                         }
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                        safeReleaseOutputBufferNow(videoDecoder, lastIndex, true);
                                         lastPresentNs = nowNs;
                                         try { updateRawPresentMetrics(nowNs); } catch (Throwable ignored) {}
                                         if (!isLate) lateStreak = 0;
@@ -1912,13 +1989,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     } else {
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
                                             long __ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, __ts);
                                         } else {
                                             if (android.os.Build.VERSION.SDK_INT >= 21) {
                                                 long __ts = System.nanoTime();
-                                                videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                                safeReleaseOutputBufferAt(videoDecoder, lastIndex, __ts);
                                             } else {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                safeReleaseOutputBufferNow(videoDecoder, lastIndex, false);
                                             }
                                         }
 
@@ -1942,7 +2019,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         Integer __idx = outputBufferQueue.poll();
-                                        if (__idx != null) { videoDecoder.releaseOutputBuffer(__idx, false); }
+                                        if (__idx != null) { safeReleaseOutputBufferNow(videoDecoder, __idx, false); }
                                         frameDropped = true;
                                     } catch (IllegalStateException e) {
                                         // codec in stato illegale → gestisci e termina il thread (il finally farà recovery)
@@ -2278,11 +2355,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 return;
             }
 
+            // HDR transition guard (short settle window)
+            beginHdrTransitionWindow(800);
+            com.limelight.LimeLog.info("HDR setHdrMode(" + enabled + "), transition=800ms");
+
+            // Temporarily bypass FSR to avoid GPU/Surface spikes (no-op if method absent)
+            try { if (glUpscaler != null) __fsrCallWithInt(glUpscaler, "temporarilyBypassEasu", 800); } catch (Throwable ignored) {}
+
+
             // If we reach this point, we need to restart the MediaCodec instance to
             // pick up the HDR metadata change. This will happen on the next input
             // or output buffer.
 
             // HACK: Reset codec recovery attempt counter, since this is an expected "recovery"
+
             codecRecoveryAttempts = 0;
 
             // Promote None/Flush to Restart and leave Reset alone

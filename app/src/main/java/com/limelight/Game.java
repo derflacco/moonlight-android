@@ -66,6 +66,7 @@ import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
@@ -112,7 +113,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.preference.PreferenceManager;
-
+import android.util.Log;
 import android.os.Looper;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
@@ -143,6 +144,46 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         OnSystemUiVisibilityChangeListener, GameGestures, StreamContainer.InputCallbacks,
         ExternalControllerView.InputCallbacks,
         PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
+
+    // Receiver for in-app preference toggles (e.g., HDR on/off while streaming)
+    private final android.content.BroadcastReceiver prefsReceiver = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(android.content.Context ctx, android.content.Intent intent) {
+            if (intent == null || intent.getAction() == null) return;
+            final String action = intent.getAction();
+            if (ACTION_HDR_TOGGLE.equals(action)) {
+                boolean enabled = intent.getBooleanExtra("enabled", false);
+                try { onHdrToggle(enabled); } catch (Throwable ignored) {}
+            }
+        }
+    };
+
+    public static final String ACTION_HDR_TOGGLE = "com.limelight.ACTION_HDR_TOGGLE";
+
+    // Forward HDR toggle into decoder renderer if available
+    public void onHdrToggle(boolean enabled) {
+        if (decoderRenderer == null) return;
+
+        try {
+            // preferisci la call diretta se disponibile
+            decoderRenderer.setHdrMode(enabled, null);
+            com.limelight.LimeLog.info("HDR toggle -> direct setHdrMode(" + enabled + ")");
+        } catch (Throwable directFail) {
+            try {
+                // fallback reflection (vecchie firme)
+                java.lang.reflect.Method m =
+                        decoderRenderer.getClass().getMethod("setHdrMode", boolean.class, byte[].class);
+                m.invoke(decoderRenderer, enabled, null);
+                com.limelight.LimeLog.info("HDR toggle -> reflection setHdrMode(" + enabled + ")");
+            } catch (Throwable reflectFail) {
+                // log robusto con stack trace completo in una sola riga
+                com.limelight.LimeLog.warning("HDR toggle failed: " + Log.getStackTraceString(reflectFail));
+            }
+        }
+    }
+
+
+
+
     public static Game instance;
 
     private int lastButtonState = 0;
@@ -357,6 +398,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(prefsReceiver, new IntentFilter(ACTION_HDR_TOGGLE), Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(prefsReceiver, new IntentFilter(ACTION_HDR_TOGGLE));
+            }
+        } catch (Throwable ignored) {}
 
         if (prefConfig.fullScreen) {
             // Full-screen
@@ -690,7 +738,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                         // We must use commit because the app will crash when we return from this function
                         tombstonePrefs.edit().putInt("CrashCount", tombstonePrefs.getInt("CrashCount", 0) + 1).commit();
-                                 reportedCrash = true;
+                        reportedCrash = true;
                     }
                 },
                 tombstonePrefs.getInt("CrashCount", 0),
@@ -1718,6 +1766,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onDestroy() {
+        try {
+            try { unregisterReceiver(prefsReceiver); } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
         super.onDestroy();
 
         instance = null;

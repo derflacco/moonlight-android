@@ -11,6 +11,8 @@ import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.view.Surface;
+import androidx.annotation.Keep;
+import android.os.SystemClock;
 
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.LimeLog;
@@ -35,7 +37,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * - SDR/sRGB only. For HDR do tone-map on the server before encode.
  * - A small near-native bypass avoids unnecessary blur when scale≈1x.
  */
-public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
+public final @Keep
+class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
+    // Temporary EASU bypass window (used during HDR switch)
+    private volatile long fsrBypassUntilMs = 0L;
+
     // RCAS_OES health-check state
     private boolean rcasOesChecked = false;
     private boolean rcasOesHealthy = false;
@@ -308,6 +314,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     // ====== Loop ======
+
+    /** Temporarily bypass EASU/RCAS and draw OES directly for the given window */
+    @Keep
+    public void temporarilyBypassEasu(int durationMs) {
+        fsrBypassUntilMs = SystemClock.elapsedRealtime() + Math.max(100, durationMs);
+    }
+
+    /** Accepts HDR color info (ignored for now, pipeline is SDR-only) */
+    @Keep
+    public void setHdrColorInfo(int std, int tr, int rng, byte[] hdr10) {
+        // Intentionally no-op: we don't implement tonemapping here yet,
+        // but exposing this keeps the pipeline stable across format changes.
+    }
     private void renderLoop() {
         boolean sizeChangedSinceLastSwap = true; // forza un primo draw
         while (running.get()) {
@@ -324,6 +343,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
                 EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
             }
+            // Bypass during HDR transition window
+            if (SystemClock.elapsedRealtime() < fsrBypassUntilMs) {
+                // Draw OES directly to screen without FSR passes
+                drawOesToScreen();
+                // Present
+                try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
+                boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+                if (!__swapped) { int err = EGL14.eglGetError(); try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed during bypass: 0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
+                continue;
+            }
+
             if (!fixedStateApplied) { applyFixedState(); }
 
             boolean didUpdateTex = false;

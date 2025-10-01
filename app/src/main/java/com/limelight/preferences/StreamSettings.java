@@ -1,4 +1,6 @@
 package com.limelight.preferences;
+import com.limelight.Game;
+
 
 import static com.limelight.utils.ServerHelper.getActiveDisplay;
 
@@ -1020,6 +1022,25 @@ try {
             // Apply locks after building the screen
             updateLocks();
 
+
+            // Wire HDR preference to runtime toggle in Game via broadcast
+            try {
+                androidx.preference.CheckBoxPreference hdrPref =
+                        findPreference("checkbox_enable_hdr");
+                if (hdrPref != null) {
+                    hdrPref.setOnPreferenceChangeListener((pref, newValue) -> {
+                        boolean enabled = (newValue instanceof Boolean) && (Boolean) newValue;
+
+                        // Broadcast esplicito verso la tua app (SDK 33+ friendly)
+                        Intent i = new Intent(Game.ACTION_HDR_TOGGLE)
+                                .setPackage(requireContext().getPackageName());
+                        i.putExtra("enabled", enabled);
+                        requireContext().sendBroadcast(i);
+
+                        return true; // lascia salvare la preferenza
+                    });
+                }
+            } catch (Throwable ignored) {}
         }
 
         private void removeEntryFromListAndSetValue(String resolutionPrefString, String entryToRemove, String nextDefault) {
