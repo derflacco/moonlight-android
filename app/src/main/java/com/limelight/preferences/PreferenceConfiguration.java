@@ -10,6 +10,8 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
+    public int displayTarget = 0; // 0=default, 1..12 -> F1..F12
+
     public boolean enableAntiLag;
 
     public boolean enableAsyncDecoder = false;
@@ -1089,6 +1091,7 @@ private static int getFramePacingValue(Context context) {
             config.framePacing = FRAME_PACING_GPU_RAW;
         }
 
+        try { config.displayTarget = Integer.parseInt(prefs.getString("pref_display_target", "0")); } catch (Throwable ignored) { config.displayTarget = 0; }
         return config;
     }
 

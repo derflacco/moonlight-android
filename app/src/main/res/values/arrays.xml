@@ -202,4 +202,20 @@
         <item>right</item>
     </string-array>
 
+<string-array name="pref_entries_display_target">
+    <item>@string/pref_entry_display_default</item>
+    <item>@string/pref_entry_display_1</item>
+    <item>@string/pref_entry_display_2</item>
+    <item>@string/pref_entry_display_3</item>
+    <item>@string/pref_entry_display_4</item>
+    <item>@string/pref_entry_display_5</item>
+</string-array>
+<string-array name="pref_values_display_target" translatable="false">
+    <item>0</item>
+    <item>1</item>
+    <item>2</item>
+    <item>3</item>
+    <item>4</item>
+    <item>5</item>
+</string-array>
 </resources>

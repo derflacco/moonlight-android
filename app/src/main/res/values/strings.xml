@@ -769,4 +769,12 @@
     <string name="pref_video_framegen_debug_summary">Show a tiny on-screen marker when a synthetic FG frame is drawn.</string>
     <string name="pref_video_framegen_ghost_title">Ghost suppression threshold</string>
     <string name="pref_video_framegen_ghost_summary">Control sensitivity (0–100). Higher values reduce ghosts but bias towards current frame.</string>
+    <string name="pref_title_display_target">Preferred display (Sunshine/Apollo)</string>
+    <string name="pref_summary_display_target">Select which host monitor to use. Applied on connect by sending Ctrl+Alt+Shift+F#.</string>
+    <string name="pref_entry_display_default">Default (host setting)</string>
+    <string name="pref_entry_display_1">Monitor 1</string>
+    <string name="pref_entry_display_2">Monitor 2</string>
+    <string name="pref_entry_display_3">Monitor 3</string>
+    <string name="pref_entry_display_4">Monitor 4</string>
+    <string name="pref_entry_display_5">Monitor 5</string>
 </resources>
