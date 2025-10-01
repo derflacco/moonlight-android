@@ -329,6 +329,15 @@ public class StreamSettings extends AppCompatActivity {
 
         @Override
         public void onCreatePreferences(Bundle bundle, String s) {
+
+// Preferred display
+try {
+    androidx.preference.ListPreference disp = findPreference("pref_display_target");
+    if (disp != null) {
+        disp.setOnPreferenceChangeListener((p, v) -> true);
+    }
+} catch (Throwable ignored) {}
+
             initializePreferences();
         }
 
