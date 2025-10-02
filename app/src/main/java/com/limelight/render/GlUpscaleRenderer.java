@@ -834,11 +834,25 @@ try {
     // Map UI sharpness (0..1) -> internal RCAS strength (conservative).
     // Dead-zone <=5%; smooth curve; lower cap when near-native scaling.
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
+        // Map UI [0..1] to RCAS strength.
+        // Goals:
+        //  - Keep low-mid values gentle
+        //  - Make high values (>=0.7) more pronounced
+        //  - Cap slightly higher when not near-native to allow stronger RCAS
         float s = clamp01(ui);
-        if (s <= 0.05f) return 0f;          // 0..5% = OFF
-        s = (s - 0.05f) / 0.95f;            // rebase 0..1
-        s = (float)(1.0 - Math.exp(-3.0 * s)); // perceptual-like easing
-        float cap = nearNative ? 0.18f : 0.25f;
+        if (s <= 0.05f) return 0f;              // 0..5% = OFF (dead zone)
+        s = (s - 0.05f) / 0.95f;                // rebase to 0..1
+
+        // Smooth ease-out with a bit more punch than before
+        s = (float)(1.0 - Math.exp(-3.5 * s));
+
+        // Emphasize the upper range while keeping the lower range stable
+        // gamma < 1 lifts highs (more pronounced near 1.0)
+        final float gamma = 0.85f;
+        s = (float)Math.pow(s, gamma);
+
+        // Allow a higher cap when not near-native
+        float cap = nearNative ? 0.22f : 0.35f; // was ~0.18/0.25
         return cap * s;
     }
 
