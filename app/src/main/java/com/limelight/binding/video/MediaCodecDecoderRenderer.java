@@ -49,7 +49,9 @@ import android.view.SurfaceView;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
     private long lastDecodeAvgLogNs = 0L;
-
+    // --- HDR state for overlays ---
+    private volatile boolean hdrActive = false;
+    public boolean isHdrActive() { return hdrActive; }
     // --- Precise decode-time tracking (PTS -> enqueue timestamp) ---
     private final Object decodeTimingLock = new Object();
     private final android.util.LongSparseArray<Long> enqueueNsByPtsUs = new android.util.LongSparseArray<>(512);
@@ -2551,6 +2553,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append((int) fps.receivedFps);
                     sb.append("  R:");
                     sb.append((int) fps.renderedFps);
+                    // Show SDR/HDR mode in Perf Lite
+                    sb.append("  ").append(hdrActive ? "HDR" : "SDR");
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
