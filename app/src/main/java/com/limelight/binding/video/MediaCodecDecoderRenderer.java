@@ -45,6 +45,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
+    // --- HDR state for overlays ---
+    private volatile boolean hdrActive = false;
+    public boolean isHdrActive() { return hdrActive; }
 
     // Toggle at runtime if needed
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
@@ -1560,6 +1563,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    // Show SDR/HDR mode in Perf Lite
+                    sb.append("  ").append(hdrActive ? "HDR" : "SDR");
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
