@@ -184,6 +184,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
 
 
+
+    // === HDR window color mode control ===
+    public static void updateHdrWindowMode(final boolean enable) {
+        try {
+            final Game inst = instance;
+            if (inst == null) return;
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                inst.runOnUiThread(() -> {
+                    try {
+                        inst.getWindow().setColorMode(enable
+                                ? ActivityInfo.COLOR_MODE_HDR
+                                : ActivityInfo.COLOR_MODE_DEFAULT);
+                        LimeLog.info("Display HDR mode: " + (enable ? "enabled" : "disabled"));
+                    } catch (Throwable t) {
+                        LimeLog.warning("HDR window mode switch failed: " + t);
+                    }
+                });
+            }
+        } catch (Throwable ignored) {}
+    }
     public static Game instance;
 
     private int lastButtonState = 0;
