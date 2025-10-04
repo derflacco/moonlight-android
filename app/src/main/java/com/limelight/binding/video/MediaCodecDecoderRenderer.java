@@ -864,6 +864,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 Integer oldIdx = asyncOutputQueue.poll();
                                 if (oldIdx != null && oldIdx >= 0) {
                                 try { MediaCodecDecoderRenderer.this.safeReleaseOutputBufferNow(codec, oldIdx, false); } catch (Throwable ignored) {}
+                                    synchronized (asyncOutInfo) { asyncOutInfo.remove(oldIdx); }
                                 }
                                 if (!asyncOutputQueue.offer(index)) {
                                     try { MediaCodecDecoderRenderer.this.safeReleaseOutputBufferNow(codec, index, false); } catch (Throwable ignored) {}
