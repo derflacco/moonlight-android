@@ -1361,39 +1361,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     .getAppVsyncOffsetNanos();
         }
 
-// Don't render unless a new frame is due. This prevents microstutter when streaming
-// at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        final int rr = (refreshRate <= 0 ? 60 : Math.min(refreshRate, 240));
-        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
+// Don't render unless a new frame is due (microstutter guard)
+        final int rr = Math.max(1, refreshRate);
+        long actualFrameTimeDeltaNs   = frameTimeNanos - lastRenderedFrameTimeNanos;
+        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // ~80% of the next frame
 
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Render up to one frame when in frame pacing mode.
-            //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
-// Render up to one frame when in frame pacing mode.
+
+            // Keep at most 1 buffered frame to smooth jitter (preferLowerDelays path)
             if (preferLowerDelays) {
                 while (outputBufferQueue.size() > 1) {
                     Integer __idx = outputBufferQueue.poll();
-                    if (__idx != null) {
-                        try { safeReleaseOutputBufferNow(videoDecoder, __idx, /*render*/ false); }
-                        catch (Throwable ignored) {}
-                    } else break;
+                    if (__idx == null) break;
+                    try { safeReleaseOutputBufferNow(videoDecoder, __idx, /*render*/ false); }
+                    catch (Throwable ignored) {}
                 }
             }
 
-// Prendi il buffer da presentare
+            // Present the next buffer
             Integer nextOutputBufferObj = outputBufferQueue.poll();
             if (nextOutputBufferObj != null) {
-                final int nextOutputBuffer = nextOutputBufferObj.intValue();
+                final int nextOutputBuffer = nextOutputBufferObj;
                 try {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                        // Timed render
+                        // Timed present aligned to choreographer frame
                         safeReleaseOutputBufferAt(videoDecoder, nextOutputBuffer, frameTimeNanos);
                     } else {
-                        // Legacy: immediate render
+                        // Present immediately
                         safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /*render*/ true);
                     }
 
@@ -1402,7 +1396,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         activeWindowVideoStats.totalFramesRendered++;
                     }
                 } catch (IllegalStateException ignored) {
-                    // Best-effort: release without rendering to avoid leaking the buffer
+                    // Avoid leaking the buffer
                     try { safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /*render*/ false); }
                     catch (IllegalStateException e) {
                         e.printStackTrace();
@@ -1411,6 +1405,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
         }
+
 
         // Attempt codec recovery even if we have nothing to render right now. Recovery can still
         // be required even if the codec died before giving any output.
