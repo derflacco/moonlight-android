@@ -3844,27 +3844,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-
         surfaceCreated = true;
 
-        // --- Leggi il refresh reale del display in modo sicuro ---
+        // --- Read actual display refresh rate safely ---
         float displayHz = 60f;
         try {
             android.view.Display display = null;
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                // Activity.getDisplay() (API 30+)
                 display = getDisplay();
                 if (display == null) {
-                    // fallback via DisplayManager
                     android.hardware.display.DisplayManager dm =
                             (android.hardware.display.DisplayManager) getSystemService(android.content.Context.DISPLAY_SERVICE);
                     if (dm != null) display = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
                 }
             } else {
-                // Deprecated ma ancora valido su <30
                 display = getWindowManager().getDefaultDisplay();
             }
-
             if (display != null) {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                     displayHz = display.getMode().getRefreshRate();
@@ -3874,41 +3869,60 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         } catch (Throwable ignored) {}
 
-        // FPS desiderato in base ai prefs/refresh
-        final float targetFps = (prefConfig != null && prefConfig.fps > 0) ? prefConfig.fps : displayHz;
-        final float desiredFrameRate = (mayReduceRefreshRate() || desiredRefreshRate < targetFps)
-                ? targetFps
-                : Math.max(1f, desiredRefreshRate);
+        // FPS target from prefs; fallback to display refresh rate
+        final float targetFps = (prefConfig != null && prefConfig.fps > 0f) ? prefConfig.fps : displayHz;
 
+        // Use desiredRefreshRate if valid; otherwise targetFps
+        float desired = targetFps;
         try {
+            // mayReduceRefreshRate()/desiredRefreshRate are already present in Game.java
+            float safeDesiredRef = (desiredRefreshRate > 0f) ? desiredRefreshRate : targetFps;
+            desired = (mayReduceRefreshRate() || safeDesiredRef < targetFps) ? targetFps : safeDesiredRef;
+        } catch (Throwable ignored) {}
+
+        // Avoid requesting beyond panel capabilities
+        final float desiredFrameRate = Math.max(1f, Math.min(desired, displayHz));
+
+        // --- Single coherent frame-rate hint bound to pacing ---
+        try {
+            final int pacing = (prefConfig != null)
+                    ? prefConfig.framePacing
+                    : PreferenceConfiguration.FRAME_PACING_BALANCED;
+
+            final boolean smoothOrCap =
+                    pacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
+                            pacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS;
+
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                // Su S+ chiedi lo switch solo se seamless, per evitare jank
                 holder.getSurface().setFrameRate(
                         desiredFrameRate,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
-                        android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT, // let system choose in smooth/cap modes
+                        android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
+                );
+                // If you want to force FIXED_SOURCE compat on BALANCED even on S+, uncomment below:
+                // if (!smoothOrCap) {
+                //     holder.getSurface().setFrameRate(
+                //             desiredFrameRate,
+                //             android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                //             android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
+                //     );
+                // }
             } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                // Su R seleziona compat in base al pacing
-                final int pacing = (prefConfig != null)
-                        ? prefConfig.framePacing
-                        : PreferenceConfiguration.FRAME_PACING_BALANCED;
-                final boolean smoothOrCap =
-                        pacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                                pacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS;
-
                 final int compat = smoothOrCap
                         ? android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
                         : android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE;
-
                 holder.getSurface().setFrameRate(desiredFrameRate, compat);
-
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                    try { getWindow().setSustainedPerformanceMode(true); } catch (Throwable ignored) {}
-                }
             }
         } catch (Throwable ignored) {}
-    }
 
+        // Enable sustained performance early (if supported)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            try { getWindow().setSustainedPerformanceMode(true); } catch (Throwable ignored) {}
+        }
+
+        // Apply latency policy BEFORE decoder/present loops start
+        try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
+    }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
