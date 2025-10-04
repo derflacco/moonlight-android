@@ -60,78 +60,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Count of frames for which decode latency was measured on dequeue (independent of present/drop)
     private long decodedFramesCount = 0;
 
-    // ===== [6] RAW present accuracy (Δvsync & late%) =====
-    private long presentCount = 0L;
-    private long latePresentCount = 0L;
-    // If you already compute/display Hz elsewhere, assign it to this; otherwise 60.0 fallback.
-    private double displayHzHint = 0.0;
-    private static final double PRESENT_EWMA_ALPHA = 0.12; // for Δvsync smoothing
-
-    // ===== [9] PTS jitter smoothing for paced profiles =====
-    private long emaPtsDeltaNs = 0L;
-    private static final double EMA_ALPHA = 0.12;              // light smoothing
-    private static final long JITTER_NS_THRESH = 1_200_000L;   // ~1.2 ms
-    private long lastPtsNs = 0L;
-    private long lastSchedPtsNs = 0L;
-    private long emaFrameDeltaNs = 0L;
-    private static final double DF_EWMA_ALPHA = 0.12;              // smoothing leggero
-    private static final long DF_JITTER_NS_THRESH = 1_200_000L;    // ~1.2 ms di jitter
-    private long lastDoFrameTsNs = 0L;
-    private long lastDoFrameSchedTsNs = 0L;
-    private long getEstimatedVsyncPeriodNs() {
-        final double hz = (displayHzHint > 0.0) ? displayHzHint : 60.0;
-        return (long) (1_000_000_000.0 / hz);
-    }
-
-
-    // ---- [6] Update RAW present accuracy metrics (Δvsync & late%) ----
-    private void updateRawPresentMetrics(long nowNs) {
-        final long vsyncPeriod = getEstimatedVsyncPeriodNs();
-        if (vsyncPeriod <= 0L) return;
-
-        final long phase = nowNs % vsyncPeriod;
-        final long toNextVsync = (phase == 0L) ? 0L : (vsyncPeriod - phase);
-        final boolean late = phase > (vsyncPeriod >> 1);
-
-        presentCount++;
-        if (late) latePresentCount++;
-
-        if (activeWindowVideoStats != null) {
-            try {
-                // Try to update optional overlay fields if present
-                java.lang.reflect.Field fDelta = activeWindowVideoStats.getClass().getField("presentDeltaToVsyncNsAvg");
-                java.lang.reflect.Field fLate = activeWindowVideoStats.getClass().getField("latePresentPercent");
-
-                double prev = fDelta.getDouble(activeWindowVideoStats);
-                double next = (prev == 0.0)
-                        ? (double) toNextVsync
-                        : (prev * (1.0 - PRESENT_EWMA_ALPHA) + (double) toNextVsync * PRESENT_EWMA_ALPHA);
-                fDelta.setDouble(activeWindowVideoStats, next);
-
-                double lp = (presentCount > 0) ? (100.0 * ((double) latePresentCount / (double) presentCount)) : 0.0;
-                fLate.setDouble(activeWindowVideoStats, lp);
-            } catch (Throwable ignored) {
-                // Overlay fields not present; metrics are still tracked internally.
-            }
-        }
-    }
-
-
-    // ---- Reset pacing/EWMA state (call on session start/stop) ----
-    private void resetPacingState() {
-        emaPtsDeltaNs = 0L;
-        lastPtsNs = 0L;
-        lastSchedPtsNs = 0L;
-
-        emaFrameDeltaNs = 0L;
-        lastDoFrameTsNs = 0L;
-        lastDoFrameSchedTsNs = 0L;
-
-        presentCount = 0L;
-        latePresentCount = 0L;
-    }
-
-
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
@@ -898,9 +826,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         videoDecoder.start();
 
-        // Reset pacing/metrics state for new session
-        try { resetPacingState(); } catch (Throwable ignored) {}
-
         // Vendor key audit: try runtime acceptance via setParameters
         try {
             String __auditName = null;
@@ -1436,11 +1361,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     .getAppVsyncOffsetNanos();
         }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        final int rr = (refreshRate > 0) ? refreshRate : 60; // safety
-        final long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        final long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
+// Don't render unless a new frame is due. This prevents microstutter when streaming
+// at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
+        final int rr = (refreshRate <= 0 ? 60 : Math.min(refreshRate, 240));
+        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
+        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
 
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
             // Render up to one frame when in frame pacing mode.
@@ -1448,52 +1373,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
             // by holding onto them for too long. This also ensures we will have that 1 extra
             // frame of buffer to smooth over network/rendering jitter.
+// Render up to one frame when in frame pacing mode.
             if (preferLowerDelays) {
                 while (outputBufferQueue.size() > 1) {
-                    final Integer __idx = outputBufferQueue.poll();
+                    Integer __idx = outputBufferQueue.poll();
                     if (__idx != null) {
-                        try { safeReleaseOutputBufferNow(videoDecoder, __idx, /* render */ false); }
+                        try { safeReleaseOutputBufferNow(videoDecoder, __idx, /*render*/ false); }
                         catch (Throwable ignored) {}
-                    } else {
-                        break;
-                    }
+                    } else break;
                 }
             }
 
-            final Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
-                // ===== EWMA-based jitter smoothing for paced present (item 9) =====
-                // Costante O(1), nessun buffer/GC, latenza minima.
-
-                // Costruisci l'EMA della cadenza di doFrame()
-                if (lastDoFrameTsNs > 0) {
-                    final long rawDelta = Math.max(0L, frameTimeNanos - lastDoFrameTsNs);
-                    emaFrameDeltaNs = (emaFrameDeltaNs == 0L)
-                            ? rawDelta
-                            : (long) (DF_EWMA_ALPHA * rawDelta + (1.0 - DF_EWMA_ALPHA) * emaFrameDeltaNs);
-                }
-                lastDoFrameTsNs = frameTimeNanos;
-
-                // Se lo step attuale devia molto da EMA, schedula con cadenza smussata
-                final long prevStep = (lastDoFrameSchedTsNs > 0)
-                        ? (frameTimeNanos - lastDoFrameSchedTsNs)
-                        : emaFrameDeltaNs;
-
-                final long schedTsNs =
-                        (emaFrameDeltaNs > 0 && Math.abs(emaFrameDeltaNs - prevStep) > DF_JITTER_NS_THRESH)
-                                ? ((lastDoFrameSchedTsNs > 0)
-                                ? (lastDoFrameSchedTsNs + emaFrameDeltaNs)
-                                : (System.nanoTime() + emaFrameDeltaNs))
-                                : frameTimeNanos;
-
-                lastDoFrameSchedTsNs = schedTsNs;
-
+// Prendi il buffer da presentare
+            Integer nextOutputBufferObj = outputBufferQueue.poll();
+            if (nextOutputBufferObj != null) {
+                final int nextOutputBuffer = nextOutputBufferObj.intValue();
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, /* renderAtTimeNs */ schedTsNs);
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        // Timed render
+                        safeReleaseOutputBufferAt(videoDecoder, nextOutputBuffer, frameTimeNanos);
                     } else {
-                        // Legacy: no timestamped release; render immediately
-                        safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /* render */ true);
+                        // Legacy: immediate render
+                        safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /*render*/ true);
                     }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
@@ -1501,11 +1402,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         activeWindowVideoStats.totalFramesRendered++;
                     }
                 } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /* render */ false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
+                    // Best-effort: release without rendering to avoid leaking the buffer
+                    try { safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /*render*/ false); }
+                    catch (IllegalStateException e) {
                         e.printStackTrace();
                         handleDecoderException(e);
                     }
@@ -1844,11 +1743,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             final long tsNs = presentationTimeUs * 1000L;
                                             safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
                                             lastPresentNs = System.nanoTime();
-                                            try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         } else {
                                             safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                             lastPresentNs = System.nanoTime();
-                                            try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         }
                                         recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
@@ -1858,71 +1755,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 else
 
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-                                    // Never drop; present ASAP in order — con smoothing della cadenza via EWMA PTS
+                                    // Never drop; present ASAP in order
                                     final long nowNs = System.nanoTime();
-                                    final long ptsNs = presentationTimeUs * 1000L;
-
-                                    // EWMA del delta PTS
-                                    if (lastPtsNs > 0) {
-                                        final long rawDelta = Math.max(0L, ptsNs - lastPtsNs);
-                                        emaPtsDeltaNs = (emaPtsDeltaNs == 0L)
-                                                ? rawDelta
-                                                : (long) (EMA_ALPHA * rawDelta + (1.0 - EMA_ALPHA) * emaPtsDeltaNs);
-                                    }
-                                    lastPtsNs = ptsNs;
-
-                                    // Se lo step è rumoroso, usa cadenza smussata; altrimenti "ASAP"
-                                    final long prevStep = (lastSchedPtsNs > 0) ? Math.max(0L, (ptsNs - lastSchedPtsNs)) : emaPtsDeltaNs;
-                                    long tsNs = (emaPtsDeltaNs > 0 && Math.abs(emaPtsDeltaNs - prevStep) > JITTER_NS_THRESH)
-                                            ? ((lastSchedPtsNs > 0) ? (lastSchedPtsNs + emaPtsDeltaNs) : (nowNs + emaPtsDeltaNs))
-                                            : nowNs;
-                                    lastSchedPtsNs = tsNs;
-
                                     if (lastIndex >= 0) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
+                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                         } else {
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                         }
-                                        lastPresentNs = tsNs;
-                                        try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
+                                        lastPresentNs = nowNs;
                                         recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
 
                                 } else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // Cap present rate a prefs.fps; mai drop; present in order — con EWMA PTS
+                                    // Cap present rate to prefs.fps; never drop, present in order
                                     final double capFps = Math.max(1.0, (double) prefs.fps);
                                     final long capPeriodNs = (long) (1_000_000_000.0 / capFps);
                                     final long nowNs = System.nanoTime();
-                                    final long ptsNs = presentationTimeUs * 1000L;
-
-                                    // EWMA del delta PTS
-                                    if (lastPtsNs > 0) {
-                                        final long rawDelta = Math.max(0L, ptsNs - lastPtsNs);
-                                        emaPtsDeltaNs = (emaPtsDeltaNs == 0L)
-                                                ? rawDelta
-                                                : (long) (EMA_ALPHA * rawDelta + (1.0 - EMA_ALPHA) * emaPtsDeltaNs);
-                                    }
-                                    lastPtsNs = ptsNs;
-
-                                    // Base: cap “rigido”; se jitter alto, usa cadenza smussata
-                                    long baseTs = (lastPresentNs > 0L) ? (lastPresentNs + capPeriodNs) : nowNs;
-                                    final long prevStep = (lastSchedPtsNs > 0)
-                                            ? Math.max(0L, (ptsNs - lastSchedPtsNs))
-                                            : emaPtsDeltaNs;
-                                    if (emaPtsDeltaNs > 0 && Math.abs(emaPtsDeltaNs - prevStep) > JITTER_NS_THRESH) {
-                                        baseTs = (lastSchedPtsNs > 0) ? (lastSchedPtsNs + emaPtsDeltaNs) : (nowNs + emaPtsDeltaNs);
-                                    }
-                                    final long tsNs = Math.max(nowNs, baseTs);
-                                    lastSchedPtsNs = tsNs;
 
                                     if (lastIndex >= 0) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
+                                            final long tsNs = (lastPresentNs > 0L)
+                                                    ? Math.max(nowNs, lastPresentNs + capPeriodNs)
+                                                    : nowNs;
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                             lastPresentNs = tsNs;
-                                            try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         } else {
                                             if (lastPresentNs > 0L) {
                                                 long waitNs = (lastPresentNs + capPeriodNs) - nowNs;
@@ -1931,9 +1790,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                     catch (InterruptedException ignored) {}
                                                 }
                                             }
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                             lastPresentNs = System.nanoTime();
-                                            try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         }
 
                                         recentDrops = 0;
@@ -1980,7 +1838,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                         safeReleaseOutputBufferNow(videoDecoder, lastIndex, true);
                                         lastPresentNs = nowNs;
-                                        try { updateRawPresentMetrics(nowNs); } catch (Throwable ignored) {}
                                         if (!isLate) lateStreak = 0;
                                         recentDrops = Math.max(0, recentDrops - 1);
 
