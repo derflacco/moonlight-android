@@ -861,11 +861,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             if (!asyncOutputQueue.offer(index)) {
                                 Integer oldIdx = asyncOutputQueue.poll();
                                 if (oldIdx != null && oldIdx >= 0) {
-                                    try { codec.releaseOutputBuffer(oldIdx, false); } catch (Throwable ignored) {}
-                                    synchronized (asyncOutInfo) { asyncOutInfo.remove(oldIdx); }
+                                try { MediaCodecDecoderRenderer.this.safeReleaseOutputBufferNow(codec, oldIdx, false); } catch (Throwable ignored) {}
                                 }
                                 if (!asyncOutputQueue.offer(index)) {
-                                    try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+                                    try { MediaCodecDecoderRenderer.this.safeReleaseOutputBufferNow(codec, index, false); } catch (Throwable ignored) {}
                                     synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
                                 }
                             }
@@ -1450,7 +1449,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 while (outputBufferQueue.size() > 1) {
                     final Integer __idx = outputBufferQueue.poll();
                     if (__idx != null) {
-                        try { videoDecoder.releaseOutputBuffer(__idx, /* render */ false); }
+                        try { safeReleaseOutputBufferNow(videoDecoder, __idx, /* render */ false); }
                         catch (Throwable ignored) {}
                     } else {
                         break;
@@ -1491,7 +1490,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, /* renderAtTimeNs */ schedTsNs);
                     } else {
                         // Legacy: no timestamped release; render immediately
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, /* render */ true);
+                        safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /* render */ true);
                     }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
@@ -1501,7 +1500,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 } catch (IllegalStateException ignored) {
                     try {
                         // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, /* render */ false);
+                        safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /* render */ false);
                     } catch (IllegalStateException e) {
                         // This will leak nextOutputBuffer, but there's really nothing else we can do
                         e.printStackTrace();
@@ -1844,7 +1843,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             lastPresentNs = System.nanoTime();
                                             try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                             lastPresentNs = System.nanoTime();
                                             try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         }
@@ -1880,7 +1879,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                             safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
                                         } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                         }
                                         lastPresentNs = tsNs;
                                         try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
@@ -1929,7 +1928,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                     catch (InterruptedException ignored) {}
                                                 }
                                             }
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                             lastPresentNs = System.nanoTime();
                                             try { updateRawPresentMetrics(lastPresentNs); } catch (Throwable ignored) {}
                                         }
@@ -1969,7 +1968,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                         dropCooldownOk;
 
                                         if (shouldDrop) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
+                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /* render */ false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
