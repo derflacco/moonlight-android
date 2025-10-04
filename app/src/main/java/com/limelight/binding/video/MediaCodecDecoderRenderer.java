@@ -48,6 +48,15 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    private volatile long lastChoreoFrameTimeNs = 0L;
+    private volatile long lastVsyncTickHandledNs = 0L; // per non presentare 2 volte nello stesso tick
+
+    // Margine per evitare ts nel passato (0.5 ms)
+    private static final long PRESENT_EPS_NS = 500_000L;
+
+    // Periodo vsync in ns (aggiorna dove già calcoli displayHz/vsyncPeriodNs)
+    private long vsyncPeriodNs = 16_666_667L; // default 60 Hz; aggiornalo dal display
+
     private long lastDecodeAvgLogNs = 0L;
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
@@ -1350,6 +1359,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void doFrame(long frameTimeNanos) {
+        lastChoreoFrameTimeNs = frameTimeNanos;
         // Do nothing if we're stopping
         if (stopping) {
             return;
@@ -1750,48 +1760,79 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     }
                                 }
                                 else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-                                    // Never drop; present ASAP (timed @ now)
-                                    final long nowNs = System.nanoTime();
+                                    // Never drop; present aligned to vsync tick (Choreographer)
                                     if (lastIndex >= 0) {
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, nowNs);
+                                        final long nowNs   = System.nanoTime();
+                                        final long vsyncTs = (lastChoreoFrameTimeNs != 0L) ? lastChoreoFrameTimeNs : nowNs;
+                                        // Evita doppio present nello stesso tick
+                                        if (vsyncTs == lastVsyncTickHandledNs) {
+                                            // già presentato su questo tick: esci pulito
                                         } else {
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
+                                            long tsNs = vsyncTs;
+                                            // Anti-backdate: se è già passato, salta al prossimo vsync
+                                            if (tsNs + PRESENT_EPS_NS < nowNs) {
+                                                tsNs = alignAtOrAfter(nowNs + PRESENT_EPS_NS, vsyncPeriodNs);
+                                            }
+                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                                safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
+                                            } else {
+                                                safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
+                                            }
+                                            lastVsyncTickHandledNs = vsyncTs;
+
+                                            lastPresentNs = tsNs;
+                                            lastRenderedFrameTimeNanos = tsNs;
+                                            if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
+                                            recentDrops = 0;
+                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            statsUpdated = true;
                                         }
-                                        lastPresentNs = nowNs;
-                                        lastRenderedFrameTimeNanos = nowNs;
-                                        if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
-                                        recentDrops = 0;
-                                        updateDecodeLatencyStats(presentationTimeUs);
-                                        statsUpdated = true;
                                     }
                                 }
+
                                 else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // Cap present rate to prefs.fps; never drop, present in order
-                                    final double capFps = Math.max(1.0, (double) prefs.fps);
-                                    final long capPeriodNs = (long) (1_000_000_000.0 / capFps);
-                                    final long nowNs = System.nanoTime();
+                                    // Cap to target FPS; never drop; align on N*vsync
+                                    final double displayHzD = Math.max(1.0, (double) displayHz);
+                                    vsyncPeriodNs = (long)(1_000_000_000.0 / displayHzD);
+
+                                    final double capFps     = Math.max(1.0, (double) prefs.fps);
+                                    final int   stride      = computeVsyncStride(displayHzD, capFps); // es. 120→60 => 2
+                                    final long  capPeriodNs = Math.max(vsyncPeriodNs, vsyncPeriodNs * stride);
 
                                     if (lastIndex >= 0) {
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                            final long tsNs = (lastPresentNs > 0L)
-                                                    ? Math.max(nowNs, lastPresentNs + capPeriodNs)
-                                                    : nowNs;
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
-                                            lastPresentNs = tsNs;
-                                        } else {
-                                            if (lastPresentNs > 0L) {
-                                                long waitNs = (lastPresentNs + capPeriodNs) - nowNs;
-                                                if (waitNs > 0L && waitNs < 20_000_000L) {
-                                                    try { Thread.sleep(waitNs / 1_000_000L, (int) (waitNs % 1_000_000L)); }
-                                                    catch (InterruptedException ignored) {}
-                                                }
-                                            }
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
-                                            lastPresentNs = System.nanoTime();
+                                        final long nowNs   = System.nanoTime();
+                                        final long baseNs  = (lastChoreoFrameTimeNs != 0L) ? lastChoreoFrameTimeNs : nowNs;
+
+                                        // Primo aggancio: ancora prima del tick corrente di un capPeriod
+                                        if (lastPresentNs == 0L) {
+                                            long anchor = baseNs - capPeriodNs;
+                                            // ancora: porta l'anchor a un bordo multiplo del capPeriod
+                                            long phase0 = alignAtOrAfter(anchor, capPeriodNs) - capPeriodNs;
+                                            lastPresentNs = phase0;
                                         }
 
-                                        lastRenderedFrameTimeNanos = lastPresentNs;
+                                        long nextTs = lastPresentNs + capPeriodNs;
+
+                                        // Se siamo rimasti indietro, salta a un multiplo che sia >= baseNs
+                                        if (nextTs + PRESENT_EPS_NS < baseNs) {
+                                            long delta = baseNs - nextTs;
+                                            long steps = 1 + (delta / capPeriodNs);
+                                            nextTs += steps * capPeriodNs;
+                                        }
+
+                                        // Anti-backdate vs now (se doFrame è in ritardo)
+                                        if (nextTs + PRESENT_EPS_NS < nowNs) {
+                                            nextTs = alignAtOrAfter(nowNs + PRESENT_EPS_NS, capPeriodNs);
+                                        }
+
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, nextTs);
+                                        } else {
+                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
+                                        }
+
+                                        lastPresentNs = nextTs;
+                                        lastRenderedFrameTimeNanos = nextTs;
                                         if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
                                         recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
@@ -1799,7 +1840,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     }
                                 }
                                 else {
-
+                                    // ADAPTIVE/IJH safeRelease*)
                                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
@@ -1852,7 +1893,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         statsUpdated = true;
                                     }
                                 }
-                                    if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
+                                if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
+
                                 }
                             else {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
@@ -3011,13 +3053,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    // Helper: primo ts >= base allineato a passo 'period'
+    private static long alignAtOrAfter(long baseNs, long periodNs) {
+        if (periodNs <= 0) return baseNs;
+        long r = baseNs % periodNs;
+        return r == 0 ? baseNs : (baseNs + (periodNs - r));
+    }
+
+    // Helper: stride vsync per CAP_FPS
+    private static int computeVsyncStride(double displayHz, double targetFps) {
+        if (displayHz <= 0.0 || targetFps <= 0.0) return 1;
+        int s = (int)Math.round(displayHz / targetFps);
+        return Math.max(1, s);
+    }
 
     private boolean isMTKDecoderName(String name) {
         if (name == null) return false;
         String n = name.toLowerCase();
         return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
     }
-
 
     // === Wrappers to unify sync/async ===
     private int nextInputIndex(int timeoutUs) {if (!useAsyncCodec) { return videoDecoder.dequeueInputBuffer(timeoutUs); }
