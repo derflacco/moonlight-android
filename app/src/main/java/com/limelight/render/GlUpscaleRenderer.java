@@ -177,11 +177,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Precompute whether we can always take the ultra-thin OES->screen path.
         this.fastBypassStatic = computeFastBypassStatic(prefs);
     }
+
     @Keep
     public Surface createDecoderInputSurface() {
         if (!isGlReady()) {
-            initEglAndGl();
-            if (!isGlReady()) return null;
+            synchronized (this) {
+                initEglAndGl();
+                if (!isGlReady()) return null;
+            }
         }
         if (decoderInputSurface != null) return decoderInputSurface;
 
@@ -204,7 +207,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     public void start() {
-        if (!isGlReady()) { initEglAndGl(); }
+        if (!isGlReady()) {
+            synchronized (this) {
+                initEglAndGl();
+            }
+        }
         if (!isGlReady() || running.getAndSet(true)) return;
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
         renderThread.setPriority(Thread.NORM_PRIORITY + 1);
@@ -247,7 +254,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Main render loop ======
     private void renderLoop() {
         while (running.get()) {
-            if (!isGlReady()) { return; }
+            if (!isGlReady()) {
+                synchronized (this) {
+                    initEglAndGl();
+                }
+            }
+            if (!isGlReady()) continue;
             boolean newFrameAvailable = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -297,9 +309,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             final boolean modeRcasOnly = "rcas".equals(mode);
             final boolean modeEasuRcas = "easu_rcas".equals(mode);
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
-
 // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
-            if (fastBypassStatic) {
+            if (fastBypassStatic && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
                 drawOesToScreen();
                 try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
                 boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
@@ -613,91 +624,94 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void initEglAndGl() {
-        try {
-            eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
-            int[] v = new int[2];
-            if (!EGL14.eglInitialize(eglDisplay, v, 0, v, 1)) throw new RuntimeException("eglInitialize failed");
-            int[] cfg = {
-                    EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT | 4 /* ES3 */,
-                    EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
-                    EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
-                    EGL14.EGL_NONE
-            };
-            EGLConfig[] out = new EGLConfig[1];
-            int[] num = new int[1];
-            if (!EGL14.eglChooseConfig(eglDisplay, cfg, 0, out, 0, 1, num, 0)) throw new RuntimeException("eglChooseConfig failed");
-            EGLConfig eglConfig = out[0];
-            int[] ctx = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE};
-            eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctx, 0);
-            int[] sattr = {EGL14.EGL_NONE};
-            eglWindowSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, windowSurfaceInput, sattr, 0);
-            EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
-        } catch (Throwable t) {
-            LimeLog.warning("GL init failed: " + t);
-            destroyEgl();
-            return;
-        }
+        if (isGlReady()) return;
 
-        // Quad data
-        float[] POS = {-1,-1, 1,-1, -1,1, 1,1};
-        float[] UV  = { 0, 0, 1, 0,  0,1, 1,1};
-        quadPos = ByteBuffer.allocateDirect(POS.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
-        quadUv  = ByteBuffer.allocateDirect(UV.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
-        quadPos.put(POS).position(0);
-        quadUv.put(UV).position(0);
+        synchronized (this) {
+            if (isGlReady()) return;
 
-        // VBOs
-        GLES20.glGenBuffers(1, tmpIntArray, 0); vboPos = tmpIntArray[0];
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
-        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadPos.capacity()*4, quadPos, GLES20.GL_STATIC_DRAW);
-        GLES20.glGenBuffers(1, tmpIntArray, 0); vboUv = tmpIntArray[0];
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
-        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadUv.capacity()*4, quadUv, GLES20.GL_STATIC_DRAW);
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-        // VAO: pre-bind attributes once
-        try {
-            int[] vaoId = new int[1];
-            GLES30.glGenVertexArrays(1, vaoId, 0);
-            vao = vaoId[0];
-            GLES30.glBindVertexArray(vao);
+            try {
+                eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
+                int[] v = new int[2];
+                if (!EGL14.eglInitialize(eglDisplay, v, 0, v, 1)) throw new RuntimeException("eglInitialize failed");
+                int[] cfg = {
+                        EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT | 4 /* ES3 */,
+                        EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
+                        EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+                        EGL14.EGL_NONE
+                };
+                EGLConfig[] out = new EGLConfig[1];
+                int[] num = new int[1];
+                if (!EGL14.eglChooseConfig(eglDisplay, cfg, 0, out, 0, 1, num, 0)) throw new RuntimeException("eglChooseConfig failed");
+                EGLConfig eglConfig = out[0];
+                int[] ctx = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE};
+                eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctx, 0);
+                int[] sattr = {EGL14.EGL_NONE};
+                eglWindowSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, windowSurfaceInput, sattr, 0);
+                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+            } catch (Throwable t) {
+                LimeLog.warning("GL init failed: " + t);
+                destroyEgl();
+                return;
+            }
+
+            float[] POS = {-1,-1, 1,-1, -1,1, 1,1};
+            float[] UV  = { 0, 0, 1, 0,  0,1, 1,1};
+            quadPos = ByteBuffer.allocateDirect(POS.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+            quadUv  = ByteBuffer.allocateDirect(UV.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+            quadPos.put(POS).position(0);
+            quadUv.put(UV).position(0);
+
+            GLES20.glGenBuffers(1, tmpIntArray, 0); vboPos = tmpIntArray[0];
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
-            GLES20.glEnableVertexAttribArray(0);
-            GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 0, 0);
+            GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadPos.capacity()*4, quadPos, GLES20.GL_STATIC_DRAW);
+            GLES20.glGenBuffers(1, tmpIntArray, 0); vboUv = tmpIntArray[0];
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
-            GLES20.glEnableVertexAttribArray(1);
-            GLES20.glVertexAttribPointer(1, 2, GLES20.GL_FLOAT, false, 0, 0);
+            GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadUv.capacity()*4, quadUv, GLES20.GL_STATIC_DRAW);
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-            GLES30.glBindVertexArray(0);
-            hasVao = (vao != 0);
-        } catch (Throwable ignored) { hasVao = false; }
-
-        // Shaders
-        progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
-        progBlit = linkProgram(progVs, FS_OES_BLIT);
-        progEasu = linkProgram(progVs, FS_EASU);
-        progRcas = linkProgram(progVs, FS_RCAS);
-        // Try to link OES variant (single-pass RCAS) with specialized VS to precompute steps
-        try {
-            int vsRcasOes = compileShader(GLES20.GL_VERTEX_SHADER, VS_RCAS_OES);
-            progRcasOes = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n" + FS_RCAS);
-            rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
-            rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
-            rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
-            rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
-        } catch (Throwable t) {
-            progRcasOes = 0; // keep fallback 2D path
+            // VAO: pre-bind attributes once
+            try {
+                int[] vaoId = new int[1];
+                GLES30.glGenVertexArrays(1, vaoId, 0);
+                vao = vaoId[0];
+                GLES30.glBindVertexArray(vao);
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
+                GLES20.glEnableVertexAttribArray(0);
+                GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 0, 0);
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
+                GLES20.glEnableVertexAttribArray(1);
+                GLES20.glVertexAttribPointer(1, 2, GLES20.GL_FLOAT, false, 0, 0);
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+                GLES30.glBindVertexArray(0);
+                hasVao = (vao != 0);
+            } catch (Throwable ignored) { hasVao = false; }
+            // Shaders
+            progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
+            progBlit = linkProgram(progVs, FS_OES_BLIT);
+            progEasu = linkProgram(progVs, FS_EASU);
+            progRcas = linkProgram(progVs, FS_RCAS);
+            // Try to link OES variant (single-pass RCAS) with specialized VS to precompute steps
+            try {
+                int vsRcasOes = compileShader(GLES20.GL_VERTEX_SHADER, VS_RCAS_OES);
+                progRcasOes = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n" + FS_RCAS);
+                rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
+                rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
+                rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
+                rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
+            } catch (Throwable t) {
+                progRcasOes = 0; // keep fallback 2D path
+            }
+            easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
+            easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
+            easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
+            blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
+            blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
+            easu_uTex     = GLES20.glGetUniformLocation(progEasu, "uTex");
+            rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
+            rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
+            rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
+            // Apply fixed GL state once per EGL/GL init (no need to re-check in renderLoop).
+            applyFixedState();
         }
-        easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
-        easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
-        easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
-        blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
-        blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
-        easu_uTex     = GLES20.glGetUniformLocation(progEasu, "uTex");
-        rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
-        rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
-        rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
-        // Apply fixed GL state once per EGL/GL init (no need to re-check in renderLoop).
-        applyFixedState();
     }
 
     private void destroyGl() {
@@ -913,14 +927,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "void main(){\n" +
                     "#ifdef USE_OES\n" +
                     "  #ifdef RCAS_OES_VS\n" +
-                    "    // Use precomputed varyings from vertex shader (optimized path)\n" +
                     "    vec3 c  = texture(uTexOES, vUv0).rgb;\n" +
                     "    vec3 rx = texture(uTexOES, vUv0 + vStepX).rgb;\n" +
                     "    vec3 lx = texture(uTexOES, vUv0 - vStepX).rgb;\n" +
                     "    vec3 ty = texture(uTexOES, vUv0 + vStepY).rgb;\n" +
                     "    vec3 by = texture(uTexOES, vUv0 - vStepY).rgb;\n" +
                     "  #else\n" +
-                    "    // Fallback: compute in fragment shader\n" +
                     "    vec2 texel = uInvDstSize;\n" +
                     "    vec2 uv0    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
                     "    vec2 stepX  = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
@@ -932,7 +944,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "    vec3 by = texture(uTexOES, uv0 - stepY).rgb;\n" +
                     "  #endif\n" +
                     "#else\n" +
-                    "  // Standard 2D texture path\n" +
                     "  vec2 texel = uInvDstSize;\n" +
                     "  vec2 uv0 = vUv;\n" +
                     "  vec3 c  = texture(uUpscaled, uv0).rgb;\n" +
@@ -942,17 +953,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  vec3 by = texture(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
                     "#endif\n" +
                     "\n" +
-                    "  // 4-tap unsharp mask (cheap)\n" +
                     "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
                     "  vec3 detail = c - blur4;\n" +
-                    "  // soft deadzone for noise + clamp envelope anti-halo\n" +
                     "  vec3 sgn = sign(detail);\n" +
                     "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
                     "  \n" +
                     "  float gx = luma(rx) - luma(lx);\n" +
                     "  float gy = luma(ty) - luma(by);\n" +
-                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy)); // cheap, no sqrt\n" +
-                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);        // no pow()\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
+                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);\n" +
                     "  \n" +
                     "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
                     "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
@@ -1097,7 +1106,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
         if (prefs == null) return false;
         if (prefs.gpuPathMode) return true;
-        if (!prefs.videoUpscaleEnable) return true; // AGGIUNTO
+        if (!prefs.videoUpscaleEnable) return true;
 
         final String mode = prefs.videoUpscaleMode;
         // FSR bypass
