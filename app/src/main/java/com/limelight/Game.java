@@ -3872,16 +3872,39 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // FPS target from prefs; fallback to display refresh rate
         final float targetFps = (prefConfig != null && prefConfig.fps > 0f) ? prefConfig.fps : displayHz;
 
-        // Use desiredRefreshRate if valid; otherwise targetFps
-        float desired = targetFps;
+        // --- Choose desiredFrameRate (safe + snap-to-panel) ---
+        float dr = (desiredRefreshRate > 0f && !Float.isNaN(desiredRefreshRate)) ? desiredRefreshRate : targetFps;
+
+        // Hysteresis to avoid flip-flop (e.g., 59.999 vs 60.0)
+        final float EPS = 0.01f;
+        final boolean shouldReduceRate = mayReduceRefreshRate() || (targetFps + EPS) < dr;
+
+        // Base choice
+        float desiredFrameRate = shouldReduceRate ? targetFps : Math.max(1f, dr);
+
+        // Clamp to panel
+        desiredFrameRate = Math.min(displayHz, Math.max(1f, desiredFrameRate));
+
+        // Snap to clean divisors of panel (e.g., 120→60/40/30/24) within tolerance
         try {
-            // mayReduceRefreshRate()/desiredRefreshRate are already present in Game.java
-            float safeDesiredRef = (desiredRefreshRate > 0f) ? desiredRefreshRate : targetFps;
-            desired = (mayReduceRefreshRate() || safeDesiredRef < targetFps) ? targetFps : safeDesiredRef;
+            final float[] divisors = {1f, 2f, 3f, 4f, 5f, 6f};
+            float best = desiredFrameRate;
+            float bestDiff = Float.MAX_VALUE;
+            for (float div : divisors) {
+                float cand = displayHz / div;
+                if (cand < 1f) continue;
+                float diff = Math.abs(cand - desiredFrameRate);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    best = cand;
+                }
+            }
+            if (bestDiff <= 0.25f) desiredFrameRate = best;
         } catch (Throwable ignored) {}
 
-        // Avoid requesting beyond panel capabilities
-        final float desiredFrameRate = Math.max(1f, Math.min(desired, displayHz));
+        // Round to 2 decimals to avoid float oscillations
+        desiredFrameRate = Math.round(desiredFrameRate * 100f) / 100f;
+        // --- end desiredFrameRate selection ---
 
         // --- Single coherent frame-rate hint bound to pacing ---
         try {
@@ -3896,15 +3919,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 holder.getSurface().setFrameRate(
                         desiredFrameRate,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT, // let system choose in smooth/cap modes
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
                         android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
                 );
-                // If you want to force FIXED_SOURCE compat on BALANCED even on S+, uncomment below:
+                // If you prefer FIXED_SOURCE on BALANCED even on S+, you can reapply:
                 // if (!smoothOrCap) {
                 //     holder.getSurface().setFrameRate(
-                //             desiredFrameRate,
-                //             android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                //             android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
+                //         desiredFrameRate,
+                //         android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                //         android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
                 //     );
                 // }
             } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
