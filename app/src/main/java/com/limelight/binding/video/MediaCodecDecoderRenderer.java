@@ -1902,10 +1902,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
                 }
-                try {
-                    String __fsr = __fsrGetOverlayLine(glUpscaler);
-                    if (__fsr != null && !__fsr.isEmpty()) { sb.append(__fsr).append('\t'); }
-                } catch (Throwable ignored) {}
+                    try {
+                        String __fsr = __fsrGetOverlayLine(glUpscaler);
+                        if (__fsr != null && !__fsr.isEmpty()) {
+                            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
+                            sb.append(__fsr).append('\n');
+                        }
+                    } catch (Throwable ignored) {}
+
                 String fullLog = sb.toString();
                 if(prefs.enablePerfOverlay) {
                     perfListener.onPerfUpdate(fullLog);
