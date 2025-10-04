@@ -251,9 +251,44 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int EXCEPTION_REPORT_DELAY_MS = 3000;
 
     private VideoStats activeWindowVideoStats;
+
+
+
+
+    // --- Rendered FPS de-dup (avoid double counting across pacing paths) ---
+    private long statsLastRenderedPtsUs = Long.MIN_VALUE;
+    private long statsLastRenderedNs = 0L;
+
+    private void statsMarkRendered(long ptsUs, long renderTimeNs) {
+        if (activeWindowVideoStats == null) return;
+        boolean dup = false;
+        if (ptsUs >= 0) {
+            dup = (ptsUs == statsLastRenderedPtsUs);
+            statsLastRenderedPtsUs = ptsUs;
+        } else if (renderTimeNs > 0) {
+            long vsyncNs = (refreshRate > 0 ? (long)(1_000_000_000L / (double) refreshRate) : 0L);
+            if (vsyncNs > 0 && statsLastRenderedNs > 0 && (renderTimeNs - statsLastRenderedNs) < (vsyncNs / 2)) {
+                dup = true;
+            }
+            statsLastRenderedNs = renderTimeNs;
+        }
+        if (!dup) {
+            activeWindowVideoStats.totalFramesRendered++;
+        }
+    }
+
+    private void statsMarkRendered() {
+        statsMarkRendered(-1, System.nanoTime());
+    }
+
+    // ----------------------------------------------------------------------
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
 
+
+    // PTS tracking for current stats window (local to renderer)
+    private long windowFirstPtsUs = -1;
+    private long windowLastPtsUs  = -1;
     private long lastTimestampUs;
     private int lastFrameNumber;
     private int refreshRate;
@@ -1393,7 +1428,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     if (activeWindowVideoStats != null) {
-                        activeWindowVideoStats.totalFramesRendered++;
+                        statsMarkRendered(-1, System.nanoTime());
                     }
                 } catch (IllegalStateException ignored) {
                     // Avoid leaking the buffer
@@ -1659,7 +1694,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                     // Conta al massimo 1 frame ogni periodo
                                     if (lfrAccumNs >= vsyncPeriodNs) {
-                                        activeWindowVideoStats.totalFramesRendered++;
+                                        statsMarkRendered(-1, System.nanoTime());
                                         // conserva l'errore frazionario (es. 119.88 Hz)
                                         lfrAccumNs -= vsyncPeriodNs;
                                         if (lfrAccumNs < 0) lfrAccumNs = 0;
@@ -1743,7 +1778,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         }
                                         lastPresentNs = nowNs;
                                         lastRenderedFrameTimeNanos = nowNs;
-                                        if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
+                                        if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
                                         recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
@@ -1760,7 +1795,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         }
                                         lastPresentNs = nowNs;
                                         lastRenderedFrameTimeNanos = nowNs;
-                                        if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
+                                        if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
                                         recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
@@ -1792,7 +1827,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         }
 
                                         lastRenderedFrameTimeNanos = lastPresentNs;
-                                        if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
+                                        if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
                                         recentDrops = 0;
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
@@ -1852,8 +1887,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         statsUpdated = true;
                                     }
                                 }
-                                    if (activeWindowVideoStats != null) activeWindowVideoStats.totalFramesRendered++;
-                                }
+                                if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
+                            }
                             else {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
                                 // We just put all frames into the output buffer queue and let it handle things.
@@ -2363,6 +2398,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 lastTwo.add(lastWindowVideoStats);
                 lastTwo.add(activeWindowVideoStats);
                 VideoStatsFps fps = lastTwo.getFps();
+
+                // Compute corrected 'received' FPS using PTS window to avoid burst-induced spikes
+                float __receivedWall = fps.receivedFps;
+                float __receivedPts = 0f;
+                if (windowLastPtsUs > windowFirstPtsUs && activeWindowVideoStats != null) {
+                    float __deltaUs = (float)(windowLastPtsUs - windowFirstPtsUs);
+                    if (activeWindowVideoStats.totalFramesReceived > 1 && __deltaUs > 0f) {
+                        __receivedPts = ((activeWindowVideoStats.totalFramesReceived - 1) * 1_000_000f) / __deltaUs;
+                    }
+                }
+                float __received = (__receivedPts > 0f) ? Math.min(__receivedWall, __receivedPts) : __receivedWall;
+                float __plausibleCeil = Math.max(fps.totalFps, fps.renderedFps);
+                if (__plausibleCeil > 0f && __received > __plausibleCeil * 2.2f) {
+                    __received = __plausibleCeil;
+                }
                 String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
@@ -2406,7 +2456,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     // Also show per-window incoming and rendered FPS (same window of 'lastTwo')
                     // IN = frames received per second; R = frames rendered per second
                     sb.append("  IN:");
-                    sb.append((int) fps.receivedFps);
+                    sb.append((int) __received);
                     sb.append("  R:");
                     sb.append((int) fps.renderedFps);
                     // Show SDR/HDR mode in Perf Lite
@@ -2493,6 +2543,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             lastWindowVideoStats.copy(activeWindowVideoStats);
             activeWindowVideoStats.clear();
             activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+            windowFirstPtsUs = -1; windowLastPtsUs = -1;
+            statsLastRenderedPtsUs = Long.MIN_VALUE; statsLastRenderedNs = 0L;
+            statsLastRenderedPtsUs = Long.MIN_VALUE; statsLastRenderedNs = 0L;
         }
 
         boolean csdSubmittedForThisFrame = false;
@@ -2756,6 +2809,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             timestampUs = lastTimestampUs + 1;
         }
         lastTimestampUs = timestampUs;
+
+        // Update local PTS window markers using final input timestampUs
+        if (timestampUs >= 0) {
+            if (windowFirstPtsUs < 0) windowFirstPtsUs = timestampUs;
+            if (timestampUs > windowLastPtsUs) windowLastPtsUs = timestampUs;
+        }
+
 
         numFramesIn++;
 
