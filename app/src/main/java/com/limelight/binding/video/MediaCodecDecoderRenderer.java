@@ -1320,44 +1320,33 @@ android.media.MediaFormat __inF = null, __outF = null;
             frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
         }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
+// Don't render unless a new frame is due (microstutter guard)
+        final int rr = Math.max(1, refreshRate);
+        long actualFrameTimeDeltaNs   = frameTimeNanos - lastRenderedFrameTimeNanos;
+        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // ~80% of the next frame
+
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Render up to one frame when in frame pacing mode.
-            //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
+
+            // Keep at most 1 buffered frame to smooth jitter (preferLowerDelays path)
             if (preferLowerDelays) {
                 while (outputBufferQueue.size() > 1) {
                     Integer __idx = outputBufferQueue.poll();
-                    if (__idx != null) {
-                        try { videoDecoder.releaseOutputBuffer(__idx, false); } catch (Throwable ignored) {}
-                    } else {
-                        break;
-                    }
+                    if (__idx == null) break;
+                    try { videoDecoder.releaseOutputBuffer(__idx, false); } catch (Throwable ignored) {}
                 }
             }
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
+
+            // Present the next buffer
+            Integer nextOutputBufferObj = outputBufferQueue.poll();
+            if (nextOutputBufferObj != null) {
+                final int nextOutputBuffer = nextOutputBufferObj;
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        // Timed present aligned to choreographer frame
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                    }
-                    else {
-                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                            long __ts = System.nanoTime();
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
-                        } else {
-                            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                long __ts = System.nanoTime();
-                                videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
-                            } else {
-                                videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                            }
-                        }
+                    } else {
+                        // Present immediately
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                     }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
