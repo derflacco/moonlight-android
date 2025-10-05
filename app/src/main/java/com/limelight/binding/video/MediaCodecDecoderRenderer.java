@@ -1677,34 +1677,43 @@ android.media.MediaFormat __inF = null, __outF = null;
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Immediate present using frame PTS; no decoder-side pacing
                                     if (lastIndex >= 0) {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            final long tsNs = presentationTimeUs * 1000L;
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
-                                            lastPresentNs = System.nanoTime();
-                                        } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
-                                            lastPresentNs = System.nanoTime();
-                                        }
-                                        recentDrops = 0;
-                                        updateDecodeLatencyStats(presentationTimeUs);
-                                        statsUpdated = true;
+                                        try {
+                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            } else {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            }
+                                            long nowNs = System.nanoTime();
+                                            lastPresentNs = nowNs;
+                                            lastRenderedFrameTimeNanos = nowNs;
+                                            recentDrops = 0;
+                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            statsUpdated = true;
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) {}
                                     }
                                 }
-                                else
-
-                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-                                    // Never drop; present ASAP in order
-                                    final long nowNs = System.nanoTime();
+                                else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
+                                    // Never drop; present ASAP (timed @ now)
                                     if (lastIndex >= 0) {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                        } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
-                                        }
-                                        lastPresentNs = nowNs;
-                                        recentDrops = 0;
-                                        updateDecodeLatencyStats(presentationTimeUs);
-                                        statsUpdated = true;
+                                        try {
+                                            long nowNs = System.nanoTime();
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                            } else {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            }
+                                            lastPresentNs = nowNs;
+                                            recentDrops = 0;
+                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            statsUpdated = true;
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) {}
                                     }
 
                                 } else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
@@ -1714,19 +1723,24 @@ android.media.MediaFormat __inF = null, __outF = null;
                                            final long nowNs = System.nanoTime();
 
                                     if (lastIndex >= 0) {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            final long tsNs = (lastPresentNs > 0L)
-                                                    ? Math.max(nowNs, lastPresentNs + capPeriodNs)
-                                                    : nowNs;
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
-                                            lastPresentNs = tsNs;
+                                        // Calcola il prossimo slot "in ordine"
+                                        long targetNs = (lastPresentNs > 0L) ? (lastPresentNs + capPeriodNs) : nowNs;
+
+                                        // Se siamo in ritardo enorme (es. resume/sleep), riallinea senza saltare troppi slot
+                                        if (targetNs < nowNs - (capPeriodNs * 3L)) {
+                                            targetNs = nowNs;
+                                        }
+                                        // Non schedulare mai nel passato
+                                        if (targetNs < nowNs) targetNs = nowNs;
+
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, targetNs);
+                                            lastPresentNs = targetNs;
                                         } else {
-                                            if (lastPresentNs > 0L) {
-                                                long waitNs = (lastPresentNs + capPeriodNs) - nowNs;
-                                                if (waitNs > 0L && waitNs < 20_000_000L) {
-                                                    try { Thread.sleep(waitNs / 1_000_000L, (int)(waitNs % 1_000_000L)); }
-                                                    catch (InterruptedException ignored) {}
-                                                }
+                                            // Pre-21: sleep best-effort (limita a 20 ms)
+                                            long waitNs = targetNs - nowNs;
+                                            if (waitNs > 0L && waitNs < 20_000_000L) {
+                                                try { Thread.sleep(waitNs / 1_000_000L); } catch (Throwable ignored) {}
                                             }
                                             videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                             lastPresentNs = System.nanoTime();
@@ -1813,7 +1827,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                 // NB: We have to do this on the producer side because the consumer may not
                                 // run for a while (if there is a huge mismatch between stream FPS and display
                                 // refresh rate).
-                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         Integer __idx = outputBufferQueue.poll();
                                         if (__idx != null) { videoDecoder.releaseOutputBuffer(__idx, false); }
