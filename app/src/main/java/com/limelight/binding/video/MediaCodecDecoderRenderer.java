@@ -1770,12 +1770,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     // Present ASAP; no decoder-side pacing (best latency)
                                     if (lastIndex >= 0) {
                                         final long nowNs = System.nanoTime();
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                            // present immediately at now
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, nowNs);
-                                        } else {
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
-                                        }
+                                        safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                         lastPresentNs = nowNs;
                                         lastRenderedFrameTimeNanos = nowNs;
                                         if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
@@ -1786,13 +1781,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
                                 else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
                                     // Never drop; present ASAP (timed @ now)
-                                    final long nowNs = System.nanoTime();
                                     if (lastIndex >= 0) {
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, nowNs);
-                                        } else {
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
-                                        }
+                                        // Present immediato: nessun drop intra-vsync, massima scorrevolezza
+                                        final long nowNs = System.nanoTime();
+                                        safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                         lastPresentNs = nowNs;
                                         lastRenderedFrameTimeNanos = nowNs;
                                         if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
@@ -1808,19 +1800,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     final long nowNs = System.nanoTime();
 
                                     if (lastIndex >= 0) {
+                                        // Calcola il prossimo slot "in ordine"
+                                        long targetNs = (lastPresentNs > 0L) ? (lastPresentNs + capPeriodNs) : nowNs;
+
+                                        // Se siamo in ritardo enorme (es. resume/sleep), riallinea senza saltare troppi slot
+                                        if (targetNs < nowNs - (capPeriodNs * 3L)) {
+                                            targetNs = nowNs;
+                                        }
+                                        // Non schedulare mai nel passato
+                                        if (targetNs < nowNs) targetNs = nowNs;
+
                                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                            final long tsNs = (lastPresentNs > 0L)
-                                                    ? Math.max(nowNs, lastPresentNs + capPeriodNs)
-                                                    : nowNs;
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, tsNs);
-                                            lastPresentNs = tsNs;
+                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, targetNs);
+                                            lastPresentNs = targetNs;
                                         } else {
-                                            if (lastPresentNs > 0L) {
-                                                long waitNs = (lastPresentNs + capPeriodNs) - nowNs;
-                                                if (waitNs > 0L && waitNs < 20_000_000L) {
-                                                    try { Thread.sleep(waitNs / 1_000_000L, (int) (waitNs % 1_000_000L)); }
-                                                    catch (InterruptedException ignored) {}
-                                                }
+                                            // Pre-21: sleep best-effort (limita a 20 ms)
+                                            long waitNs = targetNs - nowNs;
+                                            if (waitNs > 0L && waitNs < 20_000_000L) {
+                                                try { Thread.sleep(waitNs / 1_000_000L); } catch (Throwable ignored) {}
                                             }
                                             safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
                                             lastPresentNs = System.nanoTime();
@@ -1900,7 +1897,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // NB: We have to do this on the producer side because the consumer may not
                                 // run for a while (if there is a huge mismatch between stream FPS and display
                                 // refresh rate).
-                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         Integer __idx = outputBufferQueue.poll();
                                         if (__idx != null) { safeReleaseOutputBufferNow(videoDecoder, __idx, false); }
