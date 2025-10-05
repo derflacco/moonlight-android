@@ -58,6 +58,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             final double a = 0.2; // smoothing factor
             return (avg == 0.0) ? sample : (a * sample + (1.0 - a) * avg);
         }
+        private final java.util.concurrent.atomic.AtomicInteger pendingFrames =
+                new java.util.concurrent.atomic.AtomicInteger(0);
 
         private long tEasu = 0L, tRcas = 0L;
         void ticEasu() { tEasu = now(); }
@@ -299,13 +301,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         destroyEgl();
     }
 
-    @Override public void onFrameAvailable(SurfaceTexture st) {
+    @Override
+    public void onFrameAvailable(SurfaceTexture st) {
         synchronized (frameLock) {
             frameAvailable = true;
             pendingFrames.incrementAndGet();
             frameLock.notifyAll();
         }
     }
+
 
     // ====== Loop ======
     private void renderLoop() {
@@ -694,6 +698,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             int[] sattr = {EGL14.EGL_NONE};
             eglWindowSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, windowSurfaceInput, sattr, 0);
             EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+            int p = pendingFrames.getAndSet(0);
+            if (p > 0) {
+                do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
+                decoderSurfaceTex.getTransformMatrix(texMatrix);
+            }
         } catch (Throwable t) {
             LimeLog.warning("GL init failed: " + t);
             destroyEgl();
