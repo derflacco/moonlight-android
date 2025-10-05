@@ -1570,17 +1570,23 @@ boolean isC2Decoder = false;
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Immediate present using frame PTS; no decoder-side pacing
                                     if (lastIndex >= 0) {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            final long tsNs = presentationTimeUs * 1000L;
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
-                                            lastPresentNs = System.nanoTime();
-                                        } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
-                                            lastPresentNs = System.nanoTime();
-                                        }
-                                        recentDrops = 0;
-                                        updateDecodeLatencyStats(presentationTimeUs);
-                                        statsUpdated = true;
+                                        try {
+                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            } else {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            }
+                                            long nowNs = System.nanoTime();
+                                            lastPresentNs = nowNs;
+                                            lastRenderedFrameTimeNanos = nowNs;
+                                            recentDrops = 0;
+                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            statsUpdated = true;
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) {}
                                     }
                                 }
                                 else
