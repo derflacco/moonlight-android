@@ -1871,20 +1871,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         } else {
                                             // Timed present @ nowNs (≥21)
                                             safeReleaseOutputBufferAt(videoDecoder, lastIndex, nowNs);
-                                            lastPresentNs = nowNs;
+                                            lastPresentNs = nowNs; // << mancava
+                                            lastRenderedFrameTimeNanos = nowNs;
+                                            statsUpdated = true;
                                             if (!isLate) lateStreak = 0;
                                             recentDrops = Math.max(0, recentDrops - 1);
-
+                                            if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
                                             updateDecodeLatencyStats(presentationTimeUs);
                                             statsUpdated = true;
                                         }
                                     } else {
-                                        // <21: no timestamped present; render immediato
                                         safeReleaseOutputBufferNow(videoDecoder, lastIndex, /* render */ true);
                                         lastPresentNs = System.nanoTime();
-
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        lastRenderedFrameTimeNanos = lastPresentNs;
                                         statsUpdated = true;
+                                        updateDecodeLatencyStats(presentationTimeUs);
+
                                     }
                                 }
                                 if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
