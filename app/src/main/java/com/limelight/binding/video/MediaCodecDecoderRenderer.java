@@ -47,6 +47,7 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
+import com.limelight.utils.StatsLogger;
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
     private long lastDecodeAvgLogNs = 0L;
     // --- HDR state for overlays ---
@@ -1080,7 +1081,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
         try { dec.releaseOutputBuffer(index, render); } catch (Throwable ignored) {}
-    }
+        if (render) { try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {} }
+}
     private void safeReleaseOutputBufferAt(android.media.MediaCodec dec, int index, long renderTimeNs) {
         boolean doRender = true;
         if (hdrTransition.get()) {
@@ -1093,9 +1095,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                 if (doRender) dec.releaseOutputBuffer(index, renderTimeNs);
+                try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                 else dec.releaseOutputBuffer(index, /*render*/ false);
             } else {
-                dec.releaseOutputBuffer(index, doRender);
+                dec.releaseOutputBuffer(index, doRender); if (doRender) { try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {} }
             }
         } catch (Throwable ignored) {}
     }
@@ -2062,6 +2065,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void start() {
+        try { StatsLogger.start(); } catch (Throwable ignored) {}
+
         startRendererThread();
         startChoreographerThread();
     }

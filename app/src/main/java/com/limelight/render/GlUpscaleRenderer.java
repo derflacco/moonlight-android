@@ -22,6 +22,7 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.limelight.utils.StatsLogger;
 /*
  * FidelityFX Super Resolution 1.0 (FSR1) — EASU + RCAS (GLES3 + OES port)
  * Copyright (c) 2021 Advanced Micro Devices, Inc.
@@ -404,6 +405,7 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
                 // Present
                 try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, targetPresentNs(System.nanoTime())); } catch (Throwable ignored) {}
                 boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+            try { StatsLogger.setSwapOk(__swapped); if (__swapped) StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                 if (!__swapped) { int err = EGL14.eglGetError(); try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed during bypass: 0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
                 continue;
             }
@@ -535,6 +537,7 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
             try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs); } catch (Throwable ignored) {}
 
             boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+            try { StatsLogger.setSwapOk(__swapped); if (__swapped) StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
             if (!__swapped) {
                 int err = EGL14.eglGetError();
                 try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
