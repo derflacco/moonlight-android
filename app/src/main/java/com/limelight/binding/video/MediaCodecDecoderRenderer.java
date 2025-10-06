@@ -1094,15 +1094,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                if (doRender) dec.releaseOutputBuffer(index, renderTimeNs);
-                try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
-                else dec.releaseOutputBuffer(index, /*render*/ false);
+                if (doRender) {
+                    dec.releaseOutputBuffer(index, renderTimeNs);
+                    try {
+                        StatsLogger.onFramePresented();
+                    } catch (Throwable ignored) {}
+                } else {
+                    dec.releaseOutputBuffer(index, /*render*/ false);
+                }
             } else {
-                dec.releaseOutputBuffer(index, doRender); if (doRender) { try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {} }
+                dec.releaseOutputBuffer(index, doRender);
+                if (doRender) {
+                    try {
+                        StatsLogger.onFramePresented();
+                    } catch (Throwable ignored) {}
+                }
             }
         } catch (Throwable ignored) {}
     }
-
     // Reflection helper: set HDR color info on upscaler if present
     private void __fsrSetHdrColorInfo(Object upscaler, int std, int tr, int rng, byte[] hdr10) {
         if (upscaler == null) return;
