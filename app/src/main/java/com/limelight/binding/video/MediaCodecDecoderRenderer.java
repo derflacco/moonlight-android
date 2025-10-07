@@ -137,37 +137,40 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
 
 
-    // When preferLowerDelays = true (LFR/ULL): force 0 µs (non-blocking, latest-only).
-    // When preferLowerDelays = false (Balanced/managed): use this configurable timeout (µs) for output dequeue.
-    private volatile int preferLowerDelaysTimeoutUs = 2000; // default for managed; policy sets 0 µs when LFR
+    // When preferLowerDelays = true (LFR/ULL): force non-blocking by default.
+// When preferLowerDelays = false (Balanced/managed): use a small timeout for smoothing.
+    private volatile int preferLowerDelaysTimeoutUs = 0; // default 0 for ULL; policy may override if needed
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
     private int getOutputDequeueTimeoutUs() {
-        // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
-        if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
+        // ULL/LFR: never block the decoder thread by default
+        if (preferLowerDelays) {
+            return preferLowerDelaysTimeoutUs; // usually 0 µs
+        }
 
         if (prefs != null) {
-            // AntiLag (Balanced+LFR attivo): 150 µs
+            // AntiLag on managed profiles: tiny wait ONLY when queue is empty, otherwise non-blocking
             if (prefs.enableAntiLag &&
                     (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED
                             || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS
                             || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS)) {
-                return 150;
+                boolean empty = (outputBufferQueue == null || outputBufferQueue.isEmpty());
+                return empty ? 150 : 0; // 150 µs to catch the next frame, 0 when we already have backlog
             }
 
             switch (prefs.framePacing) {
                 case PreferenceConfiguration.FRAME_PACING_BALANCED:
-                    return 1000;   // 1 ms → riduce "IN spikes"
+                    return 2000;   // 2 ms: more tolerance, smoother in managed mode
                 case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
-                    return 500;    // molto reattivo, coda corta
+                    return 0;      // non-blocking for responsiveness
                 case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                 case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
-                    return 2000;   // più tolleranza, niente drop
+                    return 2000;   // 2 ms: favor smoothness, avoid drops
                 default:
                     break;
             }
         }
         // Default: non-blocking
-        return 1000;
+        return 0;
     }
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
             private void updateDecodeLatencyStats(long presentationTimeUs) {
