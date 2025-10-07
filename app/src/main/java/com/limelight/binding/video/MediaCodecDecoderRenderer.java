@@ -2138,7 +2138,24 @@ boolean isC2Decoder = false;
                 float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
                 StringBuilder sb = new StringBuilder();
-                if(prefs.enablePerfOverlayLite){
+                if(prefs.enablePerfOverlayMini){
+                    if(TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED){
+                        long netData=TrafficStatsHelper.getPackageRxBytes(Process.myUid())+TrafficStatsHelper.getPackageTxBytes(Process.myUid());
+                        if(lastNetDataNum!=0){
+                            float realtimeNetData=(netData-lastNetDataNum)/1024f;
+                            if(realtimeNetData>=1000){
+                                sb.append("BW: ").append(String.format("%.1f", realtimeNetData/1024f)).append(" M/s\n");
+                            }else{
+                                sb.append("BW: ").append(String.format("%.1f", realtimeNetData)).append(" K/s\n");
+                            }
+                        }
+                        lastNetDataNum=netData;
+                    }
+                    sb.append("PL: ").append(String.format("%.0f", (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append("%\n");
+                    sb.append("Net: ").append((int)(rttInfo >> 32)).append("ms | Dec: ").append(String.format("%.1f", decodeTimeMs)).append("ms\n");
+                    sb.append(String.format("%.2f", fps.totalFps)).append(" FPS");
+
+                } else if(prefs.enablePerfOverlayLite){
                     if(TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED){
                         long netData=TrafficStatsHelper.getPackageRxBytes(Process.myUid())+TrafficStatsHelper.getPackageTxBytes(Process.myUid());
                         if(lastNetDataNum!=0){
