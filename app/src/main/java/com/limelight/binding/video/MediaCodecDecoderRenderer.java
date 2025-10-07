@@ -2176,82 +2176,91 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void stop() {
-        // May be called already, but we'll call it now to be safe
+        // May be called already; call again to be safe
         prepareForStop();
-                // --- Async codec teardown (avoid late callbacks/races) ---
-                        try {
-                        if (useAsyncCodec && videoDecoder != null) {
-                                try {
-                                        // Detach callback to stop new deliveries immediately
-                                                    try {
-                                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                                                                    videoDecoder.setOnFrameRenderedListener(null, null);
-                                                                }
-                                                        } catch (Throwable ignored) { }
-                                                    // API compat: null handler variant
-                                                            try {
-                                                            videoDecoder.setCallback(null, null);
-                                                        } catch (Throwable ignored) {
-                                                            videoDecoder.setCallback(null);
-                                                        }
-                                    } catch (Throwable ignored) { }
-                            // Detach frame-rendered listener (set in configure) to avoid late callbacks
-                            try {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) videoDecoder.setOnFrameRenderedListener(null, null);
-                            } catch (Throwable ignored) {}
 
-                                        // Clear queues to drop any stale indices/info
-                                                try { asyncInputQueue.clear(); } catch (Throwable ignored) { }
-                                try { asyncOutputQueue.clear(); } catch (Throwable ignored) { }
-                                try { synchronized (asyncOutInfo) { asyncOutInfo.clear(); } } catch (Throwable ignored) { }
-                            }
-                    } catch (Throwable ignored) { }
+        // --- Async codec teardown (avoid late callbacks/races) ---
+        try {
+            if (useAsyncCodec && videoDecoder != null) {
+                // 1) Detach callbacks to stop new deliveries immediately
+                try {
+                    // Prefer the 2-arg variant; fallback to single-arg
+                    try { videoDecoder.setCallback(null, null); }
+                    catch (Throwable ignored) { videoDecoder.setCallback(null); }
+                } catch (Throwable ignored) { }
 
-                        // Stop callback looper thread
-                                try {
-                        if (codecCallbackThread != null) {
-                                try {
-                                        codecCallbackThread.quitSafely();
-                                    } catch (Throwable ignored) {
-                                        try { codecCallbackThread.quit(); } catch (Throwable ignored2) { }
-                                    }
-                                try {
-                                        codecCallbackThread.join();
-                                    } catch (InterruptedException e) {
-                                        Thread.currentThread().interrupt();
-                                    } catch (Throwable ignored) { }
-                                codecCallbackThread = null;
-                            }
-                    } catch (Throwable ignored) { }
-                // --- end async teardown ---
+                // 2) Detach frame-rendered listener (once)
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        videoDecoder.setOnFrameRenderedListener(null, null);
+                    }
+                } catch (Throwable ignored) { }
 
-        // Wait for the Choreographer looper to shut down (if we have one)
-        if (choreographerHandlerThread != null) {
-            try {
-                choreographerHandlerThread.join();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-
-                // InterruptedException clears the thread's interrupt status. Since we can't
-                // handle that here, we will re-interrupt the thread to set the interrupt
-                // status back to true.
-                Thread.currentThread().interrupt();
+                // 3) Clear async queues to drop stale indices/info
+                try { asyncInputQueue.clear(); } catch (Throwable ignored) { }
+                try { asyncOutputQueue.clear(); } catch (Throwable ignored) { }
+                try { synchronized (asyncOutInfo) { asyncOutInfo.clear(); } } catch (Throwable ignored) { }
             }
-        }
+        } catch (Throwable ignored) { }
 
-        // Wait for the renderer thread to shut down
+        // 4) Stop callback looper thread (clear affinity on its looper first)
+        try {
+            if (codecCallbackThread != null) {
+                if (android.os.Looper.myLooper() == codecCallbackThread.getLooper()) {
+                    // We are running inside the callback thread: clear directly and quit without join
+                    try { com.limelight.utils.CpuAffinity.clearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+                    try { codecCallbackThread.quitSafely(); } catch (Throwable ignored) {}
+                    codecCallbackThread = null;
+                } else {
+                    final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+                    try {
+                        new android.os.Handler(codecCallbackThread.getLooper()).post(() -> {
+                            try { com.limelight.utils.CpuAffinity.clearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+                            done.countDown();
+                        });
+                        try { done.await(100, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (Throwable ignored) {}
+                    } catch (Throwable ignored) {}
+
+                    try { codecCallbackThread.quitSafely(); } catch (Throwable ignored) {}
+                    try { codecCallbackThread.join(500); } catch (Throwable ignored) {}
+                    codecCallbackThread = null;
+                }
+            }
+        } catch (Throwable ignored) { }
+        // --- end async teardown ---
+
+        // 5) Stop choreographer looper thread (same pattern)
+        try {
+            if (choreographerHandlerThread != null) {
+                if (android.os.Looper.myLooper() == choreographerHandlerThread.getLooper()) {
+                    try { com.limelight.utils.CpuAffinity.clearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+                    try { choreographerHandlerThread.quitSafely(); } catch (Throwable ignored) {}
+                    choreographerHandlerThread = null;
+                } else {
+                    final java.util.concurrent.CountDownLatch cdone = new java.util.concurrent.CountDownLatch(1);
+                    try {
+                        new android.os.Handler(choreographerHandlerThread.getLooper()).post(() -> {
+                            try { com.limelight.utils.CpuAffinity.clearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+                            cdone.countDown();
+                        });
+                        try { cdone.await(100, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (Throwable ignored) {}
+                    } catch (Throwable ignored) {}
+                    try { choreographerHandlerThread.quitSafely(); } catch (Throwable ignored) {}
+                    try { choreographerHandlerThread.join(500); } catch (Throwable ignored) {}
+                    choreographerHandlerThread = null;
+                }
+            }
+        } catch (Throwable ignored) { }
+
+        // 6) Wait for the renderer thread to shut down
         try {
             rendererThread.join();
         } catch (InterruptedException e) {
             e.printStackTrace();
-
-            // InterruptedException clears the thread's interrupt status. Since we can't
-            // handle that here, we will re-interrupt the thread to set the interrupt
-            // status back to true.
             Thread.currentThread().interrupt();
         }
 
-        // Final safety: ensure GL upscaler is torn down
+        // 7) Final safety: ensure GL upscaler is torn down
         try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
         glUpscaler = null;
         if (decoderInputSurfaceForUpscale != null) {
@@ -2259,7 +2268,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             decoderInputSurfaceForUpscale = null;
         }
 
+        // 8) Finally, clear affinity on the current (renderer) thread and stop the watcher
+        try { com.limelight.utils.CpuAffinity.clearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+        try { com.limelight.utils.CpuAffinity.stopAffinityWatcher(); } catch (Throwable ignored) {}
     }
+
 
     @Override
     public void cleanup() {
