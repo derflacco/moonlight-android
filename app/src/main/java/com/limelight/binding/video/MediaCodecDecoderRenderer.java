@@ -1100,6 +1100,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
         }
 }
+    // Present con timestamp (schedulato al VSYNC)
     private void safeReleaseOutputBufferAt(android.media.MediaCodec dec, int index, long renderTimeNs) {
         boolean doRender = true;
         if (hdrTransition.get()) {
@@ -1113,22 +1114,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                 if (doRender) {
                     dec.releaseOutputBuffer(index, renderTimeNs);
-                    try {
-                        StatsLogger.onFramePresented();
-                    } catch (Throwable ignored) {}
+                    // >>> aggiunte per MoonStats
+                    try { com.limelight.utils.StatsLogger.setSwapOk(true); } catch (Throwable ignored) {}
+                    try { com.limelight.utils.StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                 } else {
                     dec.releaseOutputBuffer(index, /*render*/ false);
+                    // >>> segnala che non abbiamo presentato
+                    try { com.limelight.utils.StatsLogger.setSwapOk(false); } catch (Throwable ignored) {}
                 }
             } else {
+                // API < 21: non esiste releaseOutputBuffer(index, renderTimeNs)
                 dec.releaseOutputBuffer(index, doRender);
+                // >>> allinea swapOk anche qui
+                try { com.limelight.utils.StatsLogger.setSwapOk(doRender); } catch (Throwable ignored) {}
                 if (doRender) {
-                    try {
-                        StatsLogger.onFramePresented();
-                    } catch (Throwable ignored) {}
+                    try { com.limelight.utils.StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                 }
             }
         } catch (Throwable ignored) {}
     }
+
     // Reflection helper: set HDR color info on upscaler if present
     private void __fsrSetHdrColorInfo(Object upscaler, int std, int tr, int rng, byte[] hdr10) {
         if (upscaler == null) return;
