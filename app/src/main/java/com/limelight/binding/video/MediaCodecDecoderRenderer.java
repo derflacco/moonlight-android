@@ -149,14 +149,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // AntiLag (Balanced+LFR attivo): 150 µs
             if (prefs.enableAntiLag) return 150;
 
-            // Balanced senza AntiLag: micro-timeout (opzionale; puoi rimettere 0 se lo preferisci)
-            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 2000;
+            switch (prefs.framePacing) {
+                case PreferenceConfiguration.FRAME_PACING_BALANCED:
+                    return 1000;   // 1 ms → riduce "IN spikes"
+                case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
+                    return 500;    // molto reattivo, coda corta
+                case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+                case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+                    return 2000;   // più tolleranza, niente drop
+                default:
+                    break;
+            }
         }
-
-        // Altri pacing: non-blocking
-        return 0;
+        // Default: non-blocking
+        return 1000;
     }
-
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
             private void updateDecodeLatencyStats(long presentationTimeUs) {
                 final Long enqNs;
