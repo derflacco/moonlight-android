@@ -1847,32 +1847,49 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     final long nowNs = System.nanoTime();
 
                                     if (lastIndex >= 0) {
-                                        // Calcola il prossimo slot "in ordine"
-                                        long targetNs = (lastPresentNs > 0L) ? (lastPresentNs + capPeriodNs) : nowNs;
+                                        long targetNs;
 
-                                        // Se siamo in ritardo enorme (es. resume/sleep), riallinea senza saltare troppi slot
-                                        if (targetNs < nowNs - (capPeriodNs * 3L)) {
+                                        if (lastPresentNs <= 0L) {
+                                            // Prima presentazione: ancora a "ora"
                                             targetNs = nowNs;
-                                        }
-                                        // Non schedulare mai nel passato
-                                        if (targetNs < nowNs) targetNs = nowNs;
-
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                            safeReleaseOutputBufferAt(videoDecoder, lastIndex, targetNs);
-                                            lastPresentNs = targetNs;
                                         } else {
-                                            // Pre-21: sleep best-effort (limita a 20 ms)
-                                            long waitNs = targetNs - nowNs;
-                                            if (waitNs > 0L && waitNs < 20_000_000L) {
-                                                try { Thread.sleep(waitNs / 1_000_000L); } catch (Throwable ignored) {}
+                                            // Prossimo slot nominale
+                                            targetNs = lastPresentNs + capPeriodNs;
+
+                                            // Se siamo in ritardo, NON clampare a now: salta allo slot futuro
+                                            if (targetNs < nowNs) {
+                                                long missed = ((nowNs - targetNs) / capPeriodNs) + 1;
+                                                targetNs += missed * capPeriodNs;
                                             }
-                                            safeReleaseOutputBufferNow(videoDecoder, lastIndex, /*render*/ true);
-                                            lastPresentNs = System.nanoTime();
+
+                                            // Se il gap è enorme (resume/sleep), riancora per evitare una lunga attesa
+                                            if (nowNs - lastPresentNs > (capPeriodNs * 6L)) {
+                                                targetNs = nowNs;
+                                            }
+                                        }
+                                        android.media.MediaCodec.BufferInfo tmp = new android.media.MediaCodec.BufferInfo();
+                                        for (;;) {
+                                            int idx2 = nextOutputIndex(tmp, 0);
+                                            if (idx2 < 0) break;
+                                            long ptsNs = tmp.presentationTimeUs * 1000L;
+                                            // Se troppo in anticipo rispetto allo slot corrente, scartalo
+                                            if (ptsNs + (capPeriodNs / 2) < targetNs) {
+                                                safeReleaseOutputBufferNow(videoDecoder, idx2, false);
+                                                frameDropped = true;
+                                                continue;
+                                            }
+                                            // usa questo come candidato per lo slot
+                                            lastIndex = idx2;
+                                            presentationTimeUs = tmp.presentationTimeUs;
+                                            break;
                                         }
 
-                                        lastRenderedFrameTimeNanos = lastPresentNs;
-                                        if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
-                                        recentDrops = 0;
+                                        // Timed present allo slot calcolato (Surface/SurfaceFlinger allineano al VSYNC)
+                                        safeReleaseOutputBufferAt(videoDecoder, lastIndex, targetNs);
+                                        lastPresentNs = targetNs;
+                                        lastRenderedFrameTimeNanos = targetNs;
+
+                                        if (activeWindowVideoStats != null) statsMarkRendered(-1, targetNs);
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
