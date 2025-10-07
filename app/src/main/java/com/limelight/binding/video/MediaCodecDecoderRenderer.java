@@ -187,7 +187,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                if (!USE_FRAME_RENDER_TIME) {
                                    activeWindowVideoStats.totalTimeMs += decMs;
                                     }
-                            }
+                                  try { StatsLogger.setDecodeTimeNs(decMs * 1_000_000L); } catch (Throwable ignored) {}
+                              }
                     }
             }
 
@@ -1076,6 +1077,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             hdrTransitionEndMs = android.os.SystemClock.elapsedRealtime() + Math.max(200, durationMs);
             if (videoDecoder != null) {
                 try { videoDecoder.flush(); } catch (Throwable ignored) {}
+                synchronized (decodeTimingLock) { enqueueNsByPtsUs.clear(); }
             }
             // Try to soften the GL upscaler to reduce GPU spikes
             try { if (glUpscaler != null) __fsrCall(glUpscaler, "temporarilyBypassEasu"); } catch (Throwable ignored) {}
@@ -1093,7 +1095,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
         try { dec.releaseOutputBuffer(index, render); } catch (Throwable ignored) {}
-        if (render) { try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {} }
+        try { StatsLogger.setSwapOk(render); } catch (Throwable ignored) {}
+        if (render) {
+            try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
+        }
 }
     private void safeReleaseOutputBufferAt(android.media.MediaCodec dec, int index, long renderTimeNs) {
         boolean doRender = true;
@@ -1168,6 +1173,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     LimeLog.warning("Flushing decoder");
                     try {
                         videoDecoder.flush();
+                        synchronized (decodeTimingLock) { enqueueNsByPtsUs.clear(); }
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
@@ -1445,6 +1451,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                         // Timed present aligned to choreographer frame
                         safeReleaseOutputBufferAt(videoDecoder, nextOutputBuffer, frameTimeNanos);
+                        try { StatsLogger.setSwapOk(true); } catch (Throwable ignored) {}
+                        try { StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                         lastRenderedFrameTimeNanos = frameTimeNanos;
                         if (activeWindowVideoStats != null) statsMarkRendered(-1, frameTimeNanos);
                     } else {
@@ -1846,7 +1854,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         lastRenderedFrameTimeNanos = nowNs;
                                         if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
                                         recentDrops = 0;
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        //updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
                                 }
@@ -1860,7 +1868,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         lastRenderedFrameTimeNanos = nowNs;
                                         if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
                                         recentDrops = 0;
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        //updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
                                 }
@@ -1914,7 +1922,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         lastRenderedFrameTimeNanos = targetNs;
 
                                         if (activeWindowVideoStats != null) statsMarkRendered(-1, targetNs);
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        //updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
                                 }
@@ -1961,7 +1969,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             if (!isLate) lateStreak = 0;
                                             recentDrops = Math.max(0, recentDrops - 1);
                                             if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
-                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            //updateDecodeLatencyStats(presentationTimeUs);
                                             statsUpdated = true;
                                         }
                                     } else {
@@ -1969,7 +1977,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         lastPresentNs = System.nanoTime();
                                         lastRenderedFrameTimeNanos = lastPresentNs;
                                         statsUpdated = true;
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        //updateDecodeLatencyStats(presentationTimeUs);
 
                                     }
                                 }
@@ -1985,7 +1993,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             // --- Fallback stats update ---
                             // If we didn't update the stats in-branch and the frame wasn't dropped,
                             if (!statsUpdated && !frameDropped) {
-                                updateDecodeLatencyStats(presentationTimeUs);
+                               //updateDecodeLatencyStats(presentationTimeUs);
                             }
 
                         } else {
