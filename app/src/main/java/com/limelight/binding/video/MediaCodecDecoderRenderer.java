@@ -1344,9 +1344,12 @@ android.media.MediaFormat __inF = null, __outF = null;
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                         // Timed present aligned to choreographer frame
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                        lastRenderedFrameTimeNanos = frameTimeNanos;
                     } else {
                         // Present immediately
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                        final long nowNs = System.nanoTime();
+                        lastRenderedFrameTimeNanos = nowNs;
                     }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
