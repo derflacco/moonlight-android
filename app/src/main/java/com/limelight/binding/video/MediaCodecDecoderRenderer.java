@@ -1279,51 +1279,37 @@ try {
 // Best-effort: pin renderer thread to big cores if requested (non-root, optional JNI)
                 try {
                     if (prefs != null && prefs.preferBigCores) {
-                        try { int[] __perfMask = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly(); } catch (Throwable ignored) {}
-                        int[] __perfMask = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
-                        if (__perfMask != null && __perfMask.length >= 2) {
-                            com.limelight.utils.CpuAffinity.setAffinity(__perfMask);
-                        } else {
-                            int[] __perfMask2 = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
-                            if (__perfMask2 != null && __perfMask2.length >= 2) {
-                                com.limelight.utils.CpuAffinity.setAffinity(__perfMask2);
-                            } else {
-                                com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
-                            }
-                        }
+                        try { com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true); } catch (Throwable ignored) {}
+                        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY); } catch (Throwable ignored) {}
 
-
-                        // pin process-wide + boost hot threads (renderer/GL/Choreographer/Binder/MediaCodec) ---
+                        // 2) Pinna/prioritizza SOLO i thread veramente "hot" (NO mass pin, NO Binder/HwBinder)
                         try {
-                            int[] __bigQR = com.limelight.utils.CpuAffinity.detectPerfCpusAvoidPrimeOnly();
-                            if (__bigQR == null || __bigQR.length < 2) __bigQR = com.limelight.utils.CpuAffinity.detectBigCores();
-                            if (__bigQR != null && __bigQR.length > 0) {
-                                // Mass pin for all threads in this process
-                                com.limelight.utils.CpuAffinity.pinAllThreadsToCores(__bigQR);
+                            int[] big = com.limelight.utils.CpuAffinity.detectBigCores();
+                            if (big != null && big.length > 0) {
+                                int[] tids = com.limelight.utils.CpuAffinity.listTids();
+                                for (int tid : tids) {
+                                    String name = com.limelight.utils.CpuAffinity.readThreadName(tid);
+                                    if (name == null) name = "";
 
-                                // Bump priority and re-affirm affinity for hot threads
-                                int[] __tidsQR = com.limelight.utils.CpuAffinity.listTids();
-                                for (int __tidQR : __tidsQR) {
-                                    String __nameQR = com.limelight.utils.CpuAffinity.readThreadName(__tidQR);
-                                    if (__nameQR == null) __nameQR = "";
-                                    boolean __hotQR =
-                                            __nameQR.contains("Renderer") ||
-                                                    __nameQR.contains("RenderThread") ||
-                                                    __nameQR.contains("GL") || __nameQR.contains("GLThread") ||
-                                                    __nameQR.contains("Choreographer") ||
-                                                    __nameQR.contains("MediaCodec") || __nameQR.contains("CCodec") || __nameQR.contains("CodecLooper") ||
-                                                    __nameQR.contains("CodecCb") ||
-                                                    __nameQR.startsWith("Binder:") || __nameQR.startsWith("HwBinder:");
-                                    if (__hotQR) {
-                                        try {
-                                            android.os.Process.setThreadPriority(__tidQR,
-                                                    android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
-                                        } catch (Throwable ignored) {}
-                                        try {
-                                            com.limelight.utils.CpuAffinity.setAffinityForTid(__tidQR, __bigQR);
-                                        } catch (Throwable ignored) {}
+                                    if (name.startsWith("Binder:") || name.startsWith("HwBinder:")) {
+                                        // Evita di toccare Binder/HwBinder per non rischiare jank/ANR
+                                        continue;
                                     }
+                                    boolean isCodec = name.contains("CodecCb") || name.contains("MediaCodec")
+                                            || name.contains("CCodec")  || name.contains("CodecLooper");
+                                    boolean isGL    = name.contains("GLThread") || name.contains("RenderThread") || name.contains("Renderer");
+                                    boolean isChor  = name.contains("Choreographer");
+
+                                    if (!(isCodec || isGL || isChor)) continue;
+
+                                    int prio = isChor
+                                            ? android.os.Process.THREAD_PRIORITY_DISPLAY
+                                            : android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY;
+
+                                    try { android.os.Process.setThreadPriority(tid, prio); } catch (Throwable ignored) {}
+                                    try { com.limelight.utils.CpuAffinity.setAffinityForTid(tid, big); } catch (Throwable ignored) {}
                                 }
+                                try { com.limelight.utils.CpuAffinity.startAffinityWatcherWithFixedDelay(5000L); } catch (Throwable ignored) {}
                             }
                         } catch (Throwable ignored) {}
 // Log what we tried to set (native detection) + the kernel result
