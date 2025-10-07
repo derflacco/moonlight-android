@@ -147,7 +147,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         if (prefs != null) {
             // AntiLag (Balanced+LFR attivo): 150 µs
-            if (prefs.enableAntiLag) return 150;
+            if (prefs.enableAntiLag &&
+                    (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED
+                            || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS
+                            || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS)) {
+                return 150;
+            }
 
             switch (prefs.framePacing) {
                 case PreferenceConfiguration.FRAME_PACING_BALANCED:

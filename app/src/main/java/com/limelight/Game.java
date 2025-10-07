@@ -4496,8 +4496,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     // Decoder non fa pacing: rilascio immediato; GL/SurfaceFlinger decide (keep-latest + PTS)
                     decoderRenderer.setPreferLowerDelays(false);
                     decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
+
+                    // Log dedicato GPU_RAW
                     com.limelight.LimeLog.info(String.format("Pacing=GPU_RAW (forced by %s)",
                             gpuPath ? "Direct Present" : "FSR enabled"));
+                    com.limelight.LimeLog.info("Latency policy → GPU_RAW: immediate present; decoder pacing OFF; timeout=0us");
                 } catch (Throwable ignored) {}
                 return; // evita gli altri profili
             }
@@ -4534,12 +4537,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             final boolean lfrPure = lfrRequested && !balancedClass;          // latest-only (ULL)
             final boolean antiLagEffective = lfrRequested && balancedClass;   // AntiLag-only
 
-            // Timeout coda: 0 µs SOLO per LFR puro; altrimenti piccolo timeout per stabilità
-            final int timeoutUs = lfrPure ? 0 : 500;
-
             // Renderer API: TRUE=latest-only (LFR puro), FALSE=managed
             decoderRenderer.setPreferLowerDelays(lfrPure);
-            decoderRenderer.setPreferLowerDelaysTimeoutUs(timeoutUs);
+
+            // Timeout: impostalo SOLO per LFR puro (latest-only)
+            if (lfrPure) {
+                decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
+            }
 
             // Propaga AntiLag effettivo al config (se usato altrove)
             try {
@@ -4558,9 +4562,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         + (lfrPure ? " | LFR=pure" : (lfrRequested ? " | LFR=antilag-only" : " | LFR=off"))
                         + " | pacing=" + pacingName + " (class=" + (balancedClass ? "Balanced" : "Other") + ")");
 
-                com.limelight.LimeLog.info("Latency policy → " +
-                        (lfrPure ? "latest-only, timeout=0us" : ("managed, timeout=" + timeoutUs + "us")) +
-                        " | forceTight=" + (tightFromUi));
+                com.limelight.LimeLog.info("Latency policy → "
+                        + (lfrPure ? "latest-only, timeout=0us" : ("managed" + (antiLagEffective ? " (AntiLag)" : "")))
+                        + " | forceTight=" + (tightFromUi));
             } catch (Throwable ignored) { }
         } catch (Throwable ignored) { }
     }
