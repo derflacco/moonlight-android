@@ -1799,20 +1799,39 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
                             // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                // Get the last output buffer in the queue
-                                while ((outIndex = nextOutputIndex(info, getOutputDequeueTimeoutUs())) >= 0) {
-                                    safeReleaseOutputBufferNow(videoDecoder, lastIndex, false);
-                                    frameDropped = true; // we're discarding the oldest one
+                            // --- Pre-drain / Balanced handling ---
+                            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                                // Discard the oldest buffer if we've exceeded our limit.
+                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                    try {
+                                        Integer __idx = outputBufferQueue.poll();
+                                        if (__idx != null) { safeReleaseOutputBufferNow(videoDecoder, __idx, false); }
+                                        frameDropped = true;
+                                    } catch (IllegalStateException e) {
+                                        handleDecoderException(e);
+                                        return;
+                                    } catch (Throwable ignored) { }
+                                }
 
-                                    numFramesOut++;
-                                    lastIndex = outIndex;
-                                    presentationTimeUs = info.presentationTimeUs;
+                                // Add this buffer for Balanced pacing (present via Choreographer)
+                                outputBufferQueue.add(lastIndex);
+                                // NB: in BALANCED non presentiamo qui; le stats verranno aggiornate nel fallback più sotto
+                            } else {
+                                // Drain aggressivo SOLO per LFR puro o GPU_RAW
+                                if (preferLowerDelays || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+                                    while ((outIndex = nextOutputIndex(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                        safeReleaseOutputBufferNow(videoDecoder, lastIndex, false);
+                                        frameDropped = true;
+
+                                        numFramesOut++;
+                                        lastIndex = outIndex;
+                                        presentationTimeUs = info.presentationTimeUs;
+                                    }
                                 }
 
 
 
-// --- Present policy per profilo di pacing ---
+                                // --- Present policy per profilo di pacing ---
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Present ASAP; no decoder-side pacing (best latency)
                                     if (lastIndex >= 0) {
@@ -1929,11 +1948,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
-                                            // niente stats sui frame droppati
                                         } else {
-                                            // Timed present @ nowNs (≥21)
                                             safeReleaseOutputBufferAt(videoDecoder, lastIndex, nowNs);
-                                            lastPresentNs = nowNs; // << mancava
+                                            lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
                                             statsUpdated = true;
                                             if (!isLate) lateStreak = 0;
@@ -1951,32 +1968,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                     }
                                 }
-                                if (activeWindowVideoStats != null) statsMarkRendered(-1, lastPresentNs);
-                            }
-                            else {
-                                // For balanced frame pacing case, the Choreographer callback will handle rendering.
-                                // We just put all frames into the output buffer queue and let it handle things.
-
-                                // Discard the oldest buffer if we've exceeded our limit.
-                                //
-                                // NB: We have to do this on the producer side because the consumer may not
-                                // run for a while (if there is a huge mismatch between stream FPS and display
-                                // refresh rate).
-                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
-                                    try {
-                                        Integer __idx = outputBufferQueue.poll();
-                                        if (__idx != null) { safeReleaseOutputBufferNow(videoDecoder, __idx, false); }
-                                        frameDropped = true;
-                                    } catch (IllegalStateException e) {
-                                        // codec in stato illegale → gestisci e termina il thread (il finally farà recovery)
-                                        handleDecoderException(e);
-                                        return;
-                                    } catch (Throwable ignored) { }
+                                if (!statsUpdated &&
+                                        prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED &&
+                                        lastPresentNs != 0L &&
+                                        activeWindowVideoStats != null) {
+                                    statsMarkRendered(-1, lastPresentNs);
+                                    statsUpdated = true;
                                 }
-
-                                // Add this buffer
-                                outputBufferQueue.add(lastIndex);
-                                // NB: in BALANCED non presentiamo qui; lasciamo il fallback stats sotto
                             }
 
                             // --- Fallback stats update ---
