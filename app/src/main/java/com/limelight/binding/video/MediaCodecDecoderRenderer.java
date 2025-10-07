@@ -1445,9 +1445,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                         // Timed present aligned to choreographer frame
                         safeReleaseOutputBufferAt(videoDecoder, nextOutputBuffer, frameTimeNanos);
+                        lastRenderedFrameTimeNanos = frameTimeNanos;
+                        if (activeWindowVideoStats != null) statsMarkRendered(-1, frameTimeNanos);
                     } else {
                         // Present immediately
                         safeReleaseOutputBufferNow(videoDecoder, nextOutputBuffer, /*render*/ true);
+                        final long nowNs = System.nanoTime();
+                        lastRenderedFrameTimeNanos = nowNs;
+                        if (activeWindowVideoStats != null) statsMarkRendered(-1, nowNs);
                     }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
