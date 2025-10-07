@@ -1623,14 +1623,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Instant jitter hybrid (no EW-MA): compute small adaptive budget from instantaneous cadence
                 long   ijhLastPtsUs         = -1L;
                 long   ijhLastPresentNs     = 0L;
-                double ijhBudgetNs          = Math.max(vsyncPeriodNs * 0.10, Math.min(vsyncPeriodNs * 0.25, vsyncPeriodNs * 0.15)); // start at 15% of vsync
+                double ijhBudgetNs          = vsyncPeriodNs * 0.20; // start at 15% of vsync
                 // Adaptive period selection to avoid added latency on high-refresh devices
                 final boolean highRefresh = displayHz >= 90f;
                 final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
                 // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
+                // IJH constants: fast-decay peak-hold
+                final double IJH_DECAY = 0.82;
+                final long   IJH_MIN   = (long) (vsyncPeriodNs * 0.12);
+                final long   IJH_MAX   = (long) (vsyncPeriodNs * 0.38);
                 final long periodNs = forceTightThresholds
                         ? vsyncPeriodNs
-                        : ((managedMode && !highRefresh) ? Math.max(vsyncPeriodNs, streamPeriodNs) : vsyncPeriodNs);
+                : ((managedMode && !highRefresh) ? Math.max(vsyncPeriodNs, streamPeriodNs) : vsyncPeriodNs);
                 boolean isC2Decoder = false;
                 try {
                     String decName = videoDecoder.getName();
@@ -1650,7 +1654,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 int    tryAgainStreak          = 0;
                 int    recentDrops             = 0;
                 // Instant Jitter state (EWMA removed)
-                double jitterBudgetNs = ijhBudgetNs;
                 android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
@@ -1749,6 +1752,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         }
 
                         if (outIndex >= 0) {
+                            // IJH base period (local)
+                            final boolean __highRefresh = displayHz >= 90f;
+                            final boolean __managedBalanced = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+                            final long __basePeriodNs = (__managedBalanced && !__highRefresh)
+                                    ? Math.max(vsyncPeriodNs, streamPeriodNs)
+                                    : vsyncPeriodNs;
+
+                            // ===== IJH: aggiorna budget dal delta PTS istantaneo =====
+                            {
+                                final long curPtsUs = info.presentationTimeUs;
+                                if (ijhLastPtsUs > 0 && curPtsUs > ijhLastPtsUs) {
+                                    final long deltaPtsNs = (curPtsUs - ijhLastPtsUs) * 1000L;
+                                    final long expectedNs = __basePeriodNs;
+                                    final long instJitter = Math.abs(deltaPtsNs - expectedNs);
+                                    final double held = Math.max(instJitter, ijhBudgetNs * IJH_DECAY);
+                                    ijhBudgetNs = Math.max(IJH_MIN, Math.min(IJH_MAX, held));
+                                }
+                                ijhLastPtsUs = curPtsUs;
+                            }
+
                             // Decode latency (enqueue->dequeue), independent of present/drop
                             {
                                 final long __ptsUs = info.presentationTimeUs;
@@ -1860,22 +1883,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         double mismatch     = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
                                         mismatch = Math.min(2.0, mismatch);
 
-                                        double factorLatency = 1.02 + 0.13 * (0.5 * (jitterBudgetNs / vsyncPeriodNs)
-                                                + 0.3 * backPressure
-                                                + 0.2 * mismatch);
+                                        double factorLatency = 1.03
+                                                + 0.10 * (ijhBudgetNs / (double) vsyncPeriodNs)
+                                                + 0.05 * backPressure
+                                                + 0.04 * mismatch;
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
 
-                                        long dropThresholdNs = (long) (periodNs * factorLatency);
+                                        long dropThresholdNs = (long) (__basePeriodNs * factorLatency);
 
                                         final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (__basePeriodNs / 2);
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
 
                                         final boolean shouldDrop =
                                                 isLate &&
                                                         (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long) (periodNs * 0.5)) &&
+                                                        (sinceLastPresent < (long) (__basePeriodNs * 0.5)) &&
                                                         dropCooldownOk;
 
                                         if (shouldDrop) {
