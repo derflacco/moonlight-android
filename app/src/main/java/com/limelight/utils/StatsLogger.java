@@ -2,46 +2,60 @@ package com.limelight.utils;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
+
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Lightweight 1 Hz stats printer to avoid per-frame Log I/O on hot paths. */
+/** Lightweight stats logger, rate-limited and change-triggered. */
 public final class StatsLogger {
-    // Set false in perf/release if you want no prints at all
-    private static final boolean ENABLED = true;
+    // --- CONFIG ---
+    private static final boolean ENABLED = true;         // set false per silenziare in perf/release
+    private static final long PRINT_PERIOD_MS = 3000;    // ~3s tra stampe
+    private static final int MAX_SUPPRESS = 5;           // stampa comunque almeno ogni ~15s
 
+    // soglie minime di variazione per stampare
+    private static final int  MIN_FPS_DELTA = 8;             // fps
+    private static final long MIN_DEC_DELTA_NS = 500_000L;   // 0.5 ms
+    private static final long MIN_SLIP_DELTA_NS = 1_000_000L;// 1.0 ms
+    private static final int  MIN_Q_DELTA = 2;               // depth coda
+
+    // --- CONTATORI 1s/periodo ---
     private static final AtomicInteger frames = new AtomicInteger();
 
-    // Decode time (average over last second)
     private static final AtomicLong decSumNs = new AtomicLong();
     private static final AtomicInteger decCount = new AtomicInteger();
-    private static final AtomicLong lastDecodeNs = new AtomicLong(); // last sample (ns)
+    private static final AtomicLong lastDecodeNs = new AtomicLong(); // ultimo campione (ns)
 
-    // Present slip vs scheduled time (ns), averaged over last second
     private static final AtomicLong presentSlipSumNs = new AtomicLong();
     private static final AtomicInteger presentSlipCount = new AtomicInteger();
 
-    // Output queue depth (balanced path diagnostics)
     private static final AtomicInteger outQMax = new AtomicInteger();
     private static final AtomicInteger outQLast = new AtomicInteger();
 
-    // Decoder outputs and drops per second
     private static final AtomicInteger decoded = new AtomicInteger();
     private static final AtomicInteger drops = new AtomicInteger();
 
     private static final AtomicLong lastSwapResult = new AtomicLong(); // 1=ok, 0=err
 
+    // --- STATO LOGGER ---
     private static volatile boolean started;
+
+    // ultimi valori stampati (per soppressione)
+    private static volatile int  p_lastFps, p_lastIn, p_lastDrops, p_lastQ, p_lastQMax, p_lastSwapOk;
+    private static volatile long p_lastAvgDecNs, p_lastAvgSlipNs;
+    private static volatile int  suppressCount;
 
     private StatsLogger() {}
 
-    /** Call from hot path when a frame is actually presented to screen. */
+    // ---- API chiamate dal renderer ----
+    /** Call when a frame is actually presented to screen. */
     public static void onFramePresented() { frames.incrementAndGet(); }
 
-    /** Back-compat: keep if someone sets a single sample. */
+    /** Back-compat: single sample -> devia su add() per media. */
     public static void setDecodeTimeNs(long ns) { addDecodeTimeNs(ns); }
 
-    /** Accumulate decode time samples (ns) for 1 Hz avg. */
+    /** Accumula decode time sample (ns) per media di periodo. */
     public static void addDecodeTimeNs(long ns) {
         if (ns > 0) {
             lastDecodeNs.set(ns);
@@ -50,13 +64,13 @@ public final class StatsLogger {
         }
     }
 
-    /** Track decoder output rate. Call when dequeueOutput gives a real frame. */
+    /** Call quando il decoder produce un frame valido. */
     public static void incDecoded() { decoded.incrementAndGet(); }
 
-    /** Track dropped frames (releaseOutputBuffer(..., false)). */
+    /** Call quando droppi (releaseOutputBuffer(..., false)). */
     public static void incDrop() { drops.incrementAndGet(); }
 
-    /** Track output queue depth (update after push/pop). */
+    /** Aggiorna la profondità della coda output (Balanced). */
     public static void setOutputQueueDepth(int depth) {
         outQLast.set(depth);
         // atomic max
@@ -67,7 +81,7 @@ public final class StatsLogger {
         } while (!outQMax.compareAndSet(prev, next));
     }
 
-    /** Add present timing slip (|now - scheduledNs|). */
+    /** Aggiunge lo slip |now - scheduledNs| del present (ns). */
     public static void addPresentSlipNs(long ns) {
         if (ns >= 0) {
             presentSlipSumNs.addAndGet(ns);
@@ -75,10 +89,10 @@ public final class StatsLogger {
         }
     }
 
-    /** Optional: swap ok/fail (1/0) for sporadic diagnosis. */
+    /** Esito ultimo swap/present. */
     public static void setSwapOk(boolean ok) { lastSwapResult.set(ok ? 1 : 0); }
 
-    /** Start 1 Hz printing on main Looper (idempotent). */
+    /** Avvia il logger rate-limited (idempotente). */
     public static void start() {
         if (!ENABLED || started) return;
         started = true;
@@ -87,37 +101,62 @@ public final class StatsLogger {
             @Override public void run() {
                 if (!ENABLED) return;
 
+                // snapshot + reset contatori
                 int fps = frames.getAndSet(0);
 
-                long sum = decSumNs.getAndSet(0);
-                int cnt = decCount.getAndSet(0);
+                long dSum = decSumNs.getAndSet(0);
+                int  dCnt = decCount.getAndSet(0);
                 long last = lastDecodeNs.get();
-                long avgDecNs = (cnt > 0) ? (sum / Math.max(1, cnt)) : last;
+                long avgDecNs = (dCnt > 0) ? (dSum / Math.max(1, dCnt)) : last;
 
-                long slipSum = presentSlipSumNs.getAndSet(0);
-                int slipCnt = presentSlipCount.getAndSet(0);
-                long avgSlipNs = (slipCnt > 0) ? (slipSum / Math.max(1, slipCnt)) : 0L;
+                long sSum = presentSlipSumNs.getAndSet(0);
+                int  sCnt = presentSlipCount.getAndSet(0);
+                long avgSlipNs = (sCnt > 0) ? (sSum / Math.max(1, sCnt)) : 0L;
 
                 int in = decoded.getAndSet(0);
                 int dr = drops.getAndSet(0);
                 int qMax = outQMax.getAndSet(0);
                 int q = outQLast.get();
 
-                long swapOk = lastSwapResult.get();
+                int swapOk = (int) lastSwapResult.get();
 
-                android.util.Log.d(
-                        "MoonStats",
-                        "fps=" + fps +
-                                " in=" + in +
-                                " drop=" + dr +
-                                " q=" + q + "/" + qMax +
-                                " decodeNs=" + avgDecNs +
-                                " slipNs=" + avgSlipNs +
-                                " swapOk=" + swapOk
-                );
+                // decide se stampare
+                boolean changed =
+                        Math.abs(fps - p_lastFps) >= MIN_FPS_DELTA ||
+                                Math.abs(avgDecNs - p_lastAvgDecNs) >= MIN_DEC_DELTA_NS ||
+                                Math.abs(avgSlipNs - p_lastAvgSlipNs) >= MIN_SLIP_DELTA_NS ||
+                                Math.abs(q - p_lastQ) >= MIN_Q_DELTA ||
+                                qMax > p_lastQMax;
 
-                h.postDelayed(this, 1000);
+                boolean event = (dr > 0) || (swapOk == 0) || (in == 0 && fps == 0); // cose "interessanti"
+
+                if (!(changed || event) && suppressCount < MAX_SUPPRESS) {
+                    suppressCount++;
+                } else {
+                    suppressCount = 0;
+                    // stampa 1 riga compatta
+                    Log.d("MoonStats",
+                            "fps=" + fps +
+                                    " in=" + in +
+                                    " drop=" + dr +
+                                    " q=" + q + "/" + qMax +
+                                    " decodeNs=" + avgDecNs +
+                                    " slipNs=" + avgSlipNs +
+                                    " swapOk=" + swapOk);
+
+                    // aggiorna baseline
+                    p_lastFps = fps;
+                    p_lastIn = in;
+                    p_lastDrops = dr;
+                    p_lastQ = q;
+                    p_lastQMax = qMax;
+                    p_lastAvgDecNs = avgDecNs;
+                    p_lastAvgSlipNs = avgSlipNs;
+                    p_lastSwapOk = swapOk;
+                }
+
+                h.postDelayed(this, PRINT_PERIOD_MS);
             }
-        }, 1000);
+        }, PRINT_PERIOD_MS);
     }
 }
