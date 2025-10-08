@@ -159,91 +159,72 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
     /** Populate presentation-size hint by querying the device display (per-device, per-rotation). */
     public void setPresentationSizeHintFromContext(android.content.Context ctx) {
         if (ctx == null) return;
-
         int w = 0, h = 0;
-
-        // WindowManager compat (21+)
-        final android.view.WindowManager wm =
-                (android.os.Build.VERSION.SDK_INT >= 23)
-                        ? ctx.getSystemService(android.view.WindowManager.class)
-                        : (android.view.WindowManager) ctx.getSystemService(android.content.Context.WINDOW_SERVICE);
-
         // API 30+: WindowMetrics (rotation-aware)
-        if (android.os.Build.VERSION.SDK_INT >= 30 && wm != null) {
-            try {
-                android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
-                android.graphics.Rect b = m.getBounds();
-                // b is never null
-                w = Math.max(w, b.width());
-                h = Math.max(h, b.height());
-            } catch (Throwable ignored) {}
-        }
-
-        // Refresh rate → framePeriodNs (best-effort)
         try {
-            float rr = 60f;
-            android.view.Display d = null;
+            android.view.WindowManager wm = ctx.getSystemService(android.view.WindowManager.class);
+            if (wm != null) {
+                try {
+                    android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
+                    android.graphics.Rect b = m.getBounds();
+                    w = Math.max(w, b.width());
+                    h = Math.max(h, b.height());
+                } catch (Throwable ignored) {}
+                // Also derive display refresh rate → framePeriodNs (best-effort)
+                try {
+                    float rr = 60f;
+                    android.view.Display d;
+                    if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        d = null;
+                        try { d = ctx.getDisplay(); } catch (Throwable ignored) {}
 
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
-                // 1) R+: Context#getDisplay()
-                try { d = ctx.getDisplay(); } catch (Throwable ignored) {}
-                // 2) fallback: DisplayManager DEFAULT_DISPLAY
-                if (d == null) {
-                    android.hardware.display.DisplayManager dm =
-                            (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
-                    if (dm != null) d = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+                        // 2) Fallback: DisplayManager → DEFAULT_DISPLAY
+                        if (d == null) {
+                            android.hardware.display.DisplayManager dm =
+                                    (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
+                            if (dm != null) d = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+                        }
+
+                    } else {
+                        d = (wm != null) ? wm.getDefaultDisplay() : null;
+                    }
+                    if (d != null) rr = d.getRefreshRate();
+
+                    if (rr < 30f)  rr = 60f;
+                    if (rr > 240f) rr = 240f;
+                    framePeriodNs = (long) (1_000_000_000L / rr);
+
+                } catch (Throwable ignored) {
+                    framePeriodNs = 16_666_667L; // fallback 60 Hz
                 }
-            } else {
-                // <R: WindowManager#getDefaultDisplay()
-                if (wm != null) {
-                    d = wm.getDefaultDisplay();
-                }
-                if (d == null) {
-                    android.hardware.display.DisplayManager dm =
-                            (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
-                    if (dm != null) d = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
-                }
+
+
             }
-
-            if (d != null) rr = d.getRefreshRate();
-            if (rr < 30f)  rr = 60f;
-            if (rr > 240f) rr = 240f;
-
-            framePeriodNs = (long) (1_000_000_000L / rr);
-        } catch (Throwable ignored) {
-            framePeriodNs = 16_666_667L; // fallback 60 Hz
-        }
-
-        // < API 30: real metrics for w/h
-        if (w == 0 || h == 0) {
-            try {
-                android.hardware.display.DisplayManager dm =
-                        (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
-                android.view.Display d = (dm != null) ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null;
-                if (d != null) {
-                    android.util.DisplayMetrics dmets = new android.util.DisplayMetrics();
-                    d.getRealMetrics(dmets);
-                    w = Math.max(w, dmets.widthPixels);
-                    h = Math.max(h, dmets.heightPixels);
-                }
-            } catch (Throwable ignored) {}
-        }
-
-        // Ultimo fallback
-        if (w == 0 || h == 0) {
+        } catch (Throwable ignored) {}
+        // Display.getRealMetrics
+        try {
+            android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
+            android.view.Display d = (dm != null ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null);
+            if (d != null) {
+                android.util.DisplayMetrics dmets = new android.util.DisplayMetrics();
+                d.getRealMetrics(dmets);
+                w = Math.max(w, dmets.widthPixels);
+                h = Math.max(h, dmets.heightPixels);
+            }
+        } catch (Throwable ignored) {}
+        // Fallback
+        if (w <= 0 || h <= 0) {
             try {
                 android.util.DisplayMetrics dmets = ctx.getResources().getDisplayMetrics();
                 w = Math.max(w, dmets.widthPixels);
                 h = Math.max(h, dmets.heightPixels);
             } catch (Throwable ignored) {}
         }
-
         if (w > 0 && h > 0) {
             setPresentationSizeHint(w, h);
             try { com.limelight.LimeLog.info("FSR: presentation hint (auto) = " + w + "x" + h); } catch (Throwable ignored) {}
         }
     }
-
 
     // ===== Performance state =====
     // VAO (ES3) per ridurre le bind per draw; fallback automatico a VBO path
