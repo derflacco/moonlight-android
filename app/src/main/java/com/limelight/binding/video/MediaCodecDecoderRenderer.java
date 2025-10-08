@@ -161,7 +161,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 case PreferenceConfiguration.FRAME_PACING_BALANCED:
                     return 1500;   // 1.5 ms: more tolerance, smoother in managed mode
                 case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
-                    return 0;      // non-blocking for responsiveness
+                    return 500;      // 0.5ms
                 case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                 case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
                     return 3000;   // 3 ms: favor smoothness, avoid drops
