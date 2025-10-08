@@ -159,18 +159,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
             switch (prefs.framePacing) {
                 case PreferenceConfiguration.FRAME_PACING_BALANCED:
-                    return 2000;   // 2 ms: more tolerance, smoother in managed mode
+                    return 1500;   // 1.5 ms: more tolerance, smoother in managed mode
                 case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
                     return 0;      // non-blocking for responsiveness
                 case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                 case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
-                    return 2000;   // 2 ms: favor smoothness, avoid drops
+                    return 3000;   // 3 ms: favor smoothness, avoid drops
                 default:
                     break;
             }
         }
         // Default: non-blocking
-        return 0;
+        return 500;
     }
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
             private void updateDecodeLatencyStats(long presentationTimeUs) {
