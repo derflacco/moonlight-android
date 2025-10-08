@@ -162,42 +162,49 @@ public class StreamSettings extends AppCompatActivity {
     }
 
     public static class SettingsFragment extends PreferenceFragmentCompat {
+        // --- UI lock helpers (Direct Present / FSR / HDR) ---
+        private final SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
+                (sp, key) -> {
+                    if ("checkbox_gpu_path_mode".equals(key)                 // Direct Present
+                            || "pref_video_upscale_enable".equals(key)       // FSR
+                            || "pref_video_hdr_enable".equals(key)           // HDR (var. 1)
+                            || "pref_hdr_enable".equals(key)                 // HDR (var. 2)
+                            || "pref_hdr_pipeline_enable".equals(key)) {     // HDR pipeline toggle
+                        updateLocks();
+                    }
+                };
 
-// --- UI lock helpers (Direct Present / FSR) ---
-private final SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
-        (sp, key) -> {
-            if ("checkbox_gpu_path_mode".equals(key)
-                    || "pref_video_upscale_enable".equals(key)) {
-                updateLocks();
-            }
-        };
 
-private void updateLocks() {
-    SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
-    boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);   // Direct Present
-    boolean fsrOn   = sp.getBoolean("pref_video_upscale_enable", false);
+        private void updateLocks() {
+            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-    // Rules:
-    // - Direct Present ON -> lock: frame pacing, LFR balance, Tight VSync, FSR enable
-    // - FSR ON (no gpuPath) -> lock: frame pacing, LFR balance (Tight free)
-    boolean lockAll   = gpuPath;
-    boolean lockFromF = (!gpuPath && fsrOn);
+            // Direct Present (GPU Path)
+            boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
 
-    boolean lockPacing = lockAll || lockFromF; // frame_pacing
-    boolean lockLfr    = lockAll || lockFromF; // pref_low_latency_frame_balance
-    //boolean lockTight  = lockAll;              // checkbox_forceTightThresholds
-    boolean lockFsrEn  = lockAll;              // pref_video_upscale_enable
+            // HDR: true se almeno uno dei toggle è attivo (adatta le chiavi ai tuoi nomi se diverso)
+            boolean hdrOn =
+                    (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
+                            (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
+                            (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
-    Preference pacing = findPreference("frame_pacing");
-    Preference lfrBal = findPreference("pref_low_latency_frame_balance");
-    //Preference tight  = findPreference("checkbox_forceTightThresholds");
-    Preference fsrEn  = findPreference("pref_video_upscale_enable");
+            // Regole:
+            // - FSR: UI disabilitata solo se Direct Present OPPURE HDR sono attivi
+            // - Frame pacing / LFR: lockati solo da Direct Present
+            boolean lockPacing = gpuPath;               // "frame_pacing"
+            boolean lockLfr    = gpuPath;               // "pref_low_latency_frame_balance"
+            boolean lockFsrEn  = gpuPath || hdrOn;      // "pref_video_upscale_enable"
 
-    if (pacing != null) pacing.setEnabled(!lockPacing);
-    if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
-    //if (tight  != null) tight.setEnabled(!lockTight);
-    if (fsrEn  != null)  fsrEn.setEnabled(!lockFsrEn);
-}
+            Preference pacing = findPreference("frame_pacing");
+            Preference lfrBal = findPreference("pref_low_latency_frame_balance");
+            Preference fsrEn  = findPreference("pref_video_upscale_enable");
+            // Se vuoi anche bloccare Tight VSync con Direct Present, decommenta le due righe seguenti:
+            // Preference tight  = findPreference("checkbox_forceTightThresholds");
+            // if (tight  != null) tight.setEnabled(!gpuPath);
+
+            if (pacing != null) pacing.setEnabled(!lockPacing);
+            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
+            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
+        }
 
 @Override
 public void onResume() {
