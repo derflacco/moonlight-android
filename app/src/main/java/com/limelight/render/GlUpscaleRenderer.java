@@ -291,6 +291,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (prefs != null && prefs.gpuPathMode) {
                 // Hard-bypass FSR paths in GPU Path mode
                 drawOesToScreen();
+                try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
+                boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+                if (!swapped) { try { int err = EGL14.eglGetError(); com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
+                continue;
             }
 
             // Decide target size for *policy/telemetry*: prefer display hint if provided
