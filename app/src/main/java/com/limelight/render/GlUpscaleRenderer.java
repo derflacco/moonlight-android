@@ -40,7 +40,6 @@ import com.limelight.utils.StatsLogger;
  */
 public final @Keep
 class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
-    private volatile long framePeriodNs = 16_666_667L; // ~16.67 ms
     // Temporary EASU bypass window (used during HDR switch)
     private volatile long fsrBypassUntilMs = 0L;
 
@@ -167,38 +166,8 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
                 try {
                     android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
                     android.graphics.Rect b = m.getBounds();
-                    w = Math.max(w, b.width());
-                    h = Math.max(h, b.height());
+                    if (b != null) { w = Math.max(w, b.width()); h = Math.max(h, b.height()); }
                 } catch (Throwable ignored) {}
-                // Also derive display refresh rate → framePeriodNs (best-effort)
-                try {
-                    float rr = 60f;
-                    android.view.Display d;
-                    if (android.os.Build.VERSION.SDK_INT >= 30) {
-                        d = null;
-                        try { d = ctx.getDisplay(); } catch (Throwable ignored) {}
-
-                        // 2) Fallback: DisplayManager → DEFAULT_DISPLAY
-                        if (d == null) {
-                            android.hardware.display.DisplayManager dm =
-                                    (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
-                            if (dm != null) d = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
-                        }
-
-                    } else {
-                        d = (wm != null) ? wm.getDefaultDisplay() : null;
-                    }
-                    if (d != null) rr = d.getRefreshRate();
-
-                    if (rr < 30f)  rr = 60f;
-                    if (rr > 240f) rr = 240f;
-                    framePeriodNs = (long) (1_000_000_000L / rr);
-
-                } catch (Throwable ignored) {
-                    framePeriodNs = 16_666_667L; // fallback 60 Hz
-                }
-
-
             }
         } catch (Throwable ignored) {}
         // Display.getRealMetrics
@@ -384,7 +353,7 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
                 // Draw OES directly to screen without FSR passes
                 drawOesToScreen();
                 // Present
-                try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, targetPresentNs(System.nanoTime())); } catch (Throwable ignored) {}
+                try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
                 boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
             try { StatsLogger.setSwapOk(__swapped); if (__swapped) StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                 if (!__swapped) { int err = EGL14.eglGetError(); try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed during bypass: 0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
@@ -512,9 +481,7 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
             }
 
             // Usa il timestamp del frame quando disponibile per sincronizzarsi meglio al VSYNC di SF
-            final long presentNs = Math.max((lastFrameTexTimestampNs > 0L) ? lastFrameTexTimestampNs : __now,
-                    targetPresentNs(__now));
-
+            final long presentNs = (lastFrameTexTimestampNs > 0L) ? lastFrameTexTimestampNs : System.nanoTime();
             try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs); } catch (Throwable ignored) {}
 
             boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
@@ -1158,12 +1125,5 @@ try {
         GLES20.glDeleteFramebuffers(1, fboId, 0);
 
         try { com.limelight.LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
-    }
-    // Compute a near-future presentation timestamp for FIFO swapchains
-    private long targetPresentNs(long nowNs) {
-        // Present a bit before the next vsync to avoid missing the fence
-        final long SAFETY_MARGIN_NS = 1_000_000L;
-        long t = nowNs + framePeriodNs - SAFETY_MARGIN_NS;
-        return (t > nowNs) ? t : nowNs;
     }
 }
