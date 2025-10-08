@@ -402,8 +402,12 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
 
             if (prefs != null && prefs.gpuPathMode) {
-                // Hard-bypass FSR paths in GPU Path mode
                 drawOesToScreen();
+                try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
+                boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+                try { com.limelight.utils.StatsLogger.setSwapOk(swapped); if (swapped) com.limelight.utils.StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
+                if (!swapped) { try { int err = EGL14.eglGetError(); com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
+                continue;
             }
 
             // Decide target size for *policy/telemetry*: prefer display hint if provided
@@ -411,10 +415,10 @@ class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
             final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
             float scaleX = (float) dstTargetW / (float) srcW;
             float scaleY = (float) dstTargetH / (float) srcH;
-            boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
+            boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.01f;
 
             // === FSR path selection + telemetry ===
-            final float nearThr = 0.05f;
+            final float nearThr = 0.01f;
 
             if (!upscaleEnabled || modeNone) {
                 // BYPASS
@@ -882,7 +886,7 @@ try {
         //  - Make high values (>=0.7) more pronounced
         //  - Cap slightly higher when not near-native to allow stronger RCAS
         float s = clamp01(ui);
-        if (s <= 0.05f) return 0f;              // 0..5% = OFF (dead zone)
+        if (s <= 0.02f) return 0f;             // 0..5% = OFF (dead zone)
         s = (s - 0.05f) / 0.95f;                // rebase to 0..1
 
         // Smooth ease-out with a bit more punch than before
@@ -894,7 +898,7 @@ try {
         s = (float)Math.pow(s, gamma);
 
         // Allow a higher cap when not near-native
-        float cap = nearNative ? 0.22f : 0.35f; // was ~0.18/0.25
+        float cap = nearNative ? 0.32f : 0.55f;
         return cap * s;
     }
 
