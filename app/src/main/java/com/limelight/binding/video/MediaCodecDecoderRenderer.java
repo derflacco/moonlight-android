@@ -780,10 +780,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
         try {
             if (glUpscaler != null) {
-                boolean dbg = (prefs != null) && (prefs.enablePerfOverlay || prefs.enablePerfOverlayLite);
+                boolean dbg = false;
+                if (prefs != null) {
+                    dbg = prefs.enablePerfOverlayLite
+                            && prefs.enablePerfOverlayLiteAdvanced
+                            && prefs.videoUpscaleEnable
+                            && !prefs.gpuPathMode;
+                }
                 __fsrSetDebugEnabled(glUpscaler, dbg);
             }
         } catch (Throwable ignored) {}
+
 
 
 
@@ -2537,14 +2544,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
-                    // Also show per-window incoming and rendered FPS (same window of 'lastTwo')
+                    /* ADV_LITE_START */
+                    if (prefs != null && prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteAdvanced) {
+                        // IN (incoming frames per sec) and R (rendered FPS) for the same stats window
+                        sb.append("  IN:");
+                        sb.append((int) __received);
+                        sb.append("  R:");
+                        sb.append((int) fps.renderedFps);
+
+                        // HDR/SDR indicator
+                        sb.append("  ").append(hdrActive ? "HDR" : "SDR");
+
+                        // FSR indicator (only when upscaler is enabled and Direct Present is OFF)
+                    }
+                    /* ADV_LITE_END */
+
+/*                    // Also show per-window incoming and rendered FPS (same window of 'lastTwo')
                     // IN = frames received per second; R = frames rendered per second
                     sb.append("  IN:");
                     sb.append((int) __received);
                     sb.append("  R:");
                     sb.append((int) fps.renderedFps);
                     // Show SDR/HDR mode in Perf Lite
-                    sb.append("  ").append(hdrActive ? "HDR" : "SDR");
+                    sb.append("  ").append(hdrActive ? "HDR" : "SDR");*/
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
