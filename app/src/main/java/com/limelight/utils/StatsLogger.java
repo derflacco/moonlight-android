@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Lightweight stats logger, rate-limited and change-triggered. */
 public final class StatsLogger {
     // --- CONFIG ---
-    private static final boolean ENABLED = true;         // set false per silenziare in perf/release
+    private static final boolean ENABLED = false;         // set false per silenziare in perf/release
     private static final long PRINT_PERIOD_MS = 3000;    // ~3s tra stampe
     private static final int MAX_SUPPRESS = 5;           // stampa comunque almeno ogni ~15s
 
