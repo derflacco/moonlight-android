@@ -98,7 +98,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return (s != null) ? s.toString() : "";
         } catch (Throwable ignored) { return ""; }
     }
-
+    // Prefix the overlay text with a small, slowly changing number of spaces to nudge its position.
+    private static String __applyLiteShift(String text, int spaces) {
+        if (text == null || text.isEmpty() || spaces <= 0) return text;
+        StringBuilder pfx = new StringBuilder(spaces);
+        for (int i = 0; i < spaces; i++) pfx.append(' ');
+        return pfx.append(text).toString(); // shift solo prima riga
+    }
     // --- end helpers ---
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
@@ -152,7 +158,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private String glRenderer;
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
-
+    // --- OLED burn-in protection for Lite overlay (horizontal pixel/text shift) ---
+    private static final long LITE_SHIFT_PERIOD_NS = 30_000_000_000L; // 30s
+    private long liteShiftNextNs = 0L;
+    private int liteShiftSpaces = 0; // 0..2
     private static final int CR_MAX_TRIES = 10;
     private static final int CR_RECOVERY_TYPE_NONE = 0;
     private static final int CR_RECOVERY_TYPE_FLUSH = 1;
@@ -1813,6 +1822,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    // __APPLY_LITE_SHIFT: OLED protection (horizontal nudge)
+                    try {
+                        if (prefs.enablePerfOverlayLiteOledShift) {
+                            long now = System.nanoTime();
+                            if (now >= liteShiftNextNs) {
+                                liteShiftNextNs = now + LITE_SHIFT_PERIOD_NS;
+                                // Ping-pong 0 -> 1 -> 2 -> 1 -> 0
+                                if (liteShiftSpaces == 0) liteShiftSpaces = 1;
+                                else if (liteShiftSpaces == 1) liteShiftSpaces = 2;
+                                else if (liteShiftSpaces == 2) liteShiftSpaces = 1;
+                                else liteShiftSpaces = 0;
+                            }
+                        } else {
+                            liteShiftSpaces = 0;
+                        }
+                    } catch (Throwable ignored) {}
                     /* ADV_LITE_START */
                     if (prefs != null && prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteAdvanced) {
                         // IN (incoming frames per sec) and R (rendered FPS) for the same stats window
@@ -1898,6 +1923,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     } catch (Throwable ignored) {}
 
                 String fullLog = sb.toString();
+                if (prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteOledShift) {
+                    try {
+                        sb.insert(0, new String(new char[Math.max(0, liteShiftSpaces)]).replace('\0', ' '));
+                    } catch (Throwable ignored) {}
+                }
                 if(prefs.enablePerfOverlay) {
                     perfListener.onPerfUpdate(fullLog);
                 }
