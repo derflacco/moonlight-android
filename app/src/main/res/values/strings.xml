@@ -765,5 +765,7 @@
     <string name="pref_video_framegen_ghost_summary">Control sensitivity (0–100). Higher values reduce ghosts but bias towards current frame.</string>
     <string name="title_checkbox_snappy_input">Snappy Input</string>
     <string name="summary_checkbox_snappy_input">Offload input to a background thread and ignore tiny axis/trigger deltas for a smoother feel. </string>
+    <string name="title_checkbox_enable_perf_overlay_lite_advanced"> Lite Mode + </string>
+    <string name="summary_checkbox_enable_perf_overlay_lite_advanced"> Adds FSR (if enabled), HDR indicators and detailed FPS </string>
 </resources>
 
