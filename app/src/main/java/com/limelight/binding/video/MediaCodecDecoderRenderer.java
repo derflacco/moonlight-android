@@ -246,6 +246,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private PerfOverlayListener perfListener;
     // --- OLED burn-in protection for Lite overlay (horizontal pixel/text shift) ---
     private static final long LITE_SHIFT_PERIOD_NS = 30_000_000_000L; // 30s
+    // --- OLED "pixel refresh" blink for Lite overlay ---
+// Briefly blanks the Lite overlay to let OLED pixels rest (default: 250ms every 5 minutes).
+    private static final long LITE_BLINK_PERIOD_NS = 300_000_000_000L;   // 5 min
+    private static final long LITE_BLINK_DURATION_NS = 250_000_000L;     // 250 ms
+    private long liteBlinkNextStartNs = 0L;
+    private long liteBlinkEndNs = 0L;
     private long liteShiftNextNs = 0L;
     private int liteShiftSpaces = 0; // 0..2
     private static final int CR_MAX_TRIES = 10;
@@ -2569,6 +2575,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             liteShiftSpaces = 0;
                         }
                     } catch (Throwable ignored) {}
+                    // __LITE_BLINK_TIMERS: update blink schedule (only if OLED protection enabled)
+                    try {
+                        if (prefs.enablePerfOverlayLiteOledShift) {
+                            long now = System.nanoTime();
+                            if (now >= liteBlinkNextStartNs) {
+                                liteBlinkNextStartNs = now + LITE_BLINK_PERIOD_NS;
+                                liteBlinkEndNs = now + LITE_BLINK_DURATION_NS;
+                            }
+                        } else {
+                            liteBlinkEndNs = 0L;
+                        }
+                    } catch (Throwable ignored) {}
+
                     /* ADV_LITE_START */
                     if (prefs != null && prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteAdvanced) {
                         // IN (incoming frames per sec) and R (rendered FPS) for the same stats window
@@ -2665,6 +2684,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         sb.insert(0, new String(new char[Math.max(0, liteShiftSpaces)]).replace('\0', ' '));
                     } catch (Throwable ignored) {}
                 }
+                // __LITE_BLINK_APPLY: if within blink window, blank lite overlay; else keep current content.
+                if (prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteOledShift) {
+                    try {
+                        long now = System.nanoTime();
+                        if (liteBlinkEndNs > 0L && now < liteBlinkEndNs) {
+                            sb.setLength(0);
+                            sb.append(' '); // minimal content -> effectively black/transparent
+                        } else {
+                            // Keep existing content (shift may have added leading spaces earlier)
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
                 if(prefs.enablePerfOverlay) {
                     perfListener.onPerfUpdate(fullLog);
                 }
