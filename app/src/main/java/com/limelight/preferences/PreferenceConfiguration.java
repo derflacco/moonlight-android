@@ -297,6 +297,7 @@ public class PreferenceConfiguration {
     public boolean enablePerfOverlayLite;
 
     public boolean enablePerfOverlayLiteAdvanced;
+    public boolean enablePerfOverlayLiteOledShift;
 
     public boolean enablePerfOverlayLiteDialog;
 
@@ -954,6 +955,7 @@ private static int getFramePacingValue(Context context) {
         config.enablePerfLogging = prefs.getBoolean(ENABLE_PERF_LOGGING, DEFAULT_ENABLE_PERF_LOGGING);
         config.enablePerfOverlayLite = prefs.getBoolean("checkbox_enable_perf_overlay_lite",DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfOverlayLiteAdvanced = prefs.getBoolean("checkbox_enable_perf_overlay_lite_advanced", false);
+        config.enablePerfOverlayLiteOledShift = prefs.getBoolean("checkbox_enable_perf_overlay_lite_oledshift", true);
         config.enablePerfOverlayBottom = prefs.getBoolean("checkbox_enable_perf_overlay_bottom",DEFAULT_PERF_OVERLAY_BOTTOM);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
