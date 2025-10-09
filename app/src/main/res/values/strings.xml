@@ -782,5 +782,7 @@
     <string name="summary_checkbox_snappy_input">Offload input to a background thread and ignore tiny axis/trigger deltas for a smoother feel. </string>
 	<string name="title_checkbox_enable_perf_overlay_lite_advanced"> Lite Mode + </string>
     <string name="summary_checkbox_enable_perf_overlay_lite_advanced"> Adds FSR (if enabled), HDR indicators and detailed FPS </string>
+    <string name="title_checkbox_enable_perf_overlay_lite_oledshift">OLED burn-in protection (pixel shift)</string>
+    <string name="summary_checkbox_enable_perf_overlay_lite_oledshift">Occasionally nudges the Lite overlay horizontally to reduce image retention on OLED screens.</string>
 
 </resources>
