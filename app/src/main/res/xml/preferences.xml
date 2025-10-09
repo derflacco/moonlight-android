@@ -976,6 +976,14 @@
             android:summary="@string/summary_checkbox_enable_perf_overlay_lite_dialog"
             android:title="@string/title_checkbox_enable_perf_overlay_lite_dialog"
             app:iconSpaceReserved="false" />
+			<CheckBoxPreference
+    android:defaultValue="false"
+    android:dependency="checkbox_enable_perf_overlay_lite"
+    android:key="checkbox_enable_perf_overlay_lite_advanced"
+    android:title="@string/title_checkbox_enable_perf_overlay_lite_advanced"
+    android:summary="@string/summary_checkbox_enable_perf_overlay_lite_advanced"
+    app:iconSpaceReserved="false" />
+
         <CheckBoxPreference
             android:defaultValue="false"
             android:dependency="checkbox_enable_perf_overlay"
