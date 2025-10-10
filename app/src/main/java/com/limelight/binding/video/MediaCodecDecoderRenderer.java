@@ -291,6 +291,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long statsLastRenderedPtsUs = Long.MIN_VALUE;
     private long statsLastRenderedNs = 0L;
 
+
+    // --- Vsync measurement (moving average via Choreographer) ---
+    private volatile long vsyncPeriodNsMeasured = 0L;
+    private final long[] vsyncSamples = new long[120];
+    private int vsyncSampleCount = 0;
+    private int vsyncSampleIndex = 0;
+
+    private long getVsyncPeriodNsEstimate() {
+        long base = (refreshRate > 0 ? (long)(1_000_000_000L / (double) refreshRate) : 16_666_667L);
+        long m = vsyncPeriodNsMeasured;
+        if (m > 0 && Math.abs(m - base) < (base / 5)) return m; // accept within ±20%
+        return base;
+    }
+
     private void statsMarkRendered(long ptsUs, long renderTimeNs) {
         if (activeWindowVideoStats == null) return;
         boolean dup = false;
@@ -298,7 +312,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             dup = (ptsUs == statsLastRenderedPtsUs);
             statsLastRenderedPtsUs = ptsUs;
         } else if (renderTimeNs > 0) {
-            long vsyncNs = (refreshRate > 0 ? (long)(1_000_000_000L / (double) refreshRate) : 0L);
+            long vsyncNs = getVsyncPeriodNsEstimate();
             if (vsyncNs > 0 && statsLastRenderedNs > 0 && (renderTimeNs - statsLastRenderedNs) < (vsyncNs / 2)) {
                 dup = true;
             }
@@ -1461,6 +1475,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         long actualFrameTimeDeltaNs   = frameTimeNanos - lastRenderedFrameTimeNanos;
         long expectedFrameTimeDeltaNs = 800_000_000L / rr; // ~80% of the next frame
 
+        // Update measured VSYNC period (only with sensible deltas)
+        if (lastRenderedFrameTimeNanos > 0) {
+            long dt = actualFrameTimeDeltaNs;
+            if (dt >= 8_000_000L && dt <= 25_000_000L) {
+                vsyncSamples[vsyncSampleIndex] = dt;
+                vsyncSampleIndex = (vsyncSampleIndex + 1) % vsyncSamples.length;
+                if (vsyncSampleCount < vsyncSamples.length) vsyncSampleCount++;
+                long sum = 0L;
+                for (int i = 0; i < vsyncSampleCount; i++) sum += vsyncSamples[i];
+                vsyncPeriodNsMeasured = sum / Math.max(1, vsyncSampleCount);
+            }
+        }
+
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
 
             // Keep at most 1 buffered frame to smooth jitter (preferLowerDelays path)
@@ -1648,6 +1675,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 if (displayHz <= 0f) displayHz = 60f;
                 vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
 
+                
+                // Prefer measured VSYNC when available (captures 59.94 Hz)
+                if (vsyncPeriodNsMeasured > 0 && Math.abs(vsyncPeriodNsMeasured - vsyncPeriodNs) < (vsyncPeriodNs / 5)) {
+                    vsyncPeriodNs = vsyncPeriodNsMeasured;
+                }
                 // Stream cadence (targetFps set in setup(...))
                 final float tfps = (targetFps > 0f ? targetFps : 60f);
                 final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
@@ -1657,7 +1689,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Instant jitter hybrid (no EW-MA): compute small adaptive budget from instantaneous cadence
                 long   ijhLastPtsUs         = -1L;
                 long   ijhLastPresentNs     = 0L;
-                double ijhBudgetNs          = vsyncPeriodNs * 0.20; // start at 15% of vsync
+                double ijhBudgetNs          = vsyncPeriodNs * 0.15; // start at 15% of vsync
                 // Adaptive period selection to avoid added latency on high-refresh devices
                 final boolean highRefresh = displayHz >= 90f;
                 final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
@@ -1798,7 +1830,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 final long curPtsUs = info.presentationTimeUs;
                                 if (ijhLastPtsUs > 0 && curPtsUs > ijhLastPtsUs) {
                                     final long deltaPtsNs = (curPtsUs - ijhLastPtsUs) * 1000L;
-                                    final long expectedNs = __basePeriodNs;
+                                    final long expectedNs = periodNs;
                                     final long instJitter = Math.abs(deltaPtsNs - expectedNs);
                                     final double held = Math.max(instJitter, ijhBudgetNs * IJH_DECAY);
                                     ijhBudgetNs = Math.max(IJH_MIN, Math.min(IJH_MAX, held));
@@ -1959,10 +1991,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                 + 0.04 * mismatch;
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
 
-                                        long dropThresholdNs = (long) (__basePeriodNs * factorLatency);
+                                        long dropThresholdNs = (long) (periodNs * factorLatency);
 
                                         final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (__basePeriodNs / 2);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
 
