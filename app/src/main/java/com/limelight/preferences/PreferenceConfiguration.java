@@ -11,7 +11,7 @@ import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
 // Snappy Input
-    public boolean snappyInput = false;
+public boolean snappyInput = true;
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
     public boolean gpuPathMode;
