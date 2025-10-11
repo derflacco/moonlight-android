@@ -415,7 +415,7 @@
     
 
 <CheckBoxPreference
-    android:defaultValue="false"
+    android:defaultValue="true"
     android:key="checkbox_snappy_input"
     android:title="@string/title_checkbox_snappy_input"
     android:summary="@string/summary_checkbox_snappy_input"
@@ -962,6 +962,13 @@
             android:summary="@string/summary_checkbox_enable_perf_overlay_lite"
             android:title="@string/title_checkbox_enable_perf_overlay_lite"
             app:iconSpaceReserved="false" />
+			<CheckBoxPreference
+    android:defaultValue="true"
+    android:dependency="checkbox_enable_perf_overlay_lite"
+    android:key="checkbox_enable_perf_overlay_lite_oledshift"
+    android:title="@string/title_checkbox_enable_perf_overlay_lite_oledshift"
+    android:summary="@string/summary_checkbox_enable_perf_overlay_lite_oledshift"
+    app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:dependency="checkbox_enable_perf_overlay_lite"

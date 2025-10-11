@@ -15,7 +15,7 @@ public class PreferenceConfiguration {
     public boolean enableAntiLag;
 
     public boolean enableAsyncDecoder = false;
-    public boolean snappyInput = false;
+    public boolean snappyInput = true;
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
     public boolean gpuPathMode;
