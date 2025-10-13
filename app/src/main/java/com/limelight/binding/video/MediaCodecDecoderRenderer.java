@@ -2387,7 +2387,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                     if (prefs != null && prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteAdvanced) {
                         // IN (incoming frames per sec) and R (rendered FPS) for the same stats window
                         sb.append("  IN:");
-                        sb.append((int) __received);
+                        sb.append((int) fps.receivedFps);
                         sb.append("  R:");
                         sb.append((int) fps.renderedFps);
 
