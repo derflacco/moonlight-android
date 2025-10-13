@@ -154,9 +154,15 @@ android {
             resValue "string", "app_label", "Artemide"
             resValue "string", "app_label_root", "Artemide (Root)"
             resValue "string", "app_label_game", "Artemide (Game)"
-            
             // Silence heavy logs in hot paths
             buildConfigField "boolean", "LOG_VERBOSE", "false"
+            //-03 thinlto
+            externalNativeBuild {
+                ndkBuild {
+                    // Attiva i flag Perf nell'Application.mk
+                    arguments "APP_PERF:=1", "V=1", "NDK_DEBUG=1"
+                }
+            }
         }
     }
 
