@@ -373,7 +373,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 drawOesToScreen();
                 try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
                 boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
-                try { com.limelight.utils.StatsLogger.setSwapOk(swapped); if (swapped) com.limelight.utils.StatsLogger.onFramePresented(); } catch (Throwable ignored) {}
                 if (!swapped) { try { int err = EGL14.eglGetError(); com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
                 continue;
             }
