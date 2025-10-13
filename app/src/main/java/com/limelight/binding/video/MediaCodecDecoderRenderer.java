@@ -136,24 +136,38 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
 
 
-    // When preferLowerDelays = true (LFR/ULL): force 0 µs (non-blocking, latest-only).
-    // When preferLowerDelays = false (Balanced/managed): use this configurable timeout (µs) for output dequeue.
-    private volatile int preferLowerDelaysTimeoutUs = 2000; // default for managed; policy sets 0 µs when LFR
+    // When preferLowerDelays = true (LFR/ULL): force non-blocking by default.
+// When preferLowerDelays = false (Balanced/managed): use a small timeout for smoothing.
+    private volatile int preferLowerDelaysTimeoutUs = 0; // default 0 for ULL; policy may override if needed
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
     private int getOutputDequeueTimeoutUs() {
         // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
 
         if (prefs != null) {
-            // AntiLag (Balanced+LFR attivo): 150 µs
-            if (prefs.enableAntiLag) return 150;
+            // AntiLag on managed profiles: tiny wait ONLY when queue is empty, otherwise non-blocking
+            if (prefs.enableAntiLag &&
+                    (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED
+                            || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS
+                            || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS)) {
+                boolean empty = (outputBufferQueue == null || outputBufferQueue.isEmpty());
+                return empty ? 150 : 0; // 150 µs to catch the next frame, 0 when we already have backlog
+            }
 
-            // Balanced senza AntiLag: micro-timeout (opzionale; puoi rimettere 0 se lo preferisci)
-            if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) return 2000;
+            switch (prefs.framePacing) {
+                case PreferenceConfiguration.FRAME_PACING_BALANCED:
+                    return 1500;   // 1.5 ms: more tolerance, smoother in managed mode
+                case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
+                return 500;      // 0.5ms
+                case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+                case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+                    return 3000;   // 3 ms: favor smoothness, avoid drops
+                default:
+                    break;
+            }
         }
-
-        // Altri pacing: non-blocking
-        return 0;
+        // Default: non-blocking
+        return 500;
     }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
@@ -2385,13 +2399,13 @@ android.media.MediaFormat __inF = null, __outF = null;
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
                 }
-                    try {
-                        String __fsr = __fsrGetOverlayLine(glUpscaler);
-                        if (__fsr != null && !__fsr.isEmpty()) {
-                            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
-                            sb.append(__fsr).append('\n');
-                        }
-                    } catch (Throwable ignored) {}
+                try {
+                    String __fsr = __fsrGetOverlayLine(glUpscaler);
+                    if (__fsr != null && !__fsr.isEmpty()) {
+                        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
+                        sb.append(__fsr).append('\n');
+                    }
+                } catch (Throwable ignored) {}
 
                 String fullLog = sb.toString();
                 if(prefs.enablePerfOverlay) {
