@@ -1346,13 +1346,11 @@ android.media.MediaFormat __inF = null, __outF = null;
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
                         lastRenderedFrameTimeNanos = frameTimeNanos;
                     } else {
-                        // Present immediately
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                        // Present immediately (API < 21)
                         final long nowNs = System.nanoTime();
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                         lastRenderedFrameTimeNanos = nowNs;
                     }
-
-                    lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
                 } catch (IllegalStateException ignored) {
                     try {
@@ -1568,7 +1566,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                     }
 //* Pin hot threads to big cluster *//
 
-                    /* LATEST_ONLY_LOW_LATENCY (drain newest + ASAP present; stats 1xVSYNC) */
+                    /* LATEST_ONLY_LOW_LATENCY (drain newest + ASAP present; stats 1x present) */
                     if (preferLowerDelays) {
                         try {
                             final android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
@@ -1588,34 +1586,25 @@ android.media.MediaFormat __inF = null, __outF = null;
 
                             if (__last >= 0) {
                                 // Present ASAP (boolean): il compositor allinea al prossimo VSYNC
-                                try { videoDecoder.releaseOutputBuffer(__last, true); } catch (Throwable ignored) {}
-
-                                // --- STATISTICHE: ≤1 incremento per periodo reale, senza Choreographer ---
-                                final float rr = Math.max(1f, refreshRate);
-                                vsyncPeriodNs = (long) (1_000_000_000.0 / rr);
-
                                 final long nowNs = System.nanoTime();
-                                if (lfrLastCountNs == 0L) {
-                                    lfrLastCountNs = nowNs;
-                                } else {
-                                    long delta = nowNs - lfrLastCountNs;
-                                    if (delta < 0) delta = 0;
-                                    lfrAccumNs += delta;
-                                    lfrLastCountNs = nowNs;
+                                try {
+                                    videoDecoder.releaseOutputBuffer(__last, true);
+                                } catch (IllegalStateException e) {
+                                    handleDecoderException(e);
+                                    return;
+                                } catch (Throwable ignored) {}
 
-                                    // Conta al massimo 1 frame ogni periodo
-                                    if (lfrAccumNs >= vsyncPeriodNs) {
-                                        activeWindowVideoStats.totalFramesRendered++;
-                                        // conserva l'errore frazionario (es. 119.88 Hz)
-                                        lfrAccumNs -= vsyncPeriodNs;
-                                        if (lfrAccumNs < 0) lfrAccumNs = 0;
-                                    }
-                                }
+                                // --- STATISTICHE: conta UNA volta per present reale (niente gating a VSYNC) ---
+                                activeWindowVideoStats.totalFramesRendered++;
+                                lastPresentNs = nowNs;
+                                lastRenderedFrameTimeNanos = nowNs;
 
-                                // Telemetria (opzionale): D2P basato su nowNs
+                                // (opzionale) reset/ri-sincronizza i contatori LFR interni
+                                lfrLastCountNs = nowNs;
+                                lfrAccumNs = 0;
+
+                                // Decode->Present latency sul frame effettivamente presentato
                                 if (__lastPtsUs >= 0) {
-                                    long d2pNs = nowNs - (__lastPtsUs * 1000L);
-                                    if (d2pNs < 0) d2pNs = 0;
                                     try { updateDecodeLatencyStats(__lastPtsUs); } catch (Throwable ignored) {}
                                 }
 
@@ -1678,19 +1667,19 @@ android.media.MediaFormat __inF = null, __outF = null;
 
 // --- Present policy per profilo di pacing ---
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    // Immediate present using frame PTS; no decoder-side pacing
+                                    // RAW: present immediato nel dominio di System.nanoTime()
                                     if (lastIndex >= 0) {
                                         try {
-                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
+                                            final long nowNs = System.nanoTime();
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                             } else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                             }
-                                            long nowNs = System.nanoTime();
+                                            // Allinea i clock interni al present reale
                                             lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
-                                            recentDrops = 0;
+                                            // Stats di decoding sul frame appena presentato
                                             updateDecodeLatencyStats(presentationTimeUs);
                                             statsUpdated = true;
                                         } catch (IllegalStateException e) {
@@ -1812,10 +1801,6 @@ android.media.MediaFormat __inF = null, __outF = null;
                                         lastPresentNs = nowNs;
                                         if (!isLate) lateStreak = 0;
                                         recentDrops = Math.max(0, recentDrops - 1);
-
-                                        // [STATS] update subito dopo il present
-                                        updateDecodeLatencyStats(presentationTimeUs);
-                                        statsUpdated = true;
 
                                     } else {
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
