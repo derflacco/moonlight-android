@@ -3840,6 +3840,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                 try { getWindow().setSustainedPerformanceMode(true); } catch (Throwable ignored) {}
             }
+            // Apply latency policy BEFORE decoder/present loops start
+            try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
         }
     }
 
