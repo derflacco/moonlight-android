@@ -1699,11 +1699,17 @@ android.media.MediaFormat __inF = null, __outF = null;
 
                                             if (lastPresentNs > 0L) {
                                                 long timeSinceLastPresent = nowNs - lastPresentNs;
-                                                double maxFrameRate = displayHz * 1.1; // Allow 10% over display rate
+                                                double streamFps = Math.max(1.0, (double)tfps);
+
+                                                // Check se siamo vicini al refresh rate nativo (entro ±5%)
+                                                boolean isNativeRefreshRate = Math.abs(streamFps - displayHz) < (displayHz * 0.05);
+
+                                                double maxFrameRate = isNativeRefreshRate ? displayHz * 1.5 : displayHz * 1.1;
                                                 long minFrameInterval = (long)(1_000_000_000.0 / maxFrameRate);
 
-                                                // Drop frame only if we're significantly exceeding display capabilities
-                                                if (timeSinceLastPresent < minFrameInterval && outputBufferQueue.size() >= 2) {
+                                                // Drop frame solo se necessario e con buffer più pieno a refresh rate nativo
+                                                int queueThreshold = isNativeRefreshRate ? 3 : 2;
+                                                if (timeSinceLastPresent < minFrameInterval && outputBufferQueue.size() >= queueThreshold) {
                                                     dropFrame = true;
                                                 }
                                             }
@@ -1717,7 +1723,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 lastPresentNs = nowNs;
                                                 lastRenderedFrameTimeNanos = nowNs;
-                                                recentDrops = 0;
+                                                recentDrops = Math.max(0, recentDrops - 1);
                                                 updateDecodeLatencyStats(presentationTimeUs);
                                                 statsUpdated = true;
                                             }
@@ -1738,36 +1744,31 @@ android.media.MediaFormat __inF = null, __outF = null;
                                     if (lastIndex >= 0) {
                                         long targetNs;
 
+                                        // Check se siamo vicini al refresh rate nativo
+                                        boolean isNativeRefreshRate = Math.abs(capFps - displayHz) < (displayHz * 0.05);
+
                                         if (lastPresentNs <= 0L) {
-                                            // First presentation: anchor to video PTS when reasonable, otherwise "now"
-                                            long ptsNs = presentationTimeUs * 1000L;
-                                            long ptsDelta = Math.abs(ptsNs - nowNs);
-                                            // Use PTS if it's reasonably close to current time (within 2 frames)
-                                            targetNs = (ptsDelta < (capPeriodNs * 2)) ? ptsNs : nowNs;
+                                            // Prima presentazione: ancora a "ora" per evitare jitter iniziale
+                                            targetNs = nowNs;
                                         } else {
-                                            // Calculate next slot based on previous presentation
+                                            // Prossimo slot nominale
                                             targetNs = lastPresentNs + capPeriodNs;
 
-                                            // Try to align with video PTS when possible
-                                            long ptsNs = presentationTimeUs * 1000L;
-                                            long ptsToTarget = Math.abs(ptsNs - targetNs);
-
-                                            // If PTS is close to our target (within half frame), use PTS for better sync
-                                            if (ptsToTarget < (capPeriodNs / 2)) {
-                                                targetNs = ptsNs;
-                                            }
-
-                                            // If we're late, use gradual catch-up instead of big jumps
-                                            if (targetNs < nowNs) {
-                                                // Calculate how many frames we're behind
-                                                long framesBehind = ((nowNs - targetNs) / capPeriodNs);
-
-                                                if (framesBehind > 2) {
-                                                    // More than 2 frames behind: moderate catch-up
-                                                    targetNs += (framesBehind * capPeriodNs) / 2;
-                                                } else {
-                                                    // 1-2 frames behind: small adjustment
-                                                    targetNs = nowNs;
+                                            // A refresh rate nativo, usa logica più conservativa
+                                            if (isNativeRefreshRate) {
+                                                // Per 60fps su 60Hz: minimizza gli aggiustamenti
+                                                if (targetNs < nowNs) {
+                                                    // Leggermente in ritardo: present ASAP ma mantieni il ritmo
+                                                    targetNs = Math.min(nowNs, targetNs + (capPeriodNs / 2));
+                                                } else if (targetNs > nowNs + (capPeriodNs / 3)) {
+                                                    // Troppo in anticipo: small adjustment
+                                                    targetNs = Math.max(nowNs, targetNs - (capPeriodNs / 4));
+                                                }
+                                            } else {
+                                                // Comportamento originale per fps non nativi
+                                                if (targetNs < nowNs) {
+                                                    long missed = ((nowNs - targetNs) / capPeriodNs) + 1;
+                                                    targetNs += missed * capPeriodNs;
                                                 }
                                             }
 
@@ -1787,7 +1788,9 @@ android.media.MediaFormat __inF = null, __outF = null;
                                             long ptsNs = tmp.presentationTimeUs * 1000L;
 
                                             // Less aggressive dropping: only drop if very far from target
-                                            if (ptsNs + capPeriodNs < targetNs) {
+                                            long dropThreshold = isNativeRefreshRate ? capPeriodNs * 2 : capPeriodNs / 2;
+
+                                            if (ptsNs + dropThreshold < targetNs) {
                                                 videoDecoder.releaseOutputBuffer(idx2, false);
                                                 frameDropped = true;
                                                 continue;
@@ -1800,9 +1803,8 @@ android.media.MediaFormat __inF = null, __outF = null;
                                                 foundBetterFrame = true;
 
                                                 // If we found a well-matched frame, adjust target slightly
-                                                long timeDiff = ptsNs - targetNs;
-                                                if (Math.abs(timeDiff) < (capPeriodNs / 4)) {
-                                                    targetNs = ptsNs; // Use exact PTS for perfect sync
+                                                if (!isNativeRefreshRate && Math.abs(ptsNs - targetNs) < (capPeriodNs / 4)) {
+                                                    targetNs = ptsNs;
                                                 }
                                             }
                                             break;
@@ -1823,16 +1825,22 @@ android.media.MediaFormat __inF = null, __outF = null;
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
 
-                                        // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
+                                        // Check
+                                        double streamFps = Math.max(1.0, (double)tfps);
+                                        boolean isNativeRefreshRate = Math.abs(streamFps - displayHz) < (displayHz * 0.05);
+
+                                        // Calcola backPressure e mismatch correttamente
                                         double backPressure = Math.min(1.0, (double)tryAgainStreak / 6.0);
                                         double streamHz = Math.max(1.0, (double)tfps);
                                         double mismatch = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
                                         mismatch = Math.min(2.0, mismatch);
 
+                                        // A refresh rate nativo, riduci l'aggressività del dropping
+                                        double latencyMultiplier = isNativeRefreshRate ? 1.08 : 1.15;
                                         double factorLatency = 1.02 + 0.13 * (0.5 * (jitterBudgetNs / vsyncPeriodNs)
                                                 + 0.3 * backPressure
                                                 + 0.2 * mismatch);
-                                        factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
+                                        factorLatency = Math.max(MIN_FACTOR, Math.min(latencyMultiplier, factorLatency));
 
                                         long dropThresholdNs = (long)(periodNs * factorLatency);
 
@@ -1841,9 +1849,12 @@ android.media.MediaFormat __inF = null, __outF = null;
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
 
+                                        // A refresh rate nativo, richiedi più frame consecutivi late prima di droppare
+                                        int lateStreakThreshold = isNativeRefreshRate ? 2 : 1;
+
                                         final boolean shouldDrop =
                                                 isLate &&
-                                                        (lateStreak >= 1) &&
+                                                        (lateStreak >= lateStreakThreshold) &&
                                                         (sinceLastPresent < (long)(periodNs * 0.5)) &&
                                                         dropCooldownOk;
 
@@ -1852,18 +1863,16 @@ android.media.MediaFormat __inF = null, __outF = null;
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
-                                            // No stats for dropped frames
-                                            continue; // niente stats sui frame droppati
-                                        } else {
-                                            // Boolean present (avoids late-timestamp issues)
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true);
-                                            lastPresentNs = nowNs;
-                                            if (!isLate) lateStreak = 0;
-                                            recentDrops = Math.max(0, recentDrops - 1);
-
-                                            updateDecodeLatencyStats(presentationTimeUs);
-                                            statsUpdated = true;
+                                            continue;
                                         }
+
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                        lastPresentNs = nowNs;
+                                        if (!isLate) lateStreak = 0;
+                                        recentDrops = Math.max(0, recentDrops - 1);
+                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        statsUpdated = true;
+
                                     } else {
                                         // API < 21: boolean present (timed present not supported)
                                         videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true);
