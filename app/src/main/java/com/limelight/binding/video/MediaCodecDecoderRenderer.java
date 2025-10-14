@@ -1689,15 +1689,12 @@ android.media.MediaFormat __inF = null, __outF = null;
                                     }
                                 }
                                 else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-                                    // Never drop; present ASAP (timed @ now)
+                                    // Never drop; present ASAP (boolean present to avoid "late" timed release)
                                     if (lastIndex >= 0) {
                                         try {
                                             long nowNs = System.nanoTime();
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                            } else {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
-                                            }
+                                            // Use boolean-present so SF schedules at the next vsync
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                             lastPresentNs = nowNs;
                                             recentDrops = 0;
                                             updateDecodeLatencyStats(presentationTimeUs);
