@@ -1667,19 +1667,19 @@ android.media.MediaFormat __inF = null, __outF = null;
 
 // --- Present policy per profilo di pacing ---
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    // RAW: present immediato nel dominio di System.nanoTime()
+                                    // RAW: present immediately in System.nanoTime() domain
                                     if (lastIndex >= 0) {
                                         try {
                                             final long nowNs = System.nanoTime();
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                             } else {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                                videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true);
                                             }
-                                            // Allinea i clock interni al present reale
+                                            // Align internal clocks to the actual present time
                                             lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
-                                            // Stats di decoding sul frame appena presentato
+                                            recentDrops = 0;
                                             updateDecodeLatencyStats(presentationTimeUs);
                                             statsUpdated = true;
                                         } catch (IllegalStateException e) {
@@ -1689,72 +1689,133 @@ android.media.MediaFormat __inF = null, __outF = null;
                                     }
                                 }
                                 else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-                                    // Never drop; present ASAP (boolean present to avoid "late" timed release)
+                                    // Max smoothness: adaptive frame pacing for optimal smoothness/latency balance
                                     if (lastIndex >= 0) {
                                         try {
-                                            long nowNs = System.nanoTime();
-                                            // Use boolean-present so SF schedules at the next vsync
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
-                                            lastPresentNs = nowNs;
-                                            recentDrops = 0;
-                                            updateDecodeLatencyStats(presentationTimeUs);
-                                            statsUpdated = true;
+                                            final long nowNs = System.nanoTime();
+
+                                            // Adaptive frame dropping based on queue size and timing
+                                            boolean dropFrame = false;
+
+                                            if (lastPresentNs > 0L) {
+                                                long timeSinceLastPresent = nowNs - lastPresentNs;
+                                                double maxFrameRate = displayHz * 1.1; // Allow 10% over display rate
+                                                long minFrameInterval = (long)(1_000_000_000.0 / maxFrameRate);
+
+                                                // Drop frame only if we're significantly exceeding display capabilities
+                                                if (timeSinceLastPresent < minFrameInterval && outputBufferQueue.size() >= 2) {
+                                                    dropFrame = true;
+                                                }
+                                            }
+
+                                            if (dropFrame) {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                frameDropped = true;
+                                                recentDrops = Math.min(10, recentDrops + 1);
+                                            } else {
+                                                // Balanced presentation: boolean present for VSYNC alignment
+                                                videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                                lastPresentNs = nowNs;
+                                                lastRenderedFrameTimeNanos = nowNs;
+                                                recentDrops = 0;
+                                                updateDecodeLatencyStats(presentationTimeUs);
+                                                statsUpdated = true;
+                                            }
+
                                         } catch (IllegalStateException e) {
                                             handleDecoderException(e);
                                             return;
                                         } catch (Throwable ignored) {}
                                     }
+                                }
 
-                                } else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // Cap present rate to prefs.fps; never drop, present in order
+                                else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+                                    // Cap present rate to prefs.fps; sync with video PTS when possible
                                     final double capFps = Math.max(1.0, (double) prefs.fps);
                                     final long capPeriodNs = (long) (1_000_000_000.0 / capFps);
-                                           final long nowNs = System.nanoTime();
+                                    final long nowNs = System.nanoTime();
 
                                     if (lastIndex >= 0) {
                                         long targetNs;
 
                                         if (lastPresentNs <= 0L) {
-                                            // Prima presentazione: ancora a "ora"
-                                            targetNs = nowNs;
+                                            // First presentation: anchor to video PTS when reasonable, otherwise "now"
+                                            long ptsNs = presentationTimeUs * 1000L;
+                                            long ptsDelta = Math.abs(ptsNs - nowNs);
+                                            // Use PTS if it's reasonably close to current time (within 2 frames)
+                                            targetNs = (ptsDelta < (capPeriodNs * 2)) ? ptsNs : nowNs;
                                         } else {
-                                            // Prossimo slot nominale
+                                            // Calculate next slot based on previous presentation
                                             targetNs = lastPresentNs + capPeriodNs;
 
-                                            // Se siamo in ritardo, NON clampare a now: salta allo slot futuro
-                                            if (targetNs < nowNs) {
-                                                long missed = ((nowNs - targetNs) / capPeriodNs) + 1;
-                                                targetNs += missed * capPeriodNs;
+                                            // Try to align with video PTS when possible
+                                            long ptsNs = presentationTimeUs * 1000L;
+                                            long ptsToTarget = Math.abs(ptsNs - targetNs);
+
+                                            // If PTS is close to our target (within half frame), use PTS for better sync
+                                            if (ptsToTarget < (capPeriodNs / 2)) {
+                                                targetNs = ptsNs;
                                             }
 
-                                            // Se il gap è enorme (resume/sleep), riancora per evitare una lunga attesa
-                                            if (nowNs - lastPresentNs > (capPeriodNs * 6L)) {
+                                            // If we're late, use gradual catch-up instead of big jumps
+                                            if (targetNs < nowNs) {
+                                                // Calculate how many frames we're behind
+                                                long framesBehind = ((nowNs - targetNs) / capPeriodNs);
+
+                                                if (framesBehind > 2) {
+                                                    // More than 2 frames behind: moderate catch-up
+                                                    targetNs += (framesBehind * capPeriodNs) / 2;
+                                                } else {
+                                                    // 1-2 frames behind: small adjustment
+                                                    targetNs = nowNs;
+                                                }
+                                            }
+
+                                            // If the gap is huge (resume/sleep), re-anchor
+                                            if (nowNs - lastPresentNs > (capPeriodNs * 8L)) {
                                                 targetNs = nowNs;
                                             }
                                         }
+
+                                        // Look for fresher frames that better match our target
                                         android.media.MediaCodec.BufferInfo tmp = new android.media.MediaCodec.BufferInfo();
+                                        boolean foundBetterFrame = false;
+
                                         for (;;) {
                                             int idx2 = nextOutputIndex(tmp, 0);
                                             if (idx2 < 0) break;
                                             long ptsNs = tmp.presentationTimeUs * 1000L;
-                                            // Se troppo in anticipo rispetto allo slot corrente, scartalo
-                                            if (ptsNs + (capPeriodNs / 2) < targetNs) {
+
+                                            // Less aggressive dropping: only drop if very far from target
+                                            if (ptsNs + capPeriodNs < targetNs) {
                                                 videoDecoder.releaseOutputBuffer(idx2, false);
                                                 frameDropped = true;
                                                 continue;
                                             }
-                                            // usa questo come candidato per lo slot
-                                            lastIndex = idx2;
-                                            presentationTimeUs = tmp.presentationTimeUs;
+
+                                            // Prefer frames that are closer to our target time
+                                            if (!foundBetterFrame || Math.abs(ptsNs - targetNs) < Math.abs(presentationTimeUs * 1000L - targetNs)) {
+                                                lastIndex = idx2;
+                                                presentationTimeUs = tmp.presentationTimeUs;
+                                                foundBetterFrame = true;
+
+                                                // If we found a well-matched frame, adjust target slightly
+                                                long timeDiff = ptsNs - targetNs;
+                                                if (Math.abs(timeDiff) < (capPeriodNs / 4)) {
+                                                    targetNs = ptsNs; // Use exact PTS for perfect sync
+                                                }
+                                            }
                                             break;
                                         }
 
-                                        // Timed present allo slot calcolato (Surface/SurfaceFlinger allineano al VSYNC)
-                                        videoDecoder.releaseOutputBuffer(lastIndex, targetNs);
-                                        lastPresentNs = targetNs;
-                                        lastRenderedFrameTimeNanos = targetNs;
-                                        updateDecodeLatencyStats(presentationTimeUs);
-                                        statsUpdated = true;
+                                        // Present at the computed slot
+                                        if (lastIndex >= 0) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, targetNs);
+                                            lastPresentNs = targetNs;
+                                            lastRenderedFrameTimeNanos = targetNs;
+                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            statsUpdated = true;
+                                        }
                                     }
                                 }
                                 else {
@@ -1791,28 +1852,23 @@ android.media.MediaFormat __inF = null, __outF = null;
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
+                                            // No stats for dropped frames
                                             continue; // niente stats sui frame droppati
-                                        }
-
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                        lastPresentNs = nowNs;
-                                        if (!isLate) lateStreak = 0;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
-                                    } else {
-                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                            long __ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, __ts);
                                         } else {
-                                            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                                long __ts = System.nanoTime();
-                                                videoDecoder.releaseOutputBuffer(lastIndex, __ts);
-                                            } else {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            }
-                                        }
+                                            // Boolean present (avoids late-timestamp issues)
+                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true);
+                                            lastPresentNs = nowNs;
+                                            if (!isLate) lateStreak = 0;
+                                            recentDrops = Math.max(0, recentDrops - 1);
 
-                                        // [STATS] anche su pre-Lollipop, dopo presentazione
+                                            updateDecodeLatencyStats(presentationTimeUs);
+                                            statsUpdated = true;
+                                        }
+                                    } else {
+                                        // API < 21: boolean present (timed present not supported)
+                                        videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true);
+
+                                        // [STATS] after present
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
