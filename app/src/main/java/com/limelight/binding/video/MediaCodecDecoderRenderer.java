@@ -1530,7 +1530,7 @@ android.media.MediaFormat __inF = null, __outF = null;
                 } catch (Throwable ignored) {}
 
                 // Aggressive/adaptive state
-                final double MIN_FACTOR = 1.04;
+                final double MIN_FACTOR = 1.06; // less aggressive: smoother, slightly higher avg latency
                 final double MAX_FACTOR = 1.20;
 
                 long   lastDecoderPtsUs        = 0L;
@@ -1788,10 +1788,10 @@ android.media.MediaFormat __inF = null, __outF = null;
                                             long ptsNs = tmp.presentationTimeUs * 1000L;
 
                                             // Less aggressive dropping: only drop if very far from target
-                                            long dropThreshold = isNativeRefreshRate ? capPeriodNs * 2 : capPeriodNs / 2;
+                                            long dropThreshold = isNativeRefreshRate ? (capPeriodNs * 2L) : (capPeriodNs / 2L);
 
                                             if (ptsNs + dropThreshold < targetNs) {
-                                                videoDecoder.releaseOutputBuffer(idx2, false);
+                                                try { videoDecoder.releaseOutputBuffer(idx2, false); } catch (Throwable ignored) {}
                                                 frameDropped = true;
                                                 continue;
                                             }
@@ -1802,8 +1802,8 @@ android.media.MediaFormat __inF = null, __outF = null;
                                                 presentationTimeUs = tmp.presentationTimeUs;
                                                 foundBetterFrame = true;
 
-                                                // If we found a well-matched frame, adjust target slightly
-                                                if (!isNativeRefreshRate && Math.abs(ptsNs - targetNs) < (capPeriodNs / 4)) {
+                                                // If we found a well-matched frame, adjust target slightly (solo quando non nativo)
+                                                if (!isNativeRefreshRate && Math.abs(ptsNs - targetNs) < (capPeriodNs / 4L)) {
                                                     targetNs = ptsNs;
                                                 }
                                             }
@@ -1812,76 +1812,85 @@ android.media.MediaFormat __inF = null, __outF = null;
 
                                         // Present at the computed slot
                                         if (lastIndex >= 0) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, targetNs);
-                                            lastPresentNs = targetNs;
-                                            lastRenderedFrameTimeNanos = targetNs;
+                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                                try { videoDecoder.releaseOutputBuffer(lastIndex, targetNs); } catch (Throwable ignored) {}
+                                                lastRenderedFrameTimeNanos = targetNs;
+                                                lastPresentNs = targetNs;
+                                            } else {
+                                                final long nowNs2 = System.nanoTime();
+                                                try { videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true); } catch (Throwable ignored) {}
+                                                lastRenderedFrameTimeNanos = nowNs2;
+                                                lastPresentNs = nowNs2;
+                                            }
                                             updateDecodeLatencyStats(presentationTimeUs);
                                             statsUpdated = true;
                                         }
                                     }
                                 }
+
                                 else {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
 
-                                        // Check
-                                        double streamFps = Math.max(1.0, (double)tfps);
+                                        // Stream & refresh info
+                                        double streamFps = Math.max(1.0, (double) tfps);
                                         boolean isNativeRefreshRate = Math.abs(streamFps - displayHz) < (displayHz * 0.05);
 
-                                        // Calcola backPressure e mismatch correttamente
-                                        double backPressure = Math.min(1.0, (double)tryAgainStreak / 6.0);
-                                        double streamHz = Math.max(1.0, (double)tfps);
+                                        // Backpressure & mismatch
+                                        double backPressure = Math.min(1.0, (double) tryAgainStreak / 6.0);
+                                        double streamHz = Math.max(1.0, (double) tfps);
                                         double mismatch = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
                                         mismatch = Math.min(2.0, mismatch);
 
-                                        // A refresh rate nativo, riduci l'aggressività del dropping
-                                        double latencyMultiplier = isNativeRefreshRate ? 1.08 : 1.15;
+                                        // Aggressività ridotta a refresh nativo
+                                        double latencyCap = isNativeRefreshRate ? 1.08 : 1.15;
                                         double factorLatency = 1.02 + 0.13 * (0.5 * (jitterBudgetNs / vsyncPeriodNs)
                                                 + 0.3 * backPressure
                                                 + 0.2 * mismatch);
-                                        factorLatency = Math.max(MIN_FACTOR, Math.min(latencyMultiplier, factorLatency));
+                                        factorLatency = Math.max(MIN_FACTOR, Math.min(latencyCap, factorLatency));
 
-                                        long dropThresholdNs = (long)(periodNs * factorLatency);
+                                        long dropThresholdNs = (long) (periodNs * factorLatency);
 
                                         final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs); // cooldown più lungo
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
-                                        lateStreak = isLate ? (lateStreak + 1) : 0;
 
-                                        // A refresh rate nativo, richiedi più frame consecutivi late prima di droppare
-                                        int lateStreakThreshold = isNativeRefreshRate ? 2 : 1;
+                                        // Streak handling
+                                        lateStreak = isLate ? (lateStreak + 1) : 0;
+                                        int lateStreakThreshold = isNativeRefreshRate ? 2 : 1; // richiedi 2 'late' su 60/60
 
                                         final boolean shouldDrop =
                                                 isLate &&
                                                         (lateStreak >= lateStreakThreshold) &&
-                                                        (sinceLastPresent < (long)(periodNs * 0.5)) &&
+                                                        (sinceLastPresent < (long) (periodNs * 0.5)) &&
                                                         dropCooldownOk;
 
                                         if (shouldDrop) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
+                                            try { videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false); } catch (Throwable ignored) {}
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
+                                            // Non presentiamo questo frame: passa al prossimo ciclo
                                             continue;
                                         }
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                        // Present immediato (boolean) allineato al compositor
+                                        try { videoDecoder.releaseOutputBuffer(lastIndex, true); } catch (Throwable ignored) {}
                                         lastPresentNs = nowNs;
                                         if (!isLate) lateStreak = 0;
                                         recentDrops = Math.max(0, recentDrops - 1);
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
-
                                     } else {
-                                        // API < 21: boolean present (timed present not supported)
-                                        videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true);
-
-                                        // [STATS] after present
+                                        // API < 21: present immediato
+                                        try { videoDecoder.releaseOutputBuffer(lastIndex, /* render */ true); } catch (Throwable ignored) {}
+                                        lastPresentNs = System.nanoTime();
                                         updateDecodeLatencyStats(presentationTimeUs);
                                         statsUpdated = true;
                                     }
                                 }
+
 
                                 activeWindowVideoStats.totalFramesRendered++;
                             }
