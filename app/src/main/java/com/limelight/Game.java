@@ -4388,17 +4388,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     ? prefConfig.framePacing
                     : com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED);
 
-            // ---- GPU RAW / Direct Present branch (forced) ----
-            if (effectiveFp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                try {
-                    // Decoder non fa pacing: rilascio immediato; GL/SurfaceFlinger decide (keep-latest + PTS)
-                    decoderRenderer.setPreferLowerDelays(false);
-                    decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
-                    com.limelight.LimeLog.info(String.format("Pacing=GPU_RAW (forced by %s)",
-                            gpuPath ? "Direct Present" : "FSR enabled"));
-                } catch (Throwable ignored) {}
-                return; // evita gli altri profili
-            }
 
             // ====== SEMANTICA LFR + AntiLag (per gli altri pacing) ======
             // - Se l'utente abilita LFR ma il pacing è Balanced-class (BALANCED | CAP_FPS | MAX_SMOOTHNESS)
