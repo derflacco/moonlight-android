@@ -241,6 +241,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private String glRenderer;
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
+    // ADPF Performance Hint (optional)
+    private com.limelight.perf.PerfHint perfHint;
+    private long phmWorkStartNs = 0L;
+    // Performance Hint Manager session
     // --- OLED burn-in protection for Lite overlay (horizontal pixel/text shift) ---
     private static final long LITE_SHIFT_PERIOD_NS = 30_000_000_000L; // 30s
     // --- OLED "pixel refresh" blink for Lite overlay ---
@@ -1326,7 +1330,10 @@ android.media.MediaFormat __inF = null, __outF = null;
         long expectedFrameTimeDeltaNs = 800_000_000L / rr; // ~80% of the next frame
 
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-
+            // Mark start of CPU work for this frame
+            if (MediaCodecDecoderRenderer.this.perfHint != null) {
+                MediaCodecDecoderRenderer.this.phmWorkStartNs = System.nanoTime();
+            }
             // Keep at most 1 buffered frame to smooth jitter (preferLowerDelays path)
             if (preferLowerDelays) {
                 while (outputBufferQueue.size() > 1) {
@@ -1352,6 +1359,17 @@ android.media.MediaFormat __inF = null, __outF = null;
                         lastRenderedFrameTimeNanos = nowNs;
                     }
                     activeWindowVideoStats.totalFramesRendered++;
+                    if (MediaCodecDecoderRenderer.this.perfHint != null
+                            && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                            && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                        long __dur = System.nanoTime() - MediaCodecDecoderRenderer.this.phmWorkStartNs;
+                        try { MediaCodecDecoderRenderer.this.perfHint.report(__dur); } catch (Throwable ignored) {}
+
+                        // (opzionale) log ogni ~2s @120fps / ~1s @60fps
+                        if ((activeWindowVideoStats.totalFramesRendered % 120) == 0) {
+                            LimeLog.info("PHM: lastWorkNs=" + __dur);
+                        }
+                    }
                 } catch (IllegalStateException ignored) {
                     try {
                         // Try to avoid leaking the output buffer by releasing it without rendering
@@ -1467,29 +1485,25 @@ android.media.MediaFormat __inF = null, __outF = null;
                     }
                 } catch (Throwable ignored) {}
 
-                android.os.PerformanceHintManager.Session __hs = null;
+                /* PHM */ android.os.PerformanceHintManager.Session __hs = null;
 
-// Performance Hint session (API 30+): guide scheduler to budget for our frame work
-                if (android.os.Build.VERSION.SDK_INT >= 31 && context != null) {
+// ADPF via PerfHint (API 31+)
+                if (android.os.Build.VERSION.SDK_INT >= 31 && context != null && prefs != null && prefs.enablePerfHints) {
                     try {
-                        final long targetWorkNs = (long) (1_000_000_000.0 / Math.max(1f, (targetFps > 0f ? targetFps : 60f)));
-                        android.os.PerformanceHintManager phm =
-                                context.getSystemService(android.os.PerformanceHintManager.class);
-                        if (phm != null) {
-                            long rateNs = 0L;
-                            try { rateNs = phm.getPreferredUpdateRateNanos(); } catch (Throwable ignored) {}
-                            if (rateNs > 0L) {
-                                int tid = android.os.Process.myTid();
-                                android.os.PerformanceHintManager.Session hs =
-                                        phm.createHintSession(new int[]{ tid }, targetWorkNs);
-                                if (hs != null) {
-                                    try { hs.updateTargetWorkDuration(targetWorkNs); } catch (Throwable ignored) {}
-                                    LimeLog.info("PHM: session active (targetNs=" + targetWorkNs + ", rateNs=" + rateNs + ")");
-                                }
-                            }
+                        final double fps = Math.max(1.0, (targetFps > 0f ? (double) targetFps : 60.0));
+                        final long framePeriodNs = (long) (1_000_000_000.0 / fps);
+                        final long targetWorkNs  = Math.max(1_000_000L, (long) (framePeriodNs * 0.6)); // ~60% of frame budget
+
+                        MediaCodecDecoderRenderer.this.perfHint =
+                                com.limelight.perf.PerfHint.createForCurrentThread(context, targetWorkNs);
+                        if (MediaCodecDecoderRenderer.this.perfHint != null) {
+                            try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetWorkNs); } catch (Throwable ignored) {}
+                            LimeLog.info("PHM: session active via PerfHint (targetNs=" + targetWorkNs + ")");
                         }
                     } catch (Throwable ignored) {}
                 }
+
+
 //* Pin hot threads to big cluster *//
 
                 // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
@@ -1596,8 +1610,20 @@ android.media.MediaFormat __inF = null, __outF = null;
 
                                 // --- STATISTICHE: conta UNA volta per present reale (niente gating a VSYNC) ---
                                 activeWindowVideoStats.totalFramesRendered++;
+                                if (MediaCodecDecoderRenderer.this.perfHint != null
+                                        && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                                        && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                    long __dur = System.nanoTime() - MediaCodecDecoderRenderer.this.phmWorkStartNs;
+                                    try { MediaCodecDecoderRenderer.this.perfHint.report(__dur); } catch (Throwable ignored) {}
+
+                                    // (opzionale) log ogni ~2s @120fps / ~1s @60fps
+                                    if ((activeWindowVideoStats.totalFramesRendered % 120) == 0) {
+                                        LimeLog.info("PHM: lastWorkNs=" + __dur);
+                                    }
+                                }
                                 lastPresentNs = nowNs;
                                 lastRenderedFrameTimeNanos = nowNs;
+
 
                                 // (opzionale) reset/ri-sincronizza i contatori LFR interni
                                 lfrLastCountNs = nowNs;
@@ -1893,6 +1919,11 @@ android.media.MediaFormat __inF = null, __outF = null;
 
 
                                 activeWindowVideoStats.totalFramesRendered++;
+                                if (MediaCodecDecoderRenderer.this.perfHint != null
+                                        && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                    long __dur = System.nanoTime() - MediaCodecDecoderRenderer.this.phmWorkStartNs;
+                                    try { MediaCodecDecoderRenderer.this.perfHint.report(__dur); } catch (Throwable ignored) {}
+                                }
                             }
                             else {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
@@ -1970,20 +2001,30 @@ android.media.MediaFormat __inF = null, __outF = null;
                     }
                 }
 //* Pin hot threads to big cluster *//
-// Close PHM session if created and restore affinity
-                try { if (__hs != null) __hs.close(); } catch (Throwable ignored) {}
+// Close PerfHint session and restore affinity
+                try {
+                    if (MediaCodecDecoderRenderer.this.perfHint != null
+                            && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
+                        LimeLog.info("PHM: session closed");
+                    }
+                    if (MediaCodecDecoderRenderer.this.perfHint != null) {
+                        MediaCodecDecoderRenderer.this.perfHint.close();
+                        MediaCodecDecoderRenderer.this.perfHint = null;
+                    }
+                } catch (Throwable ignored) {}
+
                 try {
                     com.limelight.utils.CpuAffinity.clearAllThreadsAffinityAllOnline();
-
-                    // Reset sticky-affinity state
                     MediaCodecDecoderRenderer.this.affinityPinned = false;
                     MediaCodecDecoderRenderer.this.lastAllowedMask = null;
                     MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
                     LimeLog.info("RendererAffinity: cleared to all online CPUs");
-                    // Log final mask after clearing (debug)
                     String __cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
                     LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
                 } catch (Throwable ignored) {}
+
+//* Pin hot threads to big cluster *//
+
                 //* Pin hot threads to big cluster *//
             }
         };
@@ -2112,6 +2153,7 @@ android.media.MediaFormat __inF = null, __outF = null;
 
     @Override
     public void stop() {
+        try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
         // May be called already, but we'll call it now to be safe
         prepareForStop();
                 // --- Async codec teardown (avoid late callbacks/races) ---
@@ -2199,6 +2241,7 @@ android.media.MediaFormat __inF = null, __outF = null;
 
     @Override
     public void cleanup() {
+        try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
 
 // --- Safe teardown: stop codec first, then GL, then Surface ---
         try {

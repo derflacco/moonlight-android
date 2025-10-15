@@ -57,6 +57,8 @@
 -keep class com.limelight.utils.CpuAffinity { *; }
 -keep class com.limelight.utils.RxBoost { *; }
 
+# --- ADPF / Performance Hint utility ---
+-keep class com.limelight.perf.PerfHint { *; }
 
 # FSR renderer (auto-hint)
 -keep class com.limelight.render.GlUpscaleRenderer { *; }

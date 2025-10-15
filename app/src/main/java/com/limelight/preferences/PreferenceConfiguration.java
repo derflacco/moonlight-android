@@ -69,6 +69,7 @@ public class PreferenceConfiguration {
     private static final String ENABLE_ULTRA_LOW_LATENCY_PREF_STRING = "checkbox_ultra_low_latency";
     private static final String SNAPPY_INPUT_PREF_STRING = "checkbox_snappy_input";
     private static final String PREFER_BIG_CORES_PREF_STRING = "checkbox_prefer_big_cores";
+    private static final String ENABLE_PERF_HINTS_PREF_STRING = "checkbox_enable_perf_hints";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
     private static final String AUTO_INVERT_VIDEO_RESOLUTION_PREF_STRING = "checkbox_auto_invert_video_resolution";
@@ -390,6 +391,7 @@ public class PreferenceConfiguration {
     public boolean rememberMouseMode;
     public boolean unlockFps;
     public boolean preferBigCores;
+    public boolean enablePerfHints;
     public boolean preferLowerDelays;
 
     public boolean vibrateOsc;
@@ -895,6 +897,8 @@ private static int getFramePacingValue(Context context) {
         config.preferLowerDelays = getPreferLowerDelays(context);
         // Big cores preference (non-root)
         config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);
+        // Performance Hint Manager (Android 12+)
+        config.enablePerfHints = prefs.getBoolean(ENABLE_PERF_HINTS_PREF_STRING, true);
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
