@@ -225,11 +225,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
-        initEglAndGl();
     }
 
     public Surface createDecoderInputSurface() {
-        if (!isGlReady()) return null;
+        if (!isGlReady()) { initEglAndGl(); if (!isGlReady()) return null; }
         if (decoderInputSurface != null) return decoderInputSurface;
 
         // Create OES texture + SurfaceTexture
@@ -260,6 +259,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     public void start() {
+        if (!isGlReady()) { initEglAndGl(); }
         if (!isGlReady() || running.getAndSet(true)) return;
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
         renderThread.setPriority(Thread.NORM_PRIORITY + 1);
@@ -303,6 +303,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     @Override
     public void onFrameAvailable(SurfaceTexture st) {
+        if (!isGlReady()) { return; }
         synchronized (frameLock) {
             frameAvailable = true;
             pendingFrames.incrementAndGet();
@@ -313,6 +314,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // ====== Loop ======
     private void renderLoop() {
+        if (prefs != null && !prefs.videoUpscaleEnable) { try { Thread.sleep(1); } catch (InterruptedException ignored) {} return; }
         boolean sizeChangedSinceLastSwap = true; // forza un primo draw
         while (running.get()) {
             synchronized (frameLock) {
