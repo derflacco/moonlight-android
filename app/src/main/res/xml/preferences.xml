@@ -1050,6 +1050,13 @@
     android:title="@string/title_prefer_big_cores"
     android:summary="@string/summary_prefer_big_cores"
     app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="checkbox_enable_perf_hints"
+            android:title="@string/title_enable_perf_hints"
+            android:summary="@string/summary_enable_perf_hints"
+            app:iconSpaceReserved="false" />
 </PreferenceCategory>
 
     <PreferenceCategory

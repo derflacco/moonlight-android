@@ -736,6 +736,9 @@
      <!-- Performance: big cores (non-root) -->
     <string name="title_prefer_big_cores">Prefer big CPU cores (non-root)</string>
     <string name="summary_prefer_big_cores">Experimental. Best-effort pinning of critical threads to big cores and use of performance hints. May increase power usage and heat.</string>
+    <string name="title_enable_perf_hints">Performance Hint Manager</string>
+    <string name="summary_enable_perf_hints">Improve responsiveness and consistency. May increase power usage.</string>
+
 
 
     <!-- FG-lite -->
