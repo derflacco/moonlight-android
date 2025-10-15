@@ -29,8 +29,7 @@ static bool receivedFullFrame;
 // We can't request an IDR frame until the depacketizer knows
 // that a packet was lost. This timeout bounds the time that
 // the RTP queue will wait for missing/reordered packets.
-// Slightly larger window to handle burst/reordering without forcing IDR.
-#define RTP_QUEUE_DELAY 12
+#define RTP_QUEUE_DELAY 10
 
 // This is the desired number of video packets that can be
 // stored in the socket's receive buffer.
