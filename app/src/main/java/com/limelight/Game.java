@@ -4367,89 +4367,77 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return null;
     }
 
-
     // Apply low-latency vs smooth policy to the decoder renderer
-    // Notes (EN):
-    // - In low-latency modes we enforce non-blocking dequeue (0 µs) and tight VSYNC pacing.
-    // - In smooth/balanced modes we allow a small timeout to stabilize pacing.
+// - In pure low-latency (LFR) we enforce non-blocking dequeue (0 µs) and tight VSYNC pacing.
+// - In smooth/balanced modes the renderer maps timeouts internally; we don't override them here.
     private void applyLatencyPolicy(
             com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
             com.limelight.preferences.PreferenceConfiguration prefConfig) {
-        if (decoderRenderer == null) return;
+        if (decoderRenderer == null || prefConfig == null) return;
         try {
             // ---- Effective pacing (runtime override) ----
-            // Precedenza: Direct Present (gpuPathMode) > FSR abilitato > scelta utente
-            final boolean gpuPath = (prefConfig != null) && prefConfig.gpuPathMode;
-            final boolean fsrEnabled = (prefConfig != null) && prefConfig.videoUpscaleEnable;
+            // Precedence: Direct Present (gpuPathMode) > FSR enabled > user choice
+            final boolean gpuPath    = prefConfig.gpuPathMode;
+            final boolean fsrEnabled = prefConfig.videoUpscaleEnable;
 
             final int effectiveFp = (gpuPath || (!gpuPath && fsrEnabled))
                     ? com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW
-                    : (prefConfig != null
-                    ? prefConfig.framePacing
-                    : com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED);
+                    : prefConfig.framePacing;
 
+            final int fp = effectiveFp;
 
-            // ====== SEMANTICA LFR + AntiLag (per gli altri pacing) ======
-            // - Se l'utente abilita LFR ma il pacing è Balanced-class (BALANCED | CAP_FPS | MAX_SMOOTHNESS)
-            //   → attiva SOLO AntiLag (percorso managed), NON latest-only
-            // - Altrimenti (altri pacing) con LFR attivo
-            //   → LFR puro (latest-only, timeout 0 µs)
-            // - Se LFR è OFF → percorso managed standard (no AntiLag)
-            final boolean lfrRequested = (prefConfig != null) && prefConfig.preferLowerDelays;
-
-            final int fp = effectiveFp; // usa il pacing effettivo
             final boolean balancedClass =
                     (fp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) ||
                             (fp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS) ||
                             (fp == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
 
-            // Nome leggibile del pacing selezionato
-            String pacingName;
-            try {
-                switch (fp) {
-                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED:
-                        pacingName = "Balanced"; break;
-                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS:
-                        pacingName = "CapFPS"; break;
-                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
-                        pacingName = "MaxSmoothness"; break;
-                    default:
-                        pacingName = "Other"; break;
-                }
-            } catch (Throwable ignored) { pacingName = "Other"; }
+            // ====== LFR + AntiLag semantics ======
+            final boolean lfrRequested = prefConfig.preferLowerDelays;
 
-            final boolean lfrPure = lfrRequested && !balancedClass;          // latest-only (ULL)
-            final boolean antiLagEffective = lfrRequested && balancedClass;   // AntiLag-only
+            // PURE LFR (latest-only) ONLY if NOT balanced-class and NOT GPU-RAW
+            final boolean lfrPure = lfrRequested && !balancedClass && !gpuPath;
 
-            // Timeout coda: 0 µs SOLO per LFR puro; altrimenti piccolo timeout per stabilità
-            final int timeoutUs = lfrPure ? 0 : 500;
+            // For Balanced/Cap/Max: AntiLag-only (managed)
+            final boolean antiLagEffective = lfrRequested && balancedClass;
 
-            // Renderer API: TRUE=latest-only (LFR puro), FALSE=managed
+            // ---- Apply to renderer ----
             decoderRenderer.setPreferLowerDelays(lfrPure);
-            decoderRenderer.setPreferLowerDelaysTimeoutUs(timeoutUs);
 
-            // Propaga AntiLag effettivo al config (se usato altrove)
+            // Timeout ONLY for special cases:
+            // - GPU-RAW: 500 µs (anti-spin, let direct present govern)
+            // - PURE LFR: 0 µs (non-blocking)
+            if (gpuPath) {
+                decoderRenderer.setPreferLowerDelaysTimeoutUs(500);
+            } else if (lfrPure) {
+                decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
+            }
+            // NB: for managed profiles (Balanced/Cap/Max) we do NOT set timeout here.
+            //     The renderer uses getOutputDequeueTimeoutUs() with its own maps (1500/3000/…).
+
+            // Tight thresholds: only follows UI toggle (avoid hidden overrides)
+            decoderRenderer.setForceTightThresholds(prefConfig.forceTightThresholds);
+
+            // Propagate AntiLag (if other components read it from prefConfig)
+            prefConfig.enableAntiLag = antiLagEffective;
+
+            // Compact log
             try {
-                if (prefConfig != null) {
-                    prefConfig.enableAntiLag = antiLagEffective;
+                String pacingName = "Other";
+                switch (fp) {
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED:      pacingName = "Balanced";      break;
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS:       pacingName = "CapFPS";        break;
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:pacingName = "MaxSmoothness"; break;
+                    case com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW:       pacingName = "GPU_RAW";       break;
                 }
-            } catch (Throwable ignored) { }
-
-            // Tight thresholds: segue il toggle UI in questi profili
-            final boolean tightFromUi = (prefConfig != null) && prefConfig.forceTightThresholds;
-            decoderRenderer.setForceTightThresholds(tightFromUi);
-
-            // Log compatto per debugging
-            try {
-                com.limelight.LimeLog.info("LFR: AntiLag=" + (antiLagEffective ? "on" : "off")
-                        + (lfrPure ? " | LFR=pure" : (lfrRequested ? " | LFR=antilag-only" : " | LFR=off"))
-                        + " | pacing=" + pacingName + " (class=" + (balancedClass ? "Balanced" : "Other") + ")");
-
-                com.limelight.LimeLog.info("Latency policy → " +
-                        (lfrPure ? "latest-only, timeout=0us" : ("managed, timeout=" + timeoutUs + "us")) +
-                        " | forceTight=" + (tightFromUi));
-            } catch (Throwable ignored) { }
-        } catch (Throwable ignored) { }
+                com.limelight.LimeLog.info(
+                        "Latency policy → pacing=" + pacingName +
+                                " | gpuPath=" + gpuPath +
+                                " | LFR=" + (lfrRequested ? (lfrPure ? "pure(0us)" : "antilag-only") : "off") +
+                                " | AntiLag=" + (antiLagEffective ? "on" : "off") +
+                                (gpuPath ? " | timeoutUs=500" : (lfrPure ? " | timeoutUs=0" : ""))
+                );
+            } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
     }
 
 

@@ -142,37 +142,41 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
 
 
-    // When preferLowerDelays = true (LFR/ULL): force non-blocking by default.
-// When preferLowerDelays = false (Balanced/managed): use a small timeout for smoothing.
-    private volatile int preferLowerDelaysTimeoutUs = 0; // default 0 for ULL; policy may override if needed
-    public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
+// When preferLowerDelays = true (PURE LFR/ULL): force non-blocking (0 µs).
+// When preferLowerDelays = false (managed): small timeout per profile to stabilize pacing.
+    private volatile int preferLowerDelaysTimeoutUs = 0; // default 0 for PURE LFR; policy may override if needed
+
+    public void setPreferLowerDelaysTimeoutUs(int us) {
+        this.preferLowerDelaysTimeoutUs = Math.max(0, us); // 0 allowed for PURE LFR
+    }
+
     private int getOutputDequeueTimeoutUs() {
-        // LFR puro (latest-only): usa il timeout configurato (di solito 0 µs)
+        // PURE LFR (latest-only): use configured timeout (0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
 
         if (prefs != null) {
-            // AntiLag on managed profiles: tiny wait ONLY when queue is empty, otherwise non-blocking
+            // AntiLag on managed profiles: small wait ONLY if queue is empty, otherwise 0
             if (prefs.enableAntiLag &&
                     (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED
                             || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS
                             || prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS)) {
-                boolean empty = (outputBufferQueue == null || outputBufferQueue.isEmpty());
-                return empty ? 150 : 0; // 150 µs to catch the next frame, 0 when we already have backlog
+                final boolean empty = (outputBufferQueue == null || outputBufferQueue.isEmpty());
+                return empty ? 500 : 0; // 0.5 ms to "catch" next frame, 0 with backlog
             }
 
             switch (prefs.framePacing) {
                 case PreferenceConfiguration.FRAME_PACING_BALANCED:
-                    return 1500;   // 1.5 ms: more tolerance, smoother in managed mode
+                    return 1500;   // 1.5 ms: more tolerance, managed pacing
                 case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
-                return 500;      // 0.5ms
+                    return 500;    // 0.5 ms: Direct Present / GPU-RAW
                 case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                 case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
-                    return 3000;   // 3 ms: favor smoothness, avoid drops
+                    return 3000;   // 3 ms: prioritize smoothness, avoid drop
                 default:
                     break;
             }
         }
-        // Default: non-blocking
+        // Default: small wait to avoid spin on buggy codecs
         return 500;
     }
 
