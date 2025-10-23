@@ -176,30 +176,31 @@ public class StreamSettings extends AppCompatActivity {
 
 
         private void updateLocks() {
+            // --- UI lock helpers (Direct Present / FSR / HDR) ---
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-            // Direct Present (GPU Path)
+            // Direct Present (GPU Path) state
             boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
 
-            // HDR: true se almeno uno dei toggle è attivo (adatta le chiavi ai tuoi nomi se diverso)
+            // HDR state: true if any HDR toggle is ON
             boolean hdrOn =
                     (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
-            // Regole:
-            // - FSR: UI disabilitata solo se Direct Present OPPURE HDR sono attivi
-            // - Frame pacing / LFR: lockati solo da Direct Present
+            // Rules:
+            // - FSR: disable UI when Direct Present OR HDR are active .
+            // - Frame pacing: disable UI when Direct Present is active .
             boolean lockPacing = gpuPath;               // "frame_pacing"
-            boolean lockLfr    = gpuPath;               // "pref_low_latency_frame_balance"
+            boolean lockLfr    = false;               // "pref_low_latency_frame_balance"
             boolean lockFsrEn  = gpuPath || hdrOn;      // "pref_video_upscale_enable"
 
             Preference pacing = findPreference("frame_pacing");
             Preference lfrBal = findPreference("pref_low_latency_frame_balance");
             Preference fsrEn  = findPreference("pref_video_upscale_enable");
-            // Se vuoi anche bloccare Tight VSync con Direct Present, decommenta le due righe seguenti:
-            // Preference tight  = findPreference("checkbox_forceTightThresholds");
-            // if (tight  != null) tight.setEnabled(!gpuPath);
+            // If you also want to lock Tight VSync with Direct Present, uncomment below:
+            // Preference tight = findPreference("checkbox_forceTightThresholds");
+            // if (tight != null) tight.setEnabled(!gpuPath);
 
             if (pacing != null) pacing.setEnabled(!lockPacing);
             if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
