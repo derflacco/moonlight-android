@@ -3440,6 +3440,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void stopConnection() {
         if (connecting || connected) {
+            // Disable sustained mode at stop (safe even if it wasn't enabled)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                try { getWindow().setSustainedPerformanceMode(false); } catch (Throwable ignored) {}
+                // Clear any frame-rate request at stop (signals 'no preference')
+                try {
+                    Surface s = streamContainer != null ? streamContainer.getSurface() : null;
+                    if (s != null) {
+                        if (android.os.Build.VERSION.SDK_INT >= 30) {
+                            s.setFrameRate(0f, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+                        } else {
+                            android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                            lp.preferredRefreshRate = 0f;
+                            getWindow().setAttributes(lp);
+                        }
+                    }
+                } catch (Throwable ignored) {}
+
+            }
+
             connecting = connected = false;
             updatePipAutoEnter();
 
@@ -3830,12 +3849,47 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             holder.getSurface().setFrameRate(desiredFrameRate,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
 
-            // Hint the SoC to keep sustained clocks for smoother video decode/composition
+// Hint the SoC to keep sustained clocks ONLY when Direct Present (GPU_RAW) is active
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                try { getWindow().setSustainedPerformanceMode(true); } catch (Throwable ignored) {}
+                try {
+                    final boolean gpuRaw = (prefConfig != null &&
+                            prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                    getWindow().setSustainedPerformanceMode(gpuRaw);
+                } catch (Throwable ignored) {}
             }
+
+
             // Apply latency policy BEFORE decoder/present loops start
             try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
+            // High-Hz nudge: request the highest supported refresh ONLY for Direct Present (GPU_RAW).
+// This is a *request* (not a guarantee). It can improve DVFS on devices that allow it.
+            try {
+                final boolean gpuRaw = (prefConfig != null &&
+                        prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+
+                if (gpuRaw && holder != null && holder.getSurface() != null) {
+                    final float requestHz = getMaxSupportedRefreshHz();
+
+                    if (android.os.Build.VERSION.SDK_INT >= 31) {
+                        holder.getSurface().setFrameRate(
+                                requestHz,
+                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                                android.view.Surface.CHANGE_FRAME_RATE_ALWAYS
+                        );
+                    } else if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        holder.getSurface().setFrameRate(
+                                requestHz,
+                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                        );
+                    } else {
+                        // Legacy fallback (API < 30): prefer closest refresh
+                        android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                        lp.preferredRefreshRate = requestHz;
+                        getWindow().setAttributes(lp);
+                    }
+                }
+            } catch (Throwable ignored) {}
+
         }
     }
 
@@ -4418,5 +4472,29 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             com.limelight.LimeLog.warning("DisplaySelect Failed to send display select chord");
         }
     }
-
+    // Returns the highest refresh rate supported by the default display.
+    private float getMaxSupportedRefreshHz() {
+        float maxHz = 60f;
+        try {
+            android.view.WindowManager wm = (android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE);
+            if (wm != null) {
+                android.view.Display d = wm.getDefaultDisplay();
+                if (d != null) {
+                    if (android.os.Build.VERSION.SDK_INT >= 23) {
+                        android.view.Display.Mode[] modes = d.getSupportedModes();
+                        if (modes != null) {
+                            for (android.view.Display.Mode m : modes) {
+                                if (m != null) {
+                                    maxHz = Math.max(maxHz, m.getRefreshRate());
+                                }
+                            }
+                        }
+                    } else {
+                        maxHz = Math.max(maxHz, d.getRefreshRate());
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return maxHz;
+    }
 }

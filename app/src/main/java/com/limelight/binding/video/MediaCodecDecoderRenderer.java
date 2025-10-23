@@ -1377,13 +1377,19 @@ try {
                     try {
                         final double fps = Math.max(1.0, (targetFps > 0f ? (double) targetFps : 60.0));
                         final long framePeriodNs = (long) (1_000_000_000.0 / fps);
-                        final long targetWorkNs  = Math.max(1_000_000L, (long) (framePeriodNs * 0.6)); // ~60% of frame budget
+                        final boolean gpuRaw = (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+
+                        // More aggressive target when GPU_RAW (immediate-present): ~90% of frame budget, min 6 ms.
+                        // Otherwise keep a conservative target to reduce power impact.
+                        final long targetWorkNs = gpuRaw
+                                ? Math.max(6_000_000L, (long) (framePeriodNs * 0.90))
+                                : Math.max(1_000_000L, (long) (framePeriodNs * 0.60));
 
                         MediaCodecDecoderRenderer.this.perfHint =
                                 com.limelight.perf.PerfHint.createForCurrentThread(context, targetWorkNs);
                         if (MediaCodecDecoderRenderer.this.perfHint != null) {
                             try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetWorkNs); } catch (Throwable ignored) {}
-                            LimeLog.info("PHM: session active via PerfHint (targetNs=" + targetWorkNs + ")");
+                            LimeLog.info("PHM: session active via PerfHint (gpuRaw=" + gpuRaw + ", targetNs=" + targetWorkNs + ")");
                         }
                     } catch (Throwable ignored) {}
                 }
