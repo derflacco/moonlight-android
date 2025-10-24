@@ -1977,8 +1977,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     } catch (Throwable ignored) {}
                 }
 
-                if(prefs.enablePerfOverlay) {
-                    perfListener.onPerfUpdate(fullLog);
+                String rawLog = fullLog;         // prima delle trasformazioni
+                String renderedLog = sb.toString(); // dopo shift/blink ecc.
+
+                if (prefs.enablePerfOverlay) {
+                    perfListener.onPerfUpdate(renderedLog);
                 }
                 // Best latency is only met at requested highest fps, rest can be ignored
                 Boolean targetFpsMatched = ((int) fps.totalFps == (int) prefs.fps);
