@@ -6,22 +6,33 @@ APP_PLATFORM := android-21
 # We support 16KB pages
 APP_SUPPORT_FLEXIBLE_PAGE_SIZES := true
 
-APP_PLATFORM := android-21
 APP_STL := c++_shared
+
+# ARM ABI support
+APP_ABI := arm64-v8a armeabi-v7a
+
 # === Perf-only overrides ===
 ifeq ($(APP_PERF),1)
     ifndef APP_OPTIM
         APP_OPTIM := release
     endif
 
-    # (Full LTO)
-    APP_CFLAGS   += -O3 -DNDEBUG -flto -ffunction-sections -fdata-sections
-    APP_CPPFLAGS += -O3 -DNDEBUG -flto -ffunction-sections -fdata-sections
+    # LTO mode: default = ThinLTO; override with APP_LTO_FULL=1 or APP_LTO_NONE=1
+    ifeq ($(APP_LTO_NONE),1)
+        $(info [NDK] PERF: LTO disabled)
+    else ifeq ($(APP_LTO_FULL),1)
+        APP_CFLAGS   += -flto
+        APP_CPPFLAGS += -flto
+        APP_LDFLAGS  += -flto -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections
+        $(info [NDK] PERF: Full LTO)
+    else
+        APP_CFLAGS   += -flto=thin
+        APP_CPPFLAGS += -flto=thin
+        APP_LDFLAGS  += -flto=thin -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections
+        $(info [NDK] PERF: ThinLTO)
+    endif
 
-    #  (Full LTO)
-    APP_LDFLAGS  += -flto -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections
-
-
-$(info [NDK] PERF flags enabled: -O3 -flto -fuse-ld=lld)
-
+    # Base perf flags
+    APP_CFLAGS   += -O3 -DNDEBUG -ffunction-sections -fdata-sections
+    APP_CPPFLAGS += -O3 -DNDEBUG -ffunction-sections -fdata-sections
 endif
