@@ -129,7 +129,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // SurfaceTexture transform
     private final float[] texMatrix = new float[16];
-    // Timestamp dell'ultimo frame acquisito da SurfaceTexture (ns, clock monotonic)
+    // Timestamp of the last frame acquired from SurfaceTexture (ns, monotonic clock)
     private long lastFrameTexTimestampNs = 0L;
 
     // Presentation size hint (display-sized buffer), if known
@@ -193,10 +193,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     // ===== Performance state =====
-    // VAO (ES3) per ridurre le bind per draw; fallback automatico a VBO path
+    // VAO (ES3) to reduce binds per draw; automatic fallback to VBO path
     private int vao = 0;
     private boolean hasVao = false;
-    // Evita eglMakeCurrent e query dimensioni ogni frame
+    // Avoid eglMakeCurrent and size query every frame
     private long lastSizeQueryNs = 0L;
     private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
     private int swapFailStreak = 0;
@@ -319,7 +319,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Loop ======
     private void renderLoop() {
         if (prefs != null && !prefs.videoUpscaleEnable) { try { Thread.sleep(1); } catch (InterruptedException ignored) {} return; }
-        boolean sizeChangedSinceLastSwap = true; // forza un primo draw
+        boolean sizeChangedSinceLastSwap = true; // force a first draw
         while (running.get()) {
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -329,7 +329,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!isGlReady()) continue;
-            // Rendiamo corrente il contesto solo se necessario
+            // Make the context current only when necessary
             if (EGL14.eglGetCurrentContext() != eglContext ||
                     EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
                 EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
@@ -344,7 +344,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                         // Drain backlog and keep the most recent frame
                         do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
                         decoderSurfaceTex.getTransformMatrix(texMatrix);
-                        // Latch timestamp del frame (SurfaceTexture clock monotonic)
+                        // Latch frame timestamp (SurfaceTexture monotonic clock)
                         try { lastFrameTexTimestampNs = decoderSurfaceTex.getTimestamp(); } catch (Throwable ignored) {}
                         didUpdateTex = true;
                     }
@@ -360,13 +360,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             if (fbW <= 0 || fbH <= 0) continue;
 
-            // Se non c'è nulla di nuovo da mostrare e la size non è cambiata, evita draw/swap (riduce jitter)
+            // If there is nothing new to show and the size hasn't changed, skip draw/swap (reduces jitter)
             if (!didUpdateTex && !sizeChangedSinceLastSwap) {
                 continue;
             }
 
             ensureViewport(fbW, fbH);
-            // Niente glClear: disegniamo full-screen, risparmia GPU
+            // No glClear: we draw full-screen, saving GPU
 
             final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
             final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
@@ -423,7 +423,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsrOverlay = __fsr.overlayLine();
                 }
                 if (!ok) {
-                    // Fallback in caso di FBO non completo
+                    // Fallback in case of incomplete FBO
                     drawOesToScreen();
                 }
             } else {
@@ -457,7 +457,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
 
-            // Usa il timestamp del frame quando disponibile per sincronizzarsi meglio al VSYNC di SF
+            // Use the frame timestamp when available to better align to SurfaceFlinger VSYNC
             final long presentNs = (lastFrameTexTimestampNs > 0L) ? lastFrameTexTimestampNs : System.nanoTime();
             try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs); } catch (Throwable ignored) {}
 
@@ -472,7 +472,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             } else {
                 if (swapFailStreak != 0) swapFailStreak = 0;
-                sizeChangedSinceLastSwap = false; // abbiamo presentato con la nuova size
+                sizeChangedSinceLastSwap = false; // we presented with the new size
             }
         }
     }
@@ -485,7 +485,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-        setOesFilter(false); // LINEAR: video → screen (evita aliasing)
+        setOesFilter(false); // LINEAR: video → screen (avoid aliasing)
         GLES20.glUniform1i(blit_uTex, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -528,7 +528,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
 
         ensureViewport(dstW, dstH);
-// OES -> upscaledTex (adaptive)
+        // OES -> upscaledTex (adaptive)
         GLES20.glUseProgram(progBlit);
         bindQuad(progBlit);
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
@@ -537,7 +537,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         setOesFilter( (dstW > srcW || dstH > srcH) ? false : true ); // LINEAR when upscaling
         GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-// (no EASU timing here, RCAS_ONLY path)
+        // (no EASU timing here, RCAS_ONLY path)
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
 
@@ -564,14 +564,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
         if (!ensureFbo(dstW, dstH)) return false;
 
-        // Attach esplicito
+        // Explicit attachment
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
                 GLES20.GL_TEXTURE_2D, upscaledTex, 0);
         if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
 
         ensureViewport(dstW, dstH);
-// EASU (lite)
+        // EASU (lite)
         GLES20.glUseProgram(progEasu);
         bindQuad(progEasu);
         if (__fsr.enabled) { __fsr.ticEasu(); }
@@ -589,7 +589,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (__fsr.enabled) { __fsr.tocEasu(); }
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
-// RCAS → screen
+        // RCAS → screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
         GLES20.glUseProgram(progRcas);
@@ -742,7 +742,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadUv.capacity()*4, quadUv, GLES20.GL_STATIC_DRAW);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-        // VAO: pre-binda gli attributi una volta sola
+        // VAO: pre-bind attributes once (if supported)
         try {
             int[] vaoId = new int[1];
             GLES30.glGenVertexArrays(1, vaoId, 0);
@@ -820,7 +820,7 @@ try {
         if (hasVao && vao != 0) {
             try { GLES30.glBindVertexArray(vao); return; } catch (Throwable ignored) { /* fallback */ }
         }
-        // Fallback VBO: attributi fissi (location 0/1 bindate in linkProgram)
+        // Fallback VBO path: fixed attributes (locations 0/1 bound in linkProgram)
         int locPos = 0, locUv = 1;
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glEnableVertexAttribArray(locPos);
@@ -834,7 +834,7 @@ try {
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
-        // Micro-ottimizzazioni GL per content 2D video
+        // Tiny GL optimizations for 2D video content
         try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
         try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
         fixedStateApplied = true;
@@ -1017,7 +1017,7 @@ try {
                     "#ifdef USE_OES\n" +
                     "void main(){\n" +
                     "  vec2 texel = uInvDstSize;\n" +
-                    "  // Precompute base uv and steps in texture space to evitare 5 moltiplicazioni di matrice\n" +
+                    "  // Precompute base uv and steps in texture space to avoid 5 matrix multiplies\n" +
                     "  vec2 uv0    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
                     "  vec2 stepX  = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
                     "  vec2 stepY  = (uTexMatrix * vec4(0.0, texel.y, 0.0, 0.0)).xy;\n" +
@@ -1036,16 +1036,16 @@ try {
                     "  vec3 ty = texture(uUpscaled, uv0 + vec2(0.0, texel.y)).rgb;\n" +
                     "  vec3 by = texture(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
                     "#endif\n" +
-                    "  // 4-tap unsharp mask (molto cheap)\n" +
+                    "  // 4-tap unsharp mask (very cheap)\n" +
                     "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
                     "  vec3 detail = c - blur4;\n" +
-                    "  // deadzone soft per rumore + clamp envelope anti-halo\n" +
+                    "  // Soft deadzone for noise + anti-halo clamp envelope\n" +
                     "  vec3 sgn = sign(detail);\n" +
                     "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
                     "  float gx = luma(rx) - luma(lx);\n" +
                     "  float gy = luma(ty) - luma(by);\n" +
-                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy)); // cheap, niente sqrt\n" +
-                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);        // niente pow()\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy)); // cheap, no sqrt\n" +
+                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);        // no pow()\n" +
                     "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
                     "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
                     "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
