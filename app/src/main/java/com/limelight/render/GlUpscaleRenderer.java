@@ -25,18 +25,39 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Copyright (c) 2021 Advanced Micro Devices, Inc.
  * SPDX-License-Identifier: MIT
  *
- * This renderer adapts the AMD FSR1 reference approach for Android:
- * - MediaCodec decodes into a SurfaceTexture bound to GL_TEXTURE_EXTERNAL_OES.
- * - We apply ONLY the SurfaceTexture transform matrix (no manual flips).
- * - EASU: Edge-Adaptive Spatial Upsampling (reference-style taps & edge guidance).
- * - RCAS: Robust Contrast Adaptive Sharpening (reference-style local clamp).
+ * This renderer adapts AMD FSR1 with:
+ * - ES3 fast-path + ES2 fallback
+ * - SurfaceTexture (OES) input, optional EASU upsample + RCAS sharpen
+ * - Single-pass RCAS_OES (ES3) health-checked and auto-fallback to 2D RCAS
  *
- * Notes:
- * - SDR/sRGB only. For HDR do tone-map on the server before encode.
- * - A small near-native bypass avoids unnecessary blur when scale≈1x.
+ * Improvements in this version:
+ * - ES2 fallback (#version 100 shaders) when ES3 unavailable
+ * - Robust EGL config (ES3 then ES2) + optional RECORDABLE_ANDROID
+ * - Safer init (avoid NPE if decoderSurfaceTex is null)
+ * - Complete GL cleanup (incl. RCAS_OES program)
+ * - Swap throttling hint (eglSwapInterval(0), best effort)
+ * - Fixed-state tweaks (disable DITHER/SCISSOR, UNPACK_ALIGNMENT=1)
+ * - Resize changes now force a draw (avoid “stuck” frames after size-only changes)
+ * - RCAS_OES health-check waits for first content & uses 2×2 texel steps
+ * - Consistent sharpness mapping (single dead-zone constant)
+ * - Prefer LINEAR sampling for OES on both up/down-scale to reduce aliasing
  */
 public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
-    // RCAS_OES health-check state
+
+    // ====== Configuration Constants ======
+    private static final float NEAR_NATIVE_THRESHOLD = 0.01f;
+    private static final long SIZE_QUERY_INTERVAL_NS = 400_000_000L; // ~0.4s
+    private static final int MAX_SWAP_FAIL_STREAK = 8;
+
+    // Sharpness curve constants (UI 0..1 -> internal strength)
+    private static final float SHARPNESS_DEADZONE = 0.05f; // <=5% = OFF
+    private static final float SHARPNESS_GAMMA = 0.85f;
+    private static final float SHARPNESS_EXP_FACTOR = 3.5f;
+
+    // ====== ES version ======
+    private boolean isEs3 = false;
+
+    // RCAS_OES health-check state (ES3 only)
     private boolean rcasOesChecked = false;
     private boolean rcasOesHealthy = false;
 
@@ -109,7 +130,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private SurfaceTexture decoderSurfaceTex;
     private Surface decoderInputSurface;
 
-    // FBO for intermediate upscaled image
+    // FBO for upscaled image
     private int fbo = 0;
     private int upscaledTex = 0;
     private int fbW = 0, fbH = 0;
@@ -123,95 +144,38 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1;
     private int progRcasOes = 0, rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uTexMat = -1;
 
-    // Quad buffers (no VAO)
+    // Quad buffers (no VAO in ES2)
     private int vboPos = 0, vboUv = 0;
     private FloatBuffer quadPos, quadUv;
 
     // SurfaceTexture transform
     private final float[] texMatrix = new float[16];
-    // Timestamp of the last frame acquired from SurfaceTexture (ns, monotonic clock)
+    // Last frame timestamp from SurfaceTexture (ns)
     private long lastFrameTexTimestampNs = 0L;
 
-    // Presentation size hint (display-sized buffer), if known
+    // Presentation size hint
     private volatile int hintOutW = 0, hintOutH = 0;
 
-    // Performance optimizations
-    private final int[] tmpIntArray = new int[1]; // Reusable int array
-
-    /** Optional: tell the renderer the actual on-screen buffer size (e.g., display resolution).
-     *  Used only for policy/telemetry. Actual upscale still needs a display-sized window surface. */
-    public void setPresentationSizeHint(int w, int h) {
-        hintOutW = Math.max(0, w);
-        hintOutH = Math.max(0, h);
-    }
-    public void setPresentationSizeHintFromDisplay(android.view.Display display) {
-        if (display == null) return;
-        try {
-            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
-            display.getRealMetrics(dm);
-            setPresentationSizeHint(dm.widthPixels, dm.heightPixels);
-        } catch (Throwable ignored) {}
-    }
-    /** Populate presentation-size hint by querying the device display (per-device, per-rotation). */
-    public void setPresentationSizeHintFromContext(android.content.Context ctx) {
-        if (ctx == null) return;
-        int w = 0, h = 0;
-        // API 30+: WindowMetrics (rotation-aware)
-        try {
-            android.view.WindowManager wm = ctx.getSystemService(android.view.WindowManager.class);
-            if (wm != null) {
-                try {
-                    android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
-                    android.graphics.Rect b = m.getBounds();
-                    if (b != null) { w = Math.max(w, b.width()); h = Math.max(h, b.height()); }
-                } catch (Throwable ignored) {}
-            }
-        } catch (Throwable ignored) {}
-        // Display.getRealMetrics
-        try {
-            android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
-            android.view.Display d = (dm != null ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null);
-            if (d != null) {
-                android.util.DisplayMetrics dmets = new android.util.DisplayMetrics();
-                d.getRealMetrics(dmets);
-                w = Math.max(w, dmets.widthPixels);
-                h = Math.max(h, dmets.heightPixels);
-            }
-        } catch (Throwable ignored) {}
-        // Fallback
-        if (w <= 0 || h <= 0) {
-            try {
-                android.util.DisplayMetrics dmets = ctx.getResources().getDisplayMetrics();
-                w = Math.max(w, dmets.widthPixels);
-                h = Math.max(h, dmets.heightPixels);
-            } catch (Throwable ignored) {}
-        }
-        if (w > 0 && h > 0) {
-            setPresentationSizeHint(w, h);
-            try { com.limelight.LimeLog.info("FSR: presentation hint (auto) = " + w + "x" + h); } catch (Throwable ignored) {}
-        }
-    }
+    // Performance
+    private final int[] tmpIntArray = new int[1];
 
     // ===== Performance state =====
-    // VAO (ES3) to reduce binds per draw; automatic fallback to VBO path
     private int vao = 0;
     private boolean hasVao = false;
-    // Avoid eglMakeCurrent and size query every frame
     private long lastSizeQueryNs = 0L;
-    private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
     private int swapFailStreak = 0;
     private boolean fixedStateApplied = false;
 
+    // Track whether size changed since last swap (to force a draw even without a new frame)
+    private boolean sizeChangedSinceLastSwap = true;
 
     // Threading
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread renderThread;
     private final Object frameLock = new Object();
     private boolean frameAvailable = false;
-    // Count pending SurfaceTexture frames (for draining backlog in GPU-only pacing)
     private final java.util.concurrent.atomic.AtomicInteger pendingFrames = new java.util.concurrent.atomic.AtomicInteger(0);
 
-    // Dedicated handler thread for SurfaceTexture frame callbacks (keeps them off the main thread)
     private android.os.HandlerThread stCbThread;
     private android.os.Handler stCbHandler;
 
@@ -231,8 +195,66 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.prefs = prefs;
     }
 
+    /** Optional: hint actual on-screen buffer size. */
+    public void setPresentationSizeHint(int w, int h) {
+        hintOutW = Math.max(0, w);
+        hintOutH = Math.max(0, h);
+    }
+
+    public void setPresentationSizeHintFromDisplay(android.view.Display display) {
+        if (display == null) return;
+        try {
+            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+            display.getRealMetrics(dm);
+            setPresentationSizeHint(dm.widthPixels, dm.heightPixels);
+        } catch (Throwable ignored) {}
+    }
+
+    /** Derive a sane presentation size hint from Context (multi-API strategy). */
+    public void setPresentationSizeHintFromContext(android.content.Context ctx) {
+        if (ctx == null) return;
+        int w = 0, h = 0;
+        // API 30+: WindowMetrics
+        try {
+            android.view.WindowManager wm = ctx.getSystemService(android.view.WindowManager.class);
+            if (wm != null) {
+                try {
+                    android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
+                    android.graphics.Rect b = m.getBounds();
+                    if (b != null) { w = Math.max(w, b.width()); h = Math.max(h, b.height()); }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+        // DisplayManager.getDisplay
+        try {
+            android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
+            android.view.Display d = (dm != null ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null);
+            if (d != null) {
+                android.util.DisplayMetrics dmets = new android.util.DisplayMetrics();
+                d.getRealMetrics(dmets);
+                w = Math.max(w, dmets.widthPixels);
+                h = Math.max(h, dmets.heightPixels);
+            }
+        } catch (Throwable ignored) {}
+        // Resource metrics
+        if (w <= 0 || h <= 0) {
+            try {
+                android.util.DisplayMetrics dmets = ctx.getResources().getDisplayMetrics();
+                w = Math.max(w, dmets.widthPixels);
+                h = Math.max(h, dmets.heightPixels);
+            } catch (Throwable ignored) {}
+        }
+        if (w > 0 && h > 0) {
+            setPresentationSizeHint(w, h);
+            try { LimeLog.info("FSR: presentation hint (auto) = " + w + "x" + h); } catch (Throwable ignored) {}
+        }
+    }
+
     public Surface createDecoderInputSurface() {
-        if (!isGlReady()) { initEglAndGl(); if (!isGlReady()) return null; }
+        if (!isGlReady()) {
+            initEglAndGl();
+            if (!isGlReady()) return null;
+        }
         if (decoderInputSurface != null) return decoderInputSurface;
 
         // Create OES texture + SurfaceTexture
@@ -246,11 +268,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         decoderSurfaceTex = new SurfaceTexture(oesTexId);
         try {
-            // Ensure producer buffers match source video size to avoid extra scaling in SF
+            // Ensure producer buffers match source video size to avoid extra scaling inside SurfaceFlinger
             decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
         } catch (Throwable ignored) {}
 
-        // Start callback thread (if not already)
+        // Dedicated callback thread for SurfaceTexture
         if (stCbThread == null) {
             stCbThread = new android.os.HandlerThread("ST-Callback", android.os.Process.THREAD_PRIORITY_DISPLAY);
             stCbThread.start();
@@ -293,7 +315,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                         stCbHandler = null;
                     }
                 } catch (Throwable ignored2) {}
-
             }
             if (decoderInputSurface != null) {
                 decoderInputSurface.release();
@@ -315,11 +336,33 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
     }
 
+    // ====== Render Mode Decision ======
+    private enum RenderMode { BYPASS, RCAS_ONLY, EASU_RCAS }
 
-    // ====== Loop ======
+    private RenderMode determineRenderMode(boolean upscaleEnabled, String mode, boolean nearNative) {
+        if (!upscaleEnabled || "none".equals(mode)) {
+            return RenderMode.BYPASS;
+        } else if ("easu_rcas".equals(mode) && progEasu != 0 && !nearNative) {
+            return RenderMode.EASU_RCAS;
+        } else {
+            return RenderMode.RCAS_ONLY;
+        }
+    }
+
+    private boolean isNearNativeScale(int dstW, int dstH) {
+        float scaleX = (float) dstW / (float) srcW;
+        float scaleY = (float) dstH / (float) srcH;
+        return Math.abs(Math.min(scaleX, scaleY) - 1.0f) < NEAR_NATIVE_THRESHOLD;
+    }
+
+    // ====== Main Render Loop ======
     private void renderLoop() {
-        if (prefs != null && !prefs.videoUpscaleEnable) { try { Thread.sleep(1); } catch (InterruptedException ignored) {} return; }
-        boolean sizeChangedSinceLastSwap = true; // force a first draw
+        if (prefs != null && !prefs.videoUpscaleEnable) {
+            try { Thread.sleep(1); } catch (InterruptedException ignored) {}
+            return;
+        }
+
+        sizeChangedSinceLastSwap = true; // force a first draw
         while (running.get()) {
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -329,155 +372,196 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!isGlReady()) continue;
-            // Make the context current only when necessary
-            if (EGL14.eglGetCurrentContext() != eglContext ||
-                    EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
-                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
-            }
+            if (!makeCurrent()) continue;
             if (!fixedStateApplied) { applyFixedState(); }
 
-            boolean didUpdateTex = false;
-            try {
-                if (decoderSurfaceTex != null) {
-                    int p = pendingFrames.getAndSet(0);
-                    if (p > 0) {
-                        // Drain backlog and keep the most recent frame
-                        do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
-                        decoderSurfaceTex.getTransformMatrix(texMatrix);
-                        // Latch frame timestamp (SurfaceTexture monotonic clock)
-                        try { lastFrameTexTimestampNs = decoderSurfaceTex.getTimestamp(); } catch (Throwable ignored) {}
-                        didUpdateTex = true;
-                    }
-                }
-            } catch (Throwable t) { /* ignore */ }
+            boolean didUpdateTex = updateTexture();
+            boolean valid = refreshWindowSizeIfNeeded(); // may also set sizeChangedSinceLastSwap
+            if (!valid || fbW <= 0 || fbH <= 0) continue;
 
-            long __now = System.nanoTime();
-            if (fbW <= 0 || (__now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
-                int oldW = fbW, oldH = fbH;
-                refreshWindowSize();
-                sizeChangedSinceLastSwap |= (fbW != oldW || fbH != oldH);
-                lastSizeQueryNs = __now;
-            }
-            if (fbW <= 0 || fbH <= 0) continue;
-
-            // If there is nothing new to show and the size hasn't changed, skip draw/swap (reduces jitter)
+            // If nothing to draw and size didn't change, skip work to reduce jitter
             if (!didUpdateTex && !sizeChangedSinceLastSwap) {
                 continue;
             }
 
             ensureViewport(fbW, fbH);
-            // No glClear: we draw full-screen, saving GPU
 
-            final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
-            final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
-            final boolean modeNone = "none".equals(mode);
-            final boolean modeRcasOnly = "rcas".equals(mode);
-            final boolean modeEasuRcas = "easu_rcas".equals(mode);
-            final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
-
+            // Special GPU path: just blit OES to screen
             if (prefs != null && prefs.gpuPathMode) {
                 drawOesToScreen();
-                try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
-                boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
-                if (!swapped) { try { int err = EGL14.eglGetError(); com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
+                presentFrame();
+                sizeChangedSinceLastSwap = false;
                 continue;
             }
 
-            // Decide target size for *policy/telemetry*: prefer display hint if provided
-            final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
-            final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
-            float scaleX = (float) dstTargetW / (float) srcW;
-            float scaleY = (float) dstTargetH / (float) srcH;
-            boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.01f;
-
-            // === FSR path selection + telemetry ===
-            final float nearThr = 0.01f;
-
-            if (!upscaleEnabled || modeNone) {
-                // BYPASS
-                if (__fsr.enabled) {
-                    __fsr.mode = "BYPASS";
-                    __fsr.srcW = srcW; __fsr.srcH = srcH;
-                    __fsr.dstW = fbW; __fsr.dstH = fbH;
-                    __fsr.sharp = 0f;
-                    __fsr.sampling = "bypass";
-                    __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled") + " | win=" + fbW + "x" + fbH + " hint=" + dstTargetW + "x" + dstTargetH;
-                    __fsrOverlay = __fsr.overlayLine();
-                }
+            RenderResult result = renderFrame();
+            if (!result.success) {
+                // Fallback: direct blit
                 drawOesToScreen();
-            } else if (modeEasuRcas && progEasu != 0 && !nearNative) {
-                boolean ok;
-                ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative));
-                if (__fsr.enabled) {
-                    __fsr.mode = "EASU+RCAS";
-                    __fsr.srcW = srcW; __fsr.srcH = srcH;
-                    __fsr.dstW = fbW; __fsr.dstH = fbH;
-                    __fsr.sharp = sharpUser;
-                    __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-                    __fsr.notes = (ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed")
-                            + " | nearNative=" + nearNative + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
-                    __fsr.frames++;
-                    if ((__fsr.frames % 240L) == 0L) {
-                        com.limelight.LimeLog.info(__fsr.periodicLine());
-                    }
-                    __fsrOverlay = __fsr.overlayLine();
-                }
-                if (!ok) {
-                    // Fallback in case of incomplete FBO
-                    drawOesToScreen();
-                }
-            } else {
-                boolean ok;
-                long t0 = System.nanoTime();
-                float effSharp = mapUiSharpToInternal(sharpUser, nearNative);
-                ok = drawRcasOnlySafe(fbW, fbH, effSharp);
-                long dt = System.nanoTime() - t0;
-                if (__fsr.enabled) {
-                    __fsr.mode = "RCAS_ONLY";
-                    __fsr.srcW = srcW; __fsr.srcH = srcH;
-                    __fsr.dstW = fbW; __fsr.dstH = fbH;
-                    __fsr.sharp = effSharp;
-                    __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-                    String reason;
-                    if (nearNative) reason = "reason=nearNative";
-                    else if (srcW == fbW && srcH == fbH) reason = "reason=dstEqSrc";
-                    else if (modeRcasOnly) reason = "reason=easu_disabled";
-                    else reason = "reason=mode!=easu_rcas";
-                    __fsr.notes = (ok ? reason : ("fallback:rcas_only_failed")) +
-                            " | nearNative=" + nearNative + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
-                    __fsr.rcasAvgNs = (__fsr.rcasAvgNs==0.0) ? dt : (0.2*dt + 0.8*__fsr.rcasAvgNs);
-                    __fsr.frames++;
-                    if ((__fsr.frames % 240L) == 0L) {
-                        com.limelight.LimeLog.info(__fsr.periodicLine());
-                    }
-                    __fsrOverlay = __fsr.overlayLine();
-                }
-                if (!ok) {
-                    drawOesToScreen();
-                }
             }
 
-            // Use the frame timestamp when available to better align to SurfaceFlinger VSYNC
-            final long presentNs = (lastFrameTexTimestampNs > 0L) ? lastFrameTexTimestampNs : System.nanoTime();
-            try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs); } catch (Throwable ignored) {}
-
-            boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
-            if (!__swapped) {
-                int err = EGL14.eglGetError();
-                try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
-                swapFailStreak++;
-                // If the window surface is gone, stop the loop; otherwise treat as transient and continue.
-                if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= 8) {
-                    running.set(false);
-                }
-            } else {
-                if (swapFailStreak != 0) swapFailStreak = 0;
-                sizeChangedSinceLastSwap = false; // we presented with the new size
+            if (!presentFrame()) {
+                break; // stop loop on persistent failure / invalid surface
             }
+
+            sizeChangedSinceLastSwap = false;
         }
     }
 
-    // ====== Draws ======
+    private boolean makeCurrent() {
+        if (EGL14.eglGetCurrentContext() != eglContext ||
+                EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
+            return EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+        }
+        return true;
+    }
+
+    private boolean updateTexture() {
+        boolean didUpdateTex = false;
+        try {
+            if (decoderSurfaceTex != null) {
+                int p = pendingFrames.getAndSet(0);
+                if (p > 0) {
+                    // Drain backlog and keep the newest frame
+                    do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
+                    decoderSurfaceTex.getTransformMatrix(texMatrix);
+                    try { lastFrameTexTimestampNs = decoderSurfaceTex.getTimestamp(); } catch (Throwable ignored) {}
+                    didUpdateTex = true;
+                }
+            }
+        } catch (Throwable t) {
+            try { LimeLog.warning("Texture update failed: " + t.getMessage()); } catch (Throwable ignored) {}
+        }
+        return didUpdateTex;
+    }
+
+    /**
+     * Periodically re-query window surface size.
+     * If dimensions changed, mark sizeChangedSinceLastSwap=true to force a draw.
+     */
+    private boolean refreshWindowSizeIfNeeded() {
+        long now = System.nanoTime();
+        if (fbW <= 0 || (now - lastSizeQueryNs) >= SIZE_QUERY_INTERVAL_NS) {
+            int oldW = fbW, oldH = fbH;
+            refreshWindowSize();
+            lastSizeQueryNs = now;
+            if (fbW > 0 && fbH > 0 && (fbW != oldW || fbH != oldH)) {
+                sizeChangedSinceLastSwap = true; // ensure we render even without a new frame
+            }
+            return (fbW > 0 && fbH > 0);
+        }
+        return true;
+    }
+
+    private static class RenderResult {
+        final boolean success;
+        final String mode;
+        RenderResult(boolean success, String mode) { this.success = success; this.mode = mode; }
+    }
+
+    private RenderResult renderFrame() {
+        final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
+        final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
+        final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
+
+        // Policy/telemetry target size (prefer presentation hint if present)
+        final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
+        final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
+        boolean nearNative = isNearNativeScale(dstTargetW, dstTargetH);
+
+        RenderMode renderMode = determineRenderMode(upscaleEnabled, mode, nearNative);
+        float effectiveSharpness = mapUiSharpToInternal(sharpUser, nearNative);
+
+        boolean success = false;
+        String actualMode = "BYPASS";
+
+        switch (renderMode) {
+            case BYPASS:
+                setupTelemetry("BYPASS", sharpUser, "bypass",
+                        "reason=" + ("none".equals(mode) ? "bypass:mode_none" : "bypass:upscaleDisabled"));
+                drawOesToScreen();
+                success = true;
+                actualMode = "BYPASS";
+                break;
+
+            case EASU_RCAS:
+                success = drawEasuRcasSafe(fbW, fbH, effectiveSharpness);
+                actualMode = "EASU+RCAS";
+                setupTelemetry(actualMode, sharpUser, "OES->2D LINEAR + RCAS_2D",
+                        (success ? "reason=easu_rcas" : "fallback:easu_rcas_failed") +
+                                " | nearNative=" + nearNative);
+                break;
+
+            case RCAS_ONLY:
+                long startTime = System.nanoTime();
+                success = drawRcasOnlySafe(fbW, fbH, effectiveSharpness);
+                long duration = System.nanoTime() - startTime;
+
+                String samplingMode = (isEs3 && progRcasOes != 0 && rcasOesHealthy) ? "RCAS_OES"
+                        : "OES->2D LINEAR + RCAS_2D";
+                String reason;
+                if (nearNative) reason = "reason=nearNative";
+                else if (srcW == fbW && srcH == fbH) reason = "reason=dstEqSrc";
+                else if ("rcas".equals(mode)) reason = "reason=easu_disabled";
+                else reason = "reason=mode!=easu_rcas";
+
+                setupTelemetry("RCAS_ONLY", effectiveSharpness, samplingMode,
+                        (success ? reason : "fallback:rcas_only_failed") +
+                                " | nearNative=" + nearNative);
+
+                if (__fsr.enabled) {
+                    __fsr.rcasAvgNs = (__fsr.rcasAvgNs == 0.0) ? duration : (0.2 * duration + 0.8 * __fsr.rcasAvgNs);
+                }
+                actualMode = "RCAS_ONLY";
+                break;
+        }
+
+        if (__fsr.enabled) {
+            __fsr.frames++;
+            if ((__fsr.frames % 240L) == 0L) {
+                try { LimeLog.info(__fsr.periodicLine()); } catch (Throwable ignored) {}
+            }
+            __fsrOverlay = __fsr.overlayLine();
+        }
+
+        return new RenderResult(success, actualMode);
+    }
+
+    private void setupTelemetry(String mode, float sharpness, String sampling, String notes) {
+        if (!__fsr.enabled) return;
+        __fsr.mode = mode;
+        __fsr.srcW = srcW;
+        __fsr.srcH = srcH;
+        __fsr.dstW = fbW;
+        __fsr.dstH = fbH;
+        __fsr.sharp = sharpness;
+        __fsr.sampling = sampling;
+        __fsr.notes = notes;
+    }
+
+    private boolean presentFrame() {
+        final long presentNs = (lastFrameTexTimestampNs > 0L) ? lastFrameTexTimestampNs : System.nanoTime();
+        try {
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs);
+        } catch (Throwable ignored) {}
+
+        boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+        if (!swapped) {
+            int err = EGL14.eglGetError();
+            try { LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
+            swapFailStreak++;
+            if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= MAX_SWAP_FAIL_STREAK) {
+                running.set(false);
+                return false;
+            }
+        } else {
+            if (swapFailStreak != 0) swapFailStreak = 0;
+        }
+
+        return swapped;
+    }
+
+    // ====== Draw Methods ======
     private void drawOesToScreen() {
         GLES20.glUseProgram(progBlit);
         bindQuad(progBlit);
@@ -485,7 +569,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-        setOesFilter(false); // LINEAR: video → screen (avoid aliasing)
+        setOesFilter(false); // Prefer LINEAR to reduce aliasing
         GLES20.glUniform1i(blit_uTex, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -494,11 +578,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private boolean drawRcasOnlySafe(int dstW, int dstH, float sharp) {
-        checkRcasOesHealthOnce(dstW, dstH);
-        // Prefer direct OES sharpening when program is available
-        if (progRcasOes != 0 && rcasOesHealthy) {
+        // Health-check after first content only
+        if (isEs3) checkRcasOesHealthOnce(dstW, dstH);
+
+        // Prefer direct OES sharpening (ES3)
+        if (isEs3 && progRcasOes != 0 && rcasOesHealthy) {
             if (__fsr.enabled) { __fsr.sampling = "RCAS_OES"; }
-            // Render directly to screen
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             ensureViewport(dstW, dstH);
             GLES20.glUseProgram(progRcasOes);
@@ -510,7 +595,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-            setOesFilter( (dstW > srcW || dstH > srcH) ? false : true ); // LINEAR when upscaling
+            setOesFilter(false); // LINEAR for both up/down-scale
             GLES20.glUniform1i(rcasOes_uTex, 0);
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -519,29 +604,30 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return true;
         }
 
-        // Fallback: OES -> upscaledTex (NEAREST), then RCAS on 2D
+        // Fallback: OES -> upscaledTex, then RCAS 2D
         if (!ensureFbo(dstW, dstH)) return false;
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
                 GLES20.GL_TEXTURE_2D, upscaledTex, 0);
-        if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
+        if (!isFboComplete()) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            return false;
+        }
 
         ensureViewport(dstW, dstH);
-        // OES -> upscaledTex (adaptive)
+        // OES -> 2D
         GLES20.glUseProgram(progBlit);
         bindQuad(progBlit);
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-        setOesFilter( (dstW > srcW || dstH > srcH) ? false : true ); // LINEAR when upscaling
+        setOesFilter(false); // LINEAR in downscale too
         GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        // (no EASU timing here, RCAS_ONLY path)
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
-
-        // RCAS: upscaledTex -> screen
+        // RCAS 2D -> screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
         GLES20.glUseProgram(progRcas);
@@ -549,7 +635,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (__fsr.enabled) { __fsr.ticRcas(); }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
-        setTex2DFilter(true);
+        setTex2DFilter(true); // NEAREST on 2D during sharpen (crisper sampling)
         GLES20.glUniform1i(rcas_uTex, 0);
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
@@ -564,21 +650,24 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
         if (!ensureFbo(dstW, dstH)) return false;
 
-        // Explicit attachment
+        // Attach and check
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
                 GLES20.GL_TEXTURE_2D, upscaledTex, 0);
-        if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
+        if (!isFboComplete()) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            return false;
+        }
 
         ensureViewport(dstW, dstH);
-        // EASU (lite)
+        // EASU (OES->2D)
         GLES20.glUseProgram(progEasu);
         bindQuad(progEasu);
         if (__fsr.enabled) { __fsr.ticEasu(); }
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-        setOesFilter(false);
+        setOesFilter(false); // LINEAR
 
         GLES20.glUniform1i(easu_uTex, 0);
         GLES20.glUniform2f(easu_uInvSrcSize, 1.0f / srcW, 1.0f / srcH);
@@ -611,7 +700,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
-
     }
 
     // ====== GL setup ======
@@ -632,10 +720,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             createOrResizeFbo(w, h);
         }
 
-        // Warn if window surface equals source but a larger presentation hint exists
+        // Warn if using source-sized window while hint suggests larger presentation
         if (w == srcW && h == srcH && (hintOutW > srcW || hintOutH > srcH)) {
-            try { com.limelight.LimeLog.warning("FSR: window surface == source ("+w+"x"+h+"), but presentation hint is " + hintOutW + "x" + hintOutH +
-                    ". Upscale will be bypassed. Use a display-sized Surface (TextureView.setDefaultBufferSize or SurfaceHolder.setFixedSize)."); } catch (Throwable ignored) {}
+            try {
+                LimeLog.warning("FSR: window surface == source ("+w+"x"+h+"), but presentation hint is " + hintOutW + "x" + hintOutH +
+                        ". Upscale will be bypassed. Use a display-sized Surface (TextureView.setDefaultBufferSize or SurfaceHolder.setFixedSize).");
+            } catch (Throwable ignored) {}
         }
     }
 
@@ -653,7 +743,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         return (upscaledTex != 0 && fbo != 0);
     }
 
-    private void createOrResizeFbo(int w, int h) {destroyFbo();
+    private void createOrResizeFbo(int w, int h) {
+        destroyFbo();
         fbW = w; fbH = h; curVpW = -1; curVpH = -1;
 
         GLES20.glGenFramebuffers(1, tmpIntArray, 0); fbo = tmpIntArray[0];
@@ -666,17 +757,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
 
-
-        // Bind FBO and attach color texture
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, upscaledTex, 0);
         if (!isFboComplete()) {
-            // Tear down broken FBO
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             destroyFbo();
             return;
         }
-        // Unbind FBO to avoid leaking state
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         twoDNearest = false;
     }
@@ -684,49 +771,105 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean isFboComplete() {
         int status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
         if (status != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-            LimeLog.warning("FBO incomplete: 0x" + Integer.toHexString(status));
+            try { LimeLog.warning("FBO incomplete: 0x" + Integer.toHexString(status)); } catch (Throwable ignored) {}
             return false;
         }
         return true;
     }
 
     private void destroyFbo() {
-        if (upscaledTex != 0) { tmpIntArray[0] = upscaledTex; GLES20.glDeleteTextures(1, tmpIntArray, 0); upscaledTex = 0; }
-        if (fbo != 0)        { tmpIntArray[0] = fbo;        GLES20.glDeleteFramebuffers(1, tmpIntArray, 0); fbo = 0; }
+        if (upscaledTex != 0) {
+            tmpIntArray[0] = upscaledTex;
+            GLES20.glDeleteTextures(1, tmpIntArray, 0);
+            upscaledTex = 0;
+        }
+        if (fbo != 0) {
+            tmpIntArray[0] = fbo;
+            GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
+            fbo = 0;
+        }
     }
 
     private void initEglAndGl() {
         try {
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
             int[] v = new int[2];
-            if (!EGL14.eglInitialize(eglDisplay, v, 0, v, 1)) throw new RuntimeException("eglInitialize failed");
+            if (!EGL14.eglInitialize(eglDisplay, v, 0, v, 1)) {
+                throw new RuntimeException("eglInitialize failed");
+            }
+
+            // Try config that supports ES2 and ES3 (+recordable when available)
+            int renderable = EGL14.EGL_OPENGL_ES2_BIT;
+            try { renderable |= EGLExt.EGL_OPENGL_ES3_BIT_KHR; } catch (Throwable ignored) {}
+
+            final int EGL_RECORDABLE_ANDROID = 0x3142; // from EGLExt
             int[] cfg = {
-                    EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT | 4 /* ES3 */,
+                    EGL14.EGL_RENDERABLE_TYPE, renderable,
                     EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
                     EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+                    EGL_RECORDABLE_ANDROID, 1, // optional hint for video surfaces
                     EGL14.EGL_NONE
             };
             EGLConfig[] out = new EGLConfig[1];
             int[] num = new int[1];
-            if (!EGL14.eglChooseConfig(eglDisplay, cfg, 0, out, 0, 1, num, 0)) throw new RuntimeException("eglChooseConfig failed");
+            if (!EGL14.eglChooseConfig(eglDisplay, cfg, 0, out, 0, 1, num, 0) || out[0] == null) {
+                // Fallback: ES2 only, no recordable flag
+                int[] cfg2 = {
+                        EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                        EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
+                        EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+                        EGL14.EGL_NONE
+                };
+                if (!EGL14.eglChooseConfig(eglDisplay, cfg2, 0, out, 0, 1, num, 0) || out[0] == null) {
+                    throw new RuntimeException("eglChooseConfig failed");
+                }
+            }
             EGLConfig eglConfig = out[0];
-            int[] ctx = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE};
-            eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctx, 0);
+
+            // Try ES3, fallback to ES2
+            int[] ctx3 = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE};
+            eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctx3, 0);
+            if (eglContext == null || eglContext == EGL14.EGL_NO_CONTEXT) {
+                int[] ctx2 = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE};
+                eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctx2, 0);
+                isEs3 = false;
+            } else {
+                isEs3 = true;
+            }
+
             int[] sattr = {EGL14.EGL_NONE};
             eglWindowSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, windowSurfaceInput, sattr, 0);
             EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
-            int p = pendingFrames.getAndSet(0);
-            if (p > 0) {
-                do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
-                decoderSurfaceTex.getTransformMatrix(texMatrix);
+
+            // Best-effort non-blocking swaps (driver may ignore)
+            try { EGL14.eglSwapInterval(eglDisplay, 0); } catch (Throwable ignored) {}
+
+            // Confirm GL version string
+            try {
+                String ver = GLES20.glGetString(GLES20.GL_VERSION);
+                if (ver != null && ver.startsWith("OpenGL ES 2.")) isEs3 = false;
+            } catch (Throwable ignored) {}
+
+            // Avoid updateTexImage call if SurfaceTexture not ready
+            if (decoderSurfaceTex != null) {
+                int p = pendingFrames.getAndSet(0);
+                if (p > 0) {
+                    do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
+                    decoderSurfaceTex.getTransformMatrix(texMatrix);
+                }
             }
         } catch (Throwable t) {
-            LimeLog.warning("GL init failed: " + t);
+            try { LimeLog.warning("GL init failed: " + t); } catch (Throwable ignored) {}
             destroyEgl();
             return;
         }
 
-        // Quad data
+        initializeGeometry();
+        initializeShaders();
+    }
+
+    private void initializeGeometry() {
+        // Fullscreen quad positions/UVs
         float[] POS = {-1,-1, 1,-1, -1,1, 1,1};
         float[] UV  = { 0, 0, 1, 0,  0,1, 1,1};
         quadPos = ByteBuffer.allocateDirect(POS.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
@@ -734,72 +877,117 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         quadPos.put(POS).position(0);
         quadUv.put(UV).position(0);
 
-        // VBOs
+        // VBOs (work on ES2/ES3)
         GLES20.glGenBuffers(1, tmpIntArray, 0); vboPos = tmpIntArray[0];
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadPos.capacity()*4, quadPos, GLES20.GL_STATIC_DRAW);
+
         GLES20.glGenBuffers(1, tmpIntArray, 0); vboUv = tmpIntArray[0];
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, quadUv.capacity()*4, quadUv, GLES20.GL_STATIC_DRAW);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-        // VAO: pre-bind attributes once (if supported)
-        try {
-            int[] vaoId = new int[1];
-            GLES30.glGenVertexArrays(1, vaoId, 0);
-            vao = vaoId[0];
-            GLES30.glBindVertexArray(vao);
-            // aPos @ location 0
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
-            GLES20.glEnableVertexAttribArray(0);
-            GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 0, 0);
-            // aUv @ location 1
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
-            GLES20.glEnableVertexAttribArray(1);
-            GLES20.glVertexAttribPointer(1, 2, GLES20.GL_FLOAT, false, 0, 0);
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-            GLES30.glBindVertexArray(0);
-            hasVao = (vao != 0);
-        } catch (Throwable ignored) { hasVao = false; }
 
-        // Shaders
-        progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
-        progBlit = linkProgram(progVs, FS_OES_BLIT);
-        progEasu = linkProgram(progVs, FS_EASU);
-        progRcas = linkProgram(progVs, FS_RCAS);
-// Try to link OES variant (single-pass RCAS) with specialized VS to precompute steps
-try {
-    int vsRcasOes = compileShader(GLES20.GL_VERTEX_SHADER, VS_RCAS_OES);
-    progRcasOes = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n" + FS_RCAS);
-    rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
-    rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
-    rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
-    rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
-} catch (Throwable t) {
-    progRcasOes = 0; // keep fallback 2D path
-}
-        easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
-        easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
-        easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
-        // Uniform cache
-        blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
-        blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
-        easu_uTex     = GLES20.glGetUniformLocation(progEasu, "uTex");
-        //easu_uSrcSize = GLES20.glGetUniformLocation(progEasu, "uSrcSize");
-        //easu_uDstSize = GLES20.glGetUniformLocation(progEasu, "uDstSize");
-        easu_uTexMat  = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
-        rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
-        rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
-        rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
+        // VAO path (ES3 only)
+        if (isEs3) {
+            try {
+                int[] vaoId = new int[1];
+                GLES30.glGenVertexArrays(1, vaoId, 0);
+                vao = vaoId[0];
+                GLES30.glBindVertexArray(vao);
+                // aPos @ location 0
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
+                GLES20.glEnableVertexAttribArray(0);
+                GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 0, 0);
+                // aUv @ location 1
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
+                GLES20.glEnableVertexAttribArray(1);
+                GLES20.glVertexAttribPointer(1, 2, GLES20.GL_FLOAT, false, 0, 0);
+                GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+                GLES30.glBindVertexArray(0);
+                hasVao = (vao != 0);
+            } catch (Throwable ignored) {
+                hasVao = false;
+            }
+        } else {
+            hasVao = false;
+        }
+    }
+
+    private void initializeShaders() {
+        try {
+            if (isEs3) {
+                progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES3);
+                // On ES3 we use layout(location=...), so no need to bind attribs in link
+                progBlit = linkProgram(progVs, FS_OES_BLIT_ES3, /*bindAttribs*/ false);
+                progEasu = linkProgram(progVs, FS_EASU_ES3,     /*bindAttribs*/ false);
+                progRcas = linkProgram(progVs, FS_RCAS_ES3,     /*bindAttribs*/ false);
+
+                // RCAS_OES single-pass (optional)
+                try {
+                    int vsRcasOes = compileShader(GLES20.GL_VERTEX_SHADER, VS_RCAS_OES_ES3);
+                    progRcasOes = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n" + FS_RCAS_ES3, false);
+                    rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
+                    rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
+                    rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
+                    rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
+                } catch (Throwable t) {
+                    progRcasOes = 0; // keep 2D fallback
+                }
+            } else {
+                // ES2 fallback — requires explicit attribute binding
+                progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES2);
+                progBlit = linkProgram(progVs, FS_OES_BLIT_ES2, /*bindAttribs*/ true);
+                progEasu = linkProgram(progVs, FS_EASU_ES2,     /*bindAttribs*/ true);
+                progRcas = linkProgram(progVs, FS_RCAS_ES2,     /*bindAttribs*/ true);
+                progRcasOes = 0; // not available on ES2
+            }
+        } catch (Throwable t) {
+            // Hard fallback: try to at least keep blit working
+            try { LimeLog.warning("Shader init encountered error, falling back to BLIT-only: " + t); } catch (Throwable ignored) {}
+            try {
+                if (progBlit == 0) {
+                    if (isEs3) {
+                        progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES3);
+                        progBlit = linkProgram(progVs, FS_OES_BLIT_ES3, false);
+                    } else {
+                        progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES2);
+                        progBlit = linkProgram(progVs, FS_OES_BLIT_ES2, true);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        // Resolve uniforms (only for successfully linked programs)
+        if (progBlit != 0) {
+            blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
+            blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
+        }
+        if (progEasu != 0) {
+            easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
+            easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
+            easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
+        }
+        if (progRcas != 0) {
+            rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
+            rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
+            rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
+        }
     }
 
     private void destroyGl() {
         destroyFbo();
-        if (hasVao && vao != 0) { int[] vaoId = new int[]{vao}; try { GLES30.glDeleteVertexArrays(1, vaoId, 0); } catch (Throwable ignored) {} vao = 0; hasVao = false; }
+        if (hasVao && vao != 0) {
+            int[] vaoId = new int[]{vao};
+            try { GLES30.glDeleteVertexArrays(1, vaoId, 0); } catch (Throwable ignored) {}
+            vao = 0; hasVao = false;
+        }
         if (vboPos != 0) { tmpIntArray[0] = vboPos; GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboPos = 0; }
         if (vboUv  != 0) { tmpIntArray[0] = vboUv;  GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboUv  = 0; }
         if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
         if (progEasu != 0) { GLES20.glDeleteProgram(progEasu); progEasu = 0; }
         if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
+        if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
+        // Note: we don't track/delete vertex shaders separately; programs own them once linked
     }
 
     private void destroyEgl() {
@@ -807,8 +995,12 @@ try {
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
             }
-            if (eglWindowSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglWindowSurface);
-            if (eglContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(eglDisplay, eglContext);
+            if (eglWindowSurface != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(eglDisplay, eglWindowSurface);
+            }
+            if (eglContext != EGL14.EGL_NO_CONTEXT) {
+                EGL14.eglDestroyContext(eglDisplay, eglContext);
+            }
             EGL14.eglTerminate(eglDisplay);
         } catch (Throwable ignored) {}
         eglDisplay = EGL14.EGL_NO_DISPLAY;
@@ -816,11 +1008,11 @@ try {
         eglWindowSurface = EGL14.EGL_NO_SURFACE;
     }
 
-    private void bindQuad(int prog) {
+    private void bindQuad(int /*unused*/ prog) {
         if (hasVao && vao != 0) {
             try { GLES30.glBindVertexArray(vao); return; } catch (Throwable ignored) { /* fallback */ }
         }
-        // Fallback VBO path: fixed attributes (locations 0/1 bound in linkProgram)
+        // VBO fallback (ES2/ES3): attributes at locations 0/1
         int locPos = 0, locUv = 1;
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glEnableVertexAttribArray(locPos);
@@ -834,8 +1026,9 @@ try {
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
-        // Tiny GL optimizations for 2D video content
+        // Small GL optimizations for video
         try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
+        try { GLES20.glDisable(GLES20.GL_SCISSOR_TEST); } catch (Throwable ignored) {}
         try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
         fixedStateApplied = true;
     }
@@ -857,27 +1050,14 @@ try {
     }
 
     private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
-    // Map UI sharpness (0..1) -> internal RCAS strength (conservative).
-    // Dead-zone <=5%; smooth curve; lower cap when near-native scaling.
+
+    // Map UI sharpness (0..1) -> internal RCAS strength.
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
-        // Map UI [0..1] to RCAS strength.
-        // Goals:
-        //  - Keep low-mid values gentle
-        //  - Make high values (>=0.7) more pronounced
-        //  - Cap slightly higher when not near-native to allow stronger RCAS
         float s = clamp01(ui);
-        if (s <= 0.02f) return 0f;             // 0..5% = OFF (dead zone)
-        s = (s - 0.05f) / 0.95f;                // rebase to 0..1
-
-        // Smooth ease-out with a bit more punch than before
-        s = (float)(1.0 - Math.exp(-3.5 * s));
-
-        // Emphasize the upper range while keeping the lower range stable
-        // gamma < 1 lifts highs (more pronounced near 1.0)
-        final float gamma = 0.85f;
-        s = (float)Math.pow(s, gamma);
-
-        // Allow a higher cap when not near-native
+        if (s <= SHARPNESS_DEADZONE) return 0f;             // dead-zone
+        s = (s - SHARPNESS_DEADZONE) / (1.0f - SHARPNESS_DEADZONE); // rebase to 0..1
+        s = (float)(1.0 - Math.exp(-SHARPNESS_EXP_FACTOR * s));     // eased
+        s = (float)Math.pow(s, SHARPNESS_GAMMA);                     // emphasize highs
         float cap = nearNative ? 0.32f : 0.55f;
         return cap * s;
     }
@@ -896,13 +1076,16 @@ try {
         return sh;
     }
 
-    private static int linkProgram(int vs, String fsSrc) {
+    /** Link helper: optionally bind attributes for ES2 (no layout qualifiers). */
+    private static int linkProgram(int vs, String fsSrc, boolean bindAttribs) {
         int fs = compileShader(GLES20.GL_FRAGMENT_SHADER, fsSrc);
         int p = GLES20.glCreateProgram();
         GLES20.glAttachShader(p, vs);
         GLES20.glAttachShader(p, fs);
-        GLES20.glBindAttribLocation(p, 0, "aPos");
-        GLES20.glBindAttribLocation(p, 1, "aUv");
+        if (bindAttribs) {
+            GLES20.glBindAttribLocation(p, 0, "aPos");
+            GLES20.glBindAttribLocation(p, 1, "aUv");
+        }
         GLES20.glLinkProgram(p);
         int[] ok = new int[1];
         GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0);
@@ -916,7 +1099,8 @@ try {
     }
 
     // ====== Shaders ======
-    private static final String VS =
+    // --- ES3 variants ---
+    private static final String VS_ES3 =
             "#version 300 es\n" +
                     "precision highp float;\n" +
                     "layout(location=0) in vec2 aPos;\n" +
@@ -924,8 +1108,8 @@ try {
                     "out vec2 vUv;\n" +
                     "void main(){ vUv=aUv; gl_Position=vec4(aPos,0.0,1.0);}";
 
-    // Specialized VS for RCAS_OES: precompute uv0/stepX/stepY in vertex to reduce per-fragment ALU
-    private static final String VS_RCAS_OES =
+    // Specialized VS for RCAS_OES (precompute steps to save ALU in FS)
+    private static final String VS_RCAS_OES_ES3 =
             "#version 300 es\n" +
                     "precision highp float;\n" +
                     "layout(location=0) in vec2 aPos;\n" +
@@ -945,7 +1129,7 @@ try {
                     "  gl_Position = vec4(aPos, 0.0, 1.0);\n" +
                     "}";
 
-    private static final String FS_OES_BLIT =
+    private static final String FS_OES_BLIT_ES3 =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "precision highp float;\n" +
@@ -953,51 +1137,43 @@ try {
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
                     "uniform mat4 uTexMatrix;\n" +
-                    "uniform int uDoGamma; // 0 = no gamma, 1 = gamma 2.2 out\n" +
                     "void main(){\n" +
                     "  vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy;\n" +
                     "  vec3 c = texture(uTex, uv).rgb;\n" +
-                    "  if (uDoGamma==1) c = pow(clamp(c,0.0,1.0), vec3(1.0/2.2));\n" +
                     "  fragColor = vec4(c, 1.0);\n" +
                     "}";
 
-        // --- EASU minimal pass (OES -> 2D FBO) ---
-        private static final String FS_EASU =
-                "#version 300 es\n" +
-                        "#extension GL_OES_EGL_image_external_essl3 : require\n" +
-                        "precision highp float;\n" +
-                        "in vec2 vUv;\n" +
-                        "layout(location=0) out vec4 fragColor;\n" +
-                        "uniform samplerExternalOES uTex;\n" +
-                        "uniform vec2 uInvSrcSize;   // 1.0/srcSize (precalcolato in Java)\n" +
-                        "uniform mat4 uTexMatrix;\n" +
-                        "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
-                        "void main(){\n" +
-                        "  // Upscale via raster: vUv è già spaziale dst. Applica solo texMatrix.\n" +
-                        "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
-                        "  // 4-neighborhood (cardinali) per edge/dir + base center\n" +
-                        "  vec3 c  = texture(uTex, uv).rgb;\n" +
-                        "  vec3 rx = texture(uTex, uv + vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
-                        "  vec3 lx = texture(uTex, uv - vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
-                        "  vec3 ty = texture(uTex, uv + vec2(0.0, uInvSrcSize.y)).rgb;\n" +
-                        "  vec3 by = texture(uTex, uv - vec2(0.0, uInvSrcSize.y)).rgb;\n" +
-                        "  // Gradiente semplice (Sobel-lite)\n" +
-                        "  float gx = luma(rx) - luma(lx);\n" +
-                        "  float gy = luma(ty) - luma(by);\n" +
-                        "  float edge = clamp((abs(gx)+abs(gy))*1.5, 0.0, 1.0);\n" +
-                        "  // Base: bilineare hw (center)\n" +
-                        "  vec3 base = c;\n" +
-                        "  // Ricostruzione edge-aware: media dei due lati lungo gradiente dominante\n" +
-                        "  vec3 alongX = 0.5*(rx+lx);\n" +
-                        "  vec3 alongY = 0.5*(ty+by);\n" +
-                        "  float wx = smoothstep(0.1, 0.6, abs(gx));\n" +
-                        "  float wy = smoothstep(0.1, 0.6, abs(gy));\n" +
-                        "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
-                        "  // Mix leggero verso la ricostruzione sui bordi (0.0–0.35)\n" +
-                        "  vec3 up = mix(base, guided, 0.35*edge);\n" +
-                        "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
-                        "}";
-    private static final String FS_RCAS =
+    private static final String FS_EASU_ES3 =
+            "#version 300 es\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "precision highp float;\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform vec2 uInvSrcSize;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "void main(){\n" +
+                    "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  vec3 c  = texture(uTex, uv).rgb;\n" +
+                    "  vec3 rx = texture(uTex, uv + vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
+                    "  vec3 lx = texture(uTex, uv - vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
+                    "  vec3 ty = texture(uTex, uv + vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                    "  vec3 by = texture(uTex, uv - vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                    "  float gx = luma(rx) - luma(lx);\n" +
+                    "  float gy = luma(ty) - luma(by);\n" +
+                    "  float edge = clamp((abs(gx)+abs(gy))*1.5, 0.0, 1.0);\n" +
+                    "  vec3 base = c;\n" +
+                    "  vec3 alongX = 0.5*(rx+lx);\n" +
+                    "  vec3 alongY = 0.5*(ty+by);\n" +
+                    "  float wx = smoothstep(0.1, 0.6, abs(gx));\n" +
+                    "  float wy = smoothstep(0.1, 0.6, abs(gy));\n" +
+                    "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
+                    "  vec3 up = mix(base, guided, 0.35*edge);\n" +
+                    "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
+                    "}";
+
+    private static final String FS_RCAS_ES3 =
             "#version 300 es\n" +
                     "#ifdef USE_OES\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
@@ -1017,7 +1193,6 @@ try {
                     "#ifdef USE_OES\n" +
                     "void main(){\n" +
                     "  vec2 texel = uInvDstSize;\n" +
-                    "  // Precompute base uv and steps in texture space to avoid 5 matrix multiplies\n" +
                     "  vec2 uv0    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
                     "  vec2 stepX  = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
                     "  vec2 stepY  = (uTexMatrix * vec4(0.0, texel.y, 0.0, 0.0)).xy;\n" +
@@ -1036,16 +1211,14 @@ try {
                     "  vec3 ty = texture(uUpscaled, uv0 + vec2(0.0, texel.y)).rgb;\n" +
                     "  vec3 by = texture(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
                     "#endif\n" +
-                    "  // 4-tap unsharp mask (very cheap)\n" +
                     "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
                     "  vec3 detail = c - blur4;\n" +
-                    "  // Soft deadzone for noise + anti-halo clamp envelope\n" +
                     "  vec3 sgn = sign(detail);\n" +
                     "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
                     "  float gx = luma(rx) - luma(lx);\n" +
                     "  float gy = luma(ty) - luma(by);\n" +
-                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy)); // cheap, no sqrt\n" +
-                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);        // no pow()\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
+                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);\n" +
                     "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
                     "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
                     "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
@@ -1054,15 +1227,100 @@ try {
                     "  fragColor = vec4(outc, 1.0);\n" +
                     "}";
 
+    // --- ES2 variants (fallback) ---
+    private static final String VS_ES2 =
+            "precision highp float;\n" +
+                    "attribute vec2 aPos;\n" +
+                    "attribute vec2 aUv;\n" +
+                    "varying vec2 vUv;\n" +
+                    "void main(){ vUv=aUv; gl_Position=vec4(aPos,0.0,1.0);}";
+
+    private static final String FS_OES_BLIT_ES2 =
+            "#extension GL_OES_EGL_image_external : require\n" +
+                    "precision highp float;\n" +
+                    "varying vec2 vUv;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "void main(){\n" +
+                    "  vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy;\n" +
+                    "  vec3 c = texture2D(uTex, uv).rgb;\n" +
+                    "  gl_FragColor = vec4(c, 1.0);\n" +
+                    "}";
+
+    private static final String FS_EASU_ES2 =
+            "#extension GL_OES_EGL_image_external : require\n" +
+                    "precision highp float;\n" +
+                    "varying vec2 vUv;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform vec2 uInvSrcSize;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "void main(){\n" +
+                    "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  vec3 c  = texture2D(uTex, uv).rgb;\n" +
+                    "  vec3 rx = texture2D(uTex, uv + vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
+                    "  vec3 lx = texture2D(uTex, uv - vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
+                    "  vec3 ty = texture2D(uTex, uv + vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                    "  vec3 by = texture2D(uTex, uv - vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                    "  float gx = luma(rx) - luma(lx);\n" +
+                    "  float gy = luma(ty) - luma(by);\n" +
+                    "  float edge = clamp((abs(gx)+abs(gy))*1.5, 0.0, 1.0);\n" +
+                    "  vec3 base = c;\n" +
+                    "  vec3 alongX = 0.5*(rx+lx);\n" +
+                    "  vec3 alongY = 0.5*(ty+by);\n" +
+                    "  float wx = smoothstep(0.1, 0.6, abs(gx));\n" +
+                    "  float wy = smoothstep(0.1, 0.6, abs(gy));\n" +
+                    "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
+                    "  vec3 up = mix(base, guided, 0.35*edge);\n" +
+                    "  gl_FragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
+                    "}";
+
+    private static final String FS_RCAS_ES2 =
+            "precision mediump float;\n" +
+                    "varying vec2 vUv;\n" +
+                    "uniform sampler2D uUpscaled;\n" +
+                    "uniform vec2  uInvDstSize;\n" +
+                    "uniform float uSharp;\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "void main(){\n" +
+                    "  vec2 texel = uInvDstSize;\n" +
+                    "  vec2 uv0 = vUv;\n" +
+                    "  vec3 c  = texture2D(uUpscaled, uv0).rgb;\n" +
+                    "  vec3 rx = texture2D(uUpscaled, uv0 + vec2(texel.x, 0.0)).rgb;\n" +
+                    "  vec3 lx = texture2D(uUpscaled, uv0 - vec2(texel.x, 0.0)).rgb;\n" +
+                    "  vec3 ty = texture2D(uUpscaled, uv0 + vec2(0.0, texel.y)).rgb;\n" +
+                    "  vec3 by = texture2D(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
+                    "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
+                    "  vec3 detail = c - blur4;\n" +
+                    "  vec3 sgn = sign(detail);\n" +
+                    "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
+                    "  float gx = luma(rx) - luma(lx);\n" +
+                    "  float gy = luma(ty) - luma(by);\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
+                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);\n" +
+                    "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
+                    "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
+                    "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
+                    "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
+                    "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
+                    "  gl_FragColor = vec4(outc, 1.0);\n" +
+                    "}";
+
     // ===== FSR telemetry controls =====
     public void setFsrDebugEnabled(boolean enabled) { __fsr.enabled = enabled; }
     public String getFsrOverlayLine() { return __fsrOverlay; }
 
-    // Draw a tiny frame with RCAS_OES into a 2x2 FBO and read back to verify non-zero output.
-    private void checkRcasOesHealthOnce(int dstW, int dstH) {
+    /**
+     * RCAS_OES health-check (ES3): render into a 2x2 FBO and verify non-zero output.
+     * Runs only after first content is latched (to avoid false negatives).
+     */
+    private void checkRcasOesHealthOnce(int /*dstW*/ _dstW, int /*dstH*/ _dstH) {
+        if (!isEs3) return;
         if (rcasOesChecked) return;
-        rcasOesChecked = true;
         if (progRcasOes == 0) return;
+        if (lastFrameTexTimestampNs == 0L) return; // wait until we have content
+
+        rcasOesChecked = true;
 
         int[] fboId = new int[1];
         int[] texId = new int[1];
@@ -1087,7 +1345,8 @@ try {
         GLES20.glViewport(0, 0, 2, 2);
         GLES20.glUseProgram(progRcasOes);
         bindQuad(progRcasOes);
-        GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
+        // For a 2x2 FBO, 1/width = 0.5, 1/height = 0.5
+        GLES20.glUniform2f(rcasOes_uInvDst, 0.5f, 0.5f);
         GLES20.glUniform1f(rcasOes_uSharp, mapUiSharpToInternal(0.2f, true));
         GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
 
@@ -1108,6 +1367,6 @@ try {
         GLES20.glDeleteTextures(1, texId, 0);
         GLES20.glDeleteFramebuffers(1, fboId, 0);
 
-        try { com.limelight.LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
+        try { LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
     }
 }
