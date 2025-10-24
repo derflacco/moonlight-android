@@ -1,14 +1,23 @@
 package com.limelight.utils;
 
+import androidx.annotation.NonNull;
+
 import java.util.Arrays;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 /**
  * CpuAffinity — helpers to pin threads to big cores safely.
  * Backed by libcpuaffinity.so (System.loadLibrary("cpuaffinity")).
+ *
+ * Improvements:
+ * - Big-core detection cache with expiry and explicit invalidation
+ * - Safer watcher lifecycle (lock, min period, graceful shutdown)
+ * - One-shot regex pin utility
+ * - Clearer logging and guardrails
  */
 public final class CpuAffinity {
     private CpuAffinity() {}
@@ -16,6 +25,8 @@ public final class CpuAffinity {
     // ---- State ----
     private static volatile boolean sTriedLoad = false;
     private static volatile boolean sNativeLoaded = false;
+
+    // Back-compat shadow (kept for toString() and old callers that may read it)
     private static volatile int[] sCachedBigCores = null;
 
     // Watcher (fixed-delay) and filters
@@ -23,6 +34,35 @@ public final class CpuAffinity {
     private static volatile ScheduledFuture<?> sWatchFuture;
     private static volatile long sWatcherPeriodMs = 0L;
     private static volatile Pattern sInclude, sExclude;
+    private static final Object sWatcherLock = new Object();
+
+    // Big-core cache
+    private static final AtomicReference<CacheEntry> sBigCoresCache = new AtomicReference<>();
+    private static volatile long sCacheExpiryMs = 30_000L; // default 30s
+
+    // ---- Config ----
+    private static final class Config {
+        static final long MIN_WATCHER_INTERVAL_MS = 1000L;   // avoid too-frequent scans
+        static final long SHUTDOWN_WAIT_MS        = 5000L;   // await termination timeout
+    }
+
+    // Cache entry with timestamp
+    private static final class CacheEntry {
+        final int[] bigCores;
+        final long timestampMs;
+        final long expiryMs;
+
+        CacheEntry(int[] bigCores, long expiryMs) {
+            this.bigCores = (bigCores != null) ? bigCores.clone() : new int[0];
+            this.timestampMs = System.currentTimeMillis();
+            this.expiryMs = expiryMs;
+        }
+
+        boolean isValid() {
+            if (expiryMs <= 0L) return true; // never expire when <= 0
+            return (System.currentTimeMillis() - timestampMs) < expiryMs;
+        }
+    }
 
     // ---- Load native once ----
     private static boolean ensureLoaded() {
@@ -35,8 +75,10 @@ public final class CpuAffinity {
                 try {
                     System.loadLibrary("cpuaffinity");
                     sNativeLoaded = true;
+                    __v("Native library loaded");
                 } catch (Throwable t) {
                     sNativeLoaded = false;
+                    __v("Failed to load native library: " + t.getMessage());
                 }
             }
         }
@@ -51,6 +93,7 @@ public final class CpuAffinity {
         if (!ensureLoaded()) return -1;
         try { return nativeGetCurrentCpu(); } catch (Throwable t) { return -1; }
     }
+
     public static int getCurrentCpuOrMinus1() { return getCurrentCpu(); }
 
     public static String readAllowedCpuListForCurrentThread() {
@@ -60,12 +103,18 @@ public final class CpuAffinity {
 
     public static void setAffinity(int... cpuIds) {
         if (!ensureLoaded() || cpuIds == null || cpuIds.length == 0) return;
-        try { nativeSetAffinity(cpuIds); } catch (Throwable ignored) {}
+        try {
+            nativeSetAffinity(cpuIds);
+            __v("Set affinity to " + Arrays.toString(cpuIds));
+        } catch (Throwable ignored) {}
     }
 
     public static void clearCurrentThreadAffinityAllOnline() {
         if (!ensureLoaded()) return;
-        try { nativeClearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+        try {
+            nativeClearCurrentThreadAffinityAllOnline();
+            __v("Cleared current thread affinity");
+        } catch (Throwable ignored) {}
     }
 
     // ---- Process / TID helpers ----
@@ -81,7 +130,10 @@ public final class CpuAffinity {
 
     public static void setAffinityForTid(int tid, int... cpuIds) {
         if (!ensureLoaded() || cpuIds == null || cpuIds.length == 0) return;
-        try { nativeSetAffinityForTid(tid, cpuIds); } catch (Throwable ignored) {}
+        try {
+            nativeSetAffinityForTid(tid, cpuIds);
+            __v("Set affinity for tid=" + tid + " -> " + Arrays.toString(cpuIds));
+        } catch (Throwable ignored) {}
     }
 
     public static void pinAllThreadsToCores(int... cpuIds) {
@@ -94,18 +146,64 @@ public final class CpuAffinity {
         try { nativeClearAllThreadsAffinityAllOnline(); } catch (Throwable ignored) {}
     }
 
-    // ---- Big core detection ----
+    // ---- Big core detection (+ cache) ----
     public static int[] detectBigCores() {
-        if (sCachedBigCores != null) return sCachedBigCores;
-        if (!ensureLoaded()) return new int[0];
-        synchronized (CpuAffinity.class) {
-            if (sCachedBigCores != null) return sCachedBigCores;
-            try { int[] v = nativeDetectBigCores(); sCachedBigCores = (v != null) ? v : new int[0]; }
-            catch (Throwable t) { sCachedBigCores = new int[0]; }
+        // Cache first
+        CacheEntry cached = sBigCoresCache.get();
+        if (cached != null && cached.isValid()) {
+            return cached.bigCores.clone();
         }
-        return sCachedBigCores;
+
+        if (!ensureLoaded()) return new int[0];
+
+        synchronized (CpuAffinity.class) {
+            cached = sBigCoresCache.get();
+            if (cached != null && cached.isValid()) {
+                return cached.bigCores.clone();
+            }
+            try {
+                int[] v = nativeDetectBigCores();
+                int[] result = (v != null) ? v : new int[0];
+                sBigCoresCache.set(new CacheEntry(result, sCacheExpiryMs));
+                sCachedBigCores = result; // keep shadow updated
+                if (result.length > 0) {
+                    __v("Detected big cores: " + Arrays.toString(result));
+                } else {
+                    __v("Detected big cores: <none>");
+                }
+                return result;
+            } catch (Throwable t) {
+                int[] empty = new int[0];
+                sBigCoresCache.set(new CacheEntry(empty, sCacheExpiryMs));
+                sCachedBigCores = empty;
+                return empty;
+            }
+        }
     }
-    public static int[] detectBigCoresForDebug() { return detectBigCores(); }
+
+    /** Force fresh detection next time. */
+    public static void clearBigCoresCache() {
+        sBigCoresCache.set(null);
+        sCachedBigCores = null;
+        __v("Big cores cache cleared");
+    }
+
+    /** Debug path: bypass cache once by clearing before detect. */
+    public static int[] detectBigCoresForDebug() {
+        clearBigCoresCache();
+        return detectBigCores();
+    }
+
+    /** Adjust cache expiry at runtime (<=0 disables expiry). */
+    public static void setBigCoresCacheExpiryMs(long expiryMs) {
+        sCacheExpiryMs = expiryMs;
+        CacheEntry cur = sBigCoresCache.get();
+        if (cur != null) {
+            // Rewrap existing value with new expiry semantics
+            sBigCoresCache.set(new CacheEntry(cur.bigCores, expiryMs));
+        }
+        __v("Cache expiry set to " + expiryMs + " ms");
+    }
 
     public static void pinCurrentThreadToBigCoresIf(boolean enabled) {
         if (!enabled) return;
@@ -116,42 +214,61 @@ public final class CpuAffinity {
     /** Legacy alias kept for compatibility. */
     public static void clearAffinityAllOnline() { clearCurrentThreadAffinityAllOnline(); }
 
-    // ---- Fixed-delay watcher (no burst on cached→uncached) ----
+    // ---- Fixed-delay watcher ----
     public static synchronized void startAffinityWatcherWithFixedDelay(long delayMs) {
         if (!ensureLoaded()) return;
-        if (sWatchFuture != null) return;
-        if (sWatcherExec == null || sWatcherExec.isShutdown()) {
-            sWatcherExec = new ScheduledThreadPoolExecutor(1, r -> {
-                Thread t = new Thread(r, "AffinityWatcher");
-                try { t.setDaemon(true); } catch (Throwable ignored) {}
-                try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); } catch (Throwable ignored) {}
-                return t;
-            });
+        synchronized (sWatcherLock) {
+            if (sWatchFuture != null && !sWatchFuture.isCancelled()) {
+                __v("Affinity watcher already running (period=" + sWatcherPeriodMs + " ms)");
+                return;
+            }
+            if (sWatcherExec == null || sWatcherExec.isShutdown()) {
+                sWatcherExec = new ScheduledThreadPoolExecutor(1, r -> {
+                    Thread t = new Thread(r, "AffinityWatcher");
+                    try { t.setDaemon(true); } catch (Throwable ignored) {}
+                    try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); } catch (Throwable ignored) {}
+                    return t;
+                });
+                try {
+                    sWatcherExec.setRemoveOnCancelPolicy(true);
+                    sWatcherExec.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
+                    sWatcherExec.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+                    sWatcherExec.allowCoreThreadTimeOut(true);
+                } catch (Throwable ignored) {}
+            }
+            final long p = (delayMs <= 0L) ? 2000L : Math.max(delayMs, Config.MIN_WATCHER_INTERVAL_MS);
+            sWatcherPeriodMs = p;
             try {
-                sWatcherExec.setRemoveOnCancelPolicy(true);
-                sWatcherExec.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
-                sWatcherExec.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-                sWatcherExec.allowCoreThreadTimeOut(true);
-            } catch (Throwable ignored) {}
-        }
-        final long p = (delayMs <= 0L) ? 2000L : delayMs;
-        sWatcherPeriodMs = p;
-        sWatchFuture = sWatcherExec.scheduleWithFixedDelay(() -> {
-            try {
-                int[] big = detectBigCores();
-                if (big == null || big.length == 0) return;
-                int[] tids = listTids();
-                for (int tid : tids) {
+                sWatchFuture = sWatcherExec.scheduleWithFixedDelay(() -> {
                     try {
-                        String name = readThreadName(tid);
-                        if (name == null) name = "";
-                        boolean ok = (sInclude == null) || sInclude.matcher(name).find();
-                        if (ok && sExclude != null && sExclude.matcher(name).find()) ok = false;
-                        if (ok) nativeSetAffinityForTid(tid, big);
+                        int[] big = detectBigCores();
+                        if (big == null || big.length == 0) return;
+                        int[] tids = listTids();
+                        int processed = 0;
+                        for (int tid : tids) {
+                            try {
+                                String name = readThreadName(tid);
+                                if (name == null) name = "";
+                                boolean ok = (sInclude == null) || sInclude.matcher(name).find();
+                                if (ok && sExclude != null && sExclude.matcher(name).find()) ok = false;
+                                if (ok) {
+                                    nativeSetAffinityForTid(tid, big);
+                                    processed++;
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                        __v("Watcher tick: processed " + processed + " / " + tids.length + " threads");
                     } catch (Throwable ignored) {}
-                }
-            } catch (Throwable ignored) {}
-        }, p, p, TimeUnit.MILLISECONDS);
+                }, p, p, TimeUnit.MILLISECONDS);
+                __v("Affinity watcher started (period=" + p + " ms)");
+            } catch (Throwable t) {
+                __v("Failed to start affinity watcher: " + t.getMessage());
+                try { sWatcherExec.shutdownNow(); } catch (Throwable ignored) {}
+                sWatcherExec = null;
+                sWatchFuture = null;
+                sWatcherPeriodMs = 0L;
+            }
+        }
     }
 
     /** Convenience overload without filters. */
@@ -168,18 +285,67 @@ public final class CpuAffinity {
         startAffinityWatcherWithFixedDelay(periodMs);
     }
 
+    /** Returns true if the watcher future exists and is not cancelled. */
+    public static boolean isWatcherRunning() {
+        ScheduledFuture<?> f = sWatchFuture;
+        return f != null && !f.isCancelled();
+    }
+
     public static synchronized void stopAffinityWatcher() {
-        if (sWatchFuture != null) {
-            try { sWatchFuture.cancel(true); } catch (Throwable ignored) {}
-            sWatchFuture = null;
+        synchronized (sWatcherLock) {
+            __v("Stopping affinity watcher...");
+            // Cancel future
+            if (sWatchFuture != null) {
+                try { sWatchFuture.cancel(false); } catch (Throwable ignored) {}
+                sWatchFuture = null;
+            }
+            // Shutdown executor and await
+            if (sWatcherExec != null) {
+                try {
+                    sWatcherExec.shutdown();
+                    if (!sWatcherExec.awaitTermination(Config.SHUTDOWN_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                        __v("Watcher executor did not terminate in time, forcing shutdown");
+                        sWatcherExec.shutdownNow();
+                    }
+                } catch (Throwable ignored) {
+                    try { sWatcherExec.shutdownNow(); } catch (Throwable ignored2) {}
+                }
+                sWatcherExec = null;
+            }
+            sWatcherPeriodMs = 0L;
+            sInclude = sExclude = null;
+            __v("Affinity watcher stopped");
         }
-        if (sWatcherExec != null) {
-            try { sWatcherExec.purge(); } catch (Throwable ignored) {}
-            try { sWatcherExec.shutdownNow(); } catch (Throwable ignored) {}
-            sWatcherExec = null;
+    }
+
+    /** One-shot pin of threads that match include/exclude without running the watcher. */
+    public static int pinMatchingThreadsOnce(String includeRegex, String excludeRegex) {
+        if (!ensureLoaded()) return 0;
+        Pattern inc = null, exc = null;
+        try { if (includeRegex != null && !includeRegex.isEmpty()) inc = Pattern.compile(includeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
+        try { if (excludeRegex != null && !excludeRegex.isEmpty()) exc = Pattern.compile(excludeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
+        int[] big = detectBigCores();
+        if (big == null || big.length == 0) return 0;
+        int count = 0;
+        int[] tids = listTids();
+        for (int tid : tids) {
+            String name = readThreadName(tid);
+            if (name == null) name = "";
+            boolean include = (inc == null) || inc.matcher(name).find();
+            boolean exclude = (exc != null) && exc.matcher(name).find();
+            if (include && !exclude) {
+                try { nativeSetAffinityForTid(tid, big); count++; } catch (Throwable ignored) {}
+            }
         }
-        sWatcherPeriodMs = 0L;
-        sInclude = sExclude = null;
+        __v("One-shot pin applied to " + count + " threads");
+        return count;
+    }
+
+    /** Full cleanup helper (cache + watcher). */
+    public static void cleanupAllResources() {
+        stopAffinityWatcher();
+        clearBigCoresCache();
+        __v("All resources cleaned up");
     }
 
     // ---- cpuset debug helpers ----
@@ -224,8 +390,11 @@ public final class CpuAffinity {
         return eff;
     }
 
+    @NonNull
     @Override public String toString() {
-        return "CpuAffinity(loaded=" + sNativeLoaded + ", big=" + Arrays.toString(sCachedBigCores) + ")";
+        // Keep behavior close to legacy while still benefitting from cache
+        int[] big = (sCachedBigCores != null) ? sCachedBigCores : detectBigCores();
+        return "CpuAffinity(loaded=" + sNativeLoaded + ", big=" + Arrays.toString(big) + ")";
     }
 
     // ===== Native declarations =====
@@ -328,7 +497,6 @@ public final class CpuAffinity {
                 }
             }
 
-
             __v("AffinityDetect: method="+prime.method+" clusters="+__dumpClusters(clusters)
                     + " ratio="+String.format(java.util.Locale.US,"%.3f",ratio)
                     + " chosen="+java.util.Arrays.toString(chosen));
@@ -398,8 +566,7 @@ public final class CpuAffinity {
         return sb.toString().trim();
     }
     private static void __v(String msg) {
-        try { com.limelight.LimeLog.info(msg); } catch (Throwable ignored) {}
+        try { com.limelight.LimeLog.info("[CpuAffinity] " + msg); } catch (Throwable ignored) {}
         try { android.util.Log.i("CpuAffinity", msg); } catch (Throwable ignored) {}
     }
-
 }
