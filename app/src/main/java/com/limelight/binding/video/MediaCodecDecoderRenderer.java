@@ -1389,6 +1389,7 @@ try {
                                 com.limelight.perf.PerfHint.createForCurrentThread(context, targetWorkNs);
                         if (MediaCodecDecoderRenderer.this.perfHint != null) {
                             try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetWorkNs); } catch (Throwable ignored) {}
+                            try { MediaCodecDecoderRenderer.this.perfHint.setPreferPowerEfficiency(false); } catch (Throwable ignored) {}
                             LimeLog.info("PHM: session active via PerfHint (gpuRaw=" + gpuRaw + ", targetNs=" + targetWorkNs + ")");
                         }
                     } catch (Throwable ignored) {}
@@ -1409,6 +1410,18 @@ try {
 
                 // Stream cadence (targetFps set in setup(...))
                 final float tfps = (targetFps > 0f ? targetFps : 60f);
+                /* ADPF: tighten target now that tfps is known */
+                if (MediaCodecDecoderRenderer.this.perfHint != null
+                        && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
+                    final boolean __gpuRaw = (prefs != null
+                            && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                    final long __framePeriodNs = (long) (1_000_000_000.0 / Math.max(1.0f, tfps));
+                    final long __targetNs = __gpuRaw
+                            ? Math.max(6_000_000L, (long) (__framePeriodNs * 0.90))
+                            : Math.max(1_000_000L, (long) (__framePeriodNs * 0.60));
+                    try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(__targetNs); } catch (Throwable ignored) {}
+                }
+
                 final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
 
                 // Adaptive period selection to avoid added latency on high-refresh devices
@@ -1443,6 +1456,9 @@ boolean isC2Decoder = false;
                 double ewmaJitterNs = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
+                boolean __phmGpuRawLast = (prefs != null
+                        && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+
                 while (!stopping) {
 
 //* Pin hot threads to big cluster *//
@@ -1465,6 +1481,23 @@ boolean isC2Decoder = false;
                         }
                     }
 //* Pin hot threads to big cluster *//
+                    /* ADPF: adjust target on GPU_RAW toggle at runtime */
+                    if (MediaCodecDecoderRenderer.this.perfHint != null
+                            && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
+                        final boolean __curGpuRaw = (prefs != null
+                                && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                        if (__curGpuRaw != __phmGpuRawLast) {
+                            final long __framePeriodNs = (long) (1_000_000_000.0 / Math.max(1.0f, tfps)); // usa tfps calcolato prima
+                            final long __targetNs = __curGpuRaw
+                                    ? Math.max(6_000_000L, (long) (__framePeriodNs * 0.90))
+                                    : Math.max(1_000_000L, (long) (__framePeriodNs * 0.60));
+                            try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(__targetNs); } catch (Throwable ignored) {}
+                            __phmGpuRawLast = __curGpuRaw;
+                            if (BuildConfig.DEBUG) {
+                                LimeLog.info("PHM: runtime target update (gpuRaw=" + __curGpuRaw + ", targetNs=" + __targetNs + ")");
+                            }
+                        }
+                    }
 
                     /* LATEST_ONLY_LOW_LATENCY */
                     if (preferLowerDelays) {
