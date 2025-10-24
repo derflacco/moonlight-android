@@ -64,7 +64,8 @@
 -keep class com.limelight.utils.SurfaceViewSizer { *; }
 -keep class com.limelight.utils.FSRSizerInstaller { *; }
 -keep class com.limelight.utils.FSRSizerInstaller$AutoCloser { *; }
-
+# GpuKick
+-keep class com.limelight.gpu.GpuKickPbuffer { *; }
 # Keep any class with native methods (JNI signatures relied upon by NDK)
 -keepclasseswithmembernames class * {
     native <methods>;

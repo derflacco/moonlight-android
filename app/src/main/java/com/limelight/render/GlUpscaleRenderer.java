@@ -120,6 +120,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
     private final PreferenceConfiguration prefs;
+    // --- GPU Kick (GL path) ---
+    // --- GPU Kick (GL path) ---
+    private boolean enableGpuKick = false;
+    private int kickFbo = 0, kickTex = 0, kickProg = 0, kickVbo = 0;
+
+    // --- GPU Kick state-safety ---
+    private boolean kickHasVAO = false;
+    private int kickVao = 0;
+    private final int[] kickTmp4 = new int[4];
+    private final int[] kickTmp1 = new int[1];
 
     // EGL
     private EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
@@ -540,6 +550,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs);
         } catch (Throwable ignored) {}
 
+        gpuKickOnceGL();
         boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
         if (!swapped) {
             int err = EGL14.eglGetError();
@@ -861,6 +872,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         initializeGeometry();
         initializeShaders();
+        this.enableGpuKick = (prefs != null && prefs.enableGpuKick);
+        initGpuKickIfNeeded();
     }
 
     private void initializeGeometry() {
@@ -970,6 +983,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void destroyGl() {
+        releaseGpuKick();
         destroyFbo();
         if (hasVao && vao != 0) {
             int[] vaoId = new int[]{vao};
@@ -1363,5 +1377,145 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glDeleteFramebuffers(1, fboId, 0);
 
         try { LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
+
     }
+    // --- GPU Kick helpers (GL path) ---
+    private void initGpuKickIfNeeded() {
+        if (!enableGpuKick) return;
+        int[] ids = new int[1];
+
+        // Detect GLES30/VAO availability
+        kickHasVAO = false;
+        try {
+            android.opengl.GLES30.glGetString(android.opengl.GLES30.GL_VERSION);
+            kickHasVAO = true;
+        } catch (Throwable ignored) {}
+
+        // Tiny texture + FBO
+        GLES20.glGenTextures(1, ids, 0);
+        kickTex = ids[0];
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, kickTex);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, 8, 8, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+
+        GLES20.glGenFramebuffers(1, ids, 0);
+        kickFbo = ids[0];
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, kickFbo);
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, kickTex, 0);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+
+        // Minimal shader
+        final String vs = "attribute vec2 aPos; void main(){ gl_Position=vec4(aPos,0.0,1.0);}";
+        final String fs = "precision mediump float; void main(){ vec3 c=vec3(0.5); c=normalize(c*1.001+0.0001); gl_FragColor=vec4(c,1.0);}";
+
+        int v = compileKickShader(GLES20.GL_VERTEX_SHADER, vs);
+        int f = compileKickShader(GLES20.GL_FRAGMENT_SHADER, fs);
+        kickProg = GLES20.glCreateProgram();
+        GLES20.glAttachShader(kickProg, v);
+        GLES20.glAttachShader(kickProg, f);
+        GLES20.glLinkProgram(kickProg);
+        GLES20.glDeleteShader(v);
+        GLES20.glDeleteShader(f);
+
+        // Big triangle VBO
+        float[] tri = new float[]{ -1f,-1f, 3f,-1f, -1f,3f };
+        GLES20.glGenBuffers(1, ids, 0);
+        kickVbo = ids[0];
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, kickVbo);
+        java.nio.FloatBuffer fb = java.nio.ByteBuffer.allocateDirect(tri.length*4)
+                .order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer();
+        fb.put(tri).flip();
+        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, tri.length*4, fb, GLES20.GL_STATIC_DRAW);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+
+        // Our own VAO if available
+        if (kickHasVAO) {
+            try {
+                int[] vaoId = new int[1];
+                android.opengl.GLES30.glGenVertexArrays(1, vaoId, 0);
+                kickVao = vaoId[0];
+            } catch (Throwable ignored) { kickHasVAO = false; kickVao = 0; }
+        }
+    }
+
+    private void gpuKickOnceGL() {
+        if (!enableGpuKick || kickFbo == 0 || kickProg == 0) return;
+
+        // Save state
+        GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, kickTmp1, 0);
+        int oldFbo = kickTmp1[0];
+
+        GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, kickTmp4, 0);
+        int vpX = kickTmp4[0], vpY = kickTmp4[1], vpW = kickTmp4[2], vpH = kickTmp4[3];
+
+        GLES20.glGetIntegerv(GLES20.GL_CURRENT_PROGRAM, kickTmp1, 0);
+        int oldProg = kickTmp1[0];
+
+        GLES20.glGetIntegerv(GLES20.GL_ARRAY_BUFFER_BINDING, kickTmp1, 0);
+        int oldArrayBuf = kickTmp1[0];
+
+        int oldVao = 0;
+        if (kickHasVAO) {
+            try {
+                android.opengl.GLES30.glGetIntegerv(android.opengl.GLES30.GL_VERTEX_ARRAY_BINDING, kickTmp1, 0);
+                oldVao = kickTmp1[0];
+            } catch (Throwable ignored) { kickHasVAO = false; oldVao = 0; }
+        }
+
+        try {
+            // Tiny draw
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, kickFbo);
+            GLES20.glViewport(0, 0, 8, 8);
+            GLES20.glUseProgram(kickProg);
+
+            if (kickHasVAO) {
+                try { android.opengl.GLES30.glBindVertexArray(kickVao); } catch (Throwable ignored) {}
+            }
+
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, kickVbo);
+            int loc = GLES20.glGetAttribLocation(kickProg, "aPos");
+            GLES20.glEnableVertexAttribArray(loc);
+            GLES20.glVertexAttribPointer(loc, 2, GLES20.GL_FLOAT, false, 0, 0);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
+            GLES20.glDisableVertexAttribArray(loc);
+
+            if (kickHasVAO) {
+                try { android.opengl.GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
+            }
+
+            GLES20.glFlush();
+        } finally {
+            // Restore state
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, oldArrayBuf);
+            GLES20.glUseProgram(oldProg);
+            GLES20.glViewport(vpX, vpY, vpW, vpH);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, oldFbo);
+            if (kickHasVAO) {
+                try { android.opengl.GLES30.glBindVertexArray(oldVao); } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private void releaseGpuKick() {
+        try {
+            if (kickHasVAO && kickVao != 0) {
+                int[] vao = { kickVao };
+                try { android.opengl.GLES30.glDeleteVertexArrays(1, vao, 0); } catch (Throwable ignored) {}
+                kickVao = 0; kickHasVAO = false;
+            }
+            if (kickVbo != 0) { int[] b = { kickVbo }; GLES20.glDeleteBuffers(1, b, 0); kickVbo = 0; }
+            if (kickProg != 0) { GLES20.glDeleteProgram(kickProg); kickProg = 0; }
+            if (kickTex != 0) { int[] t = { kickTex }; GLES20.glDeleteTextures(1, t, 0); kickTex = 0; }
+            if (kickFbo != 0) { int[] f = { kickFbo }; GLES20.glDeleteFramebuffers(1, f, 0); kickFbo = 0; }
+        } catch (Throwable ignored) {}
+    }
+
+    private static int compileKickShader(int type, String src){
+        int s = GLES20.glCreateShader(type);
+        GLES20.glShaderSource(s, src);
+        GLES20.glCompileShader(s);
+        return s;
+    }
+
 }

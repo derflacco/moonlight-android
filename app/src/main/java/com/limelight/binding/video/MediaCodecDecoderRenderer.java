@@ -45,10 +45,13 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
+
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
+    private com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
+
     private static final long AFFINITY_REFRESH_NS = 10_000_000_000L; // 10s (was 2s)
     private volatile long lastAffinityRefreshNs = 0L;
     private volatile String lastAllowedMask = null;
@@ -1227,18 +1230,26 @@ try {
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                        gpuKickPresentHook();
+
                     }
                     else {
                         if (android.os.Build.VERSION.SDK_INT >= 21) {
                 long __ts = System.nanoTime();
                 videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
-            } else {
+                            gpuKickPresentHook();
+
+                        } else {
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
     long __ts = System.nanoTime();
     videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
-} else {
+                    gpuKickPresentHook();
+
+                } else {
     videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-}
+                    gpuKickPresentHook();
+
+                }
             }
                     }
 
@@ -1306,6 +1317,33 @@ try {
 //* Pin hot threads to big cluster *//
                 // Give the renderer thread a recognizable name for /proc and debugging
                 try { Thread.currentThread().setName("MoonlightRenderer"); } catch (Throwable ignored) {}
+                // --- GPU Kick (adaptive, headless when GL path not used) ---
+                final boolean wantGpuKick = (prefs != null && prefs.enableGpuKick);
+                boolean usingDirectPresent = false;
+                try {
+                    usingDirectPresent =
+                            (prefs != null && (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW))
+                                    || (prefs != null && prefs.gpuPathMode);
+                } catch (Throwable ignored) {}
+
+                if (wantGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
+                    // In Direct Present path the app doesn't render via GL; use a headless pbuffer
+                    if (usingDirectPresent) {
+                        try {
+                            gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
+                            gpuKickPbuffer.setEnabled(true);
+                            gpuKickPbuffer.initOnThisThread(); // create EGL pbuffer on this thread
+                            LimeLog.info("GpuKickPbuffer: initialized (Direct Present)");
+                        } catch (Throwable t) {
+                            gpuKickPbuffer = null;
+                            try { LimeLog.info("GpuKickPbuffer: init failed, disabled: " + t); } catch (Throwable ignored) {}
+                        }
+                    }
+                }
+
+// Track DP state to adapt at runtime
+                boolean __dpLast = usingDirectPresent;
+
 
                 // Log TID and allowed CPUs before pin
                 try {
@@ -1460,6 +1498,33 @@ boolean isC2Decoder = false;
                         && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
                 while (!stopping) {
+                    // If user turned the toggle OFF at runtime, tear down immediately
+                    if (gpuKickPbuffer != null && prefs != null && !prefs.enableGpuKick) {
+                        try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
+                        gpuKickPbuffer = null;
+                    }
+
+                    // --- GPU Kick adaptive switch on DP runtime changes ---
+                    if (prefs != null && prefs.enableGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
+                        boolean __dpNow =
+                                (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW)
+                                        || (prefs.gpuPathMode);
+                        if (__dpNow != __dpLast) {
+                            try { if (gpuKickPbuffer != null) { gpuKickPbuffer.release(); gpuKickPbuffer = null; } } catch (Throwable ignored) {}
+                            if (__dpNow) {
+                                try {
+                                    gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
+                                    gpuKickPbuffer.setEnabled(true);
+                                    gpuKickPbuffer.initOnThisThread();
+                                    LimeLog.info("GpuKickPbuffer: re-init after DP toggle (now DP=true)");
+                                } catch (Throwable t) { gpuKickPbuffer = null; }
+                            } else {
+                                try { LimeLog.info("GpuKickPbuffer: disabled after DP toggle (now DP=false)"); } catch (Throwable ignored) {}
+                            }
+                            __dpLast = __dpNow;
+                        }
+                    }
+
 
 //* Pin hot threads to big cluster *//
                     // Periodic sticky affinity refresh (cheap): re-pin if mask changed
@@ -1517,6 +1582,7 @@ boolean isC2Decoder = false;
                                 if (__last >= 0) {
                                     // Drop older buffer without rendering
                                     try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+
                                 }
 
                                 __last = __idx;
@@ -1530,8 +1596,12 @@ boolean isC2Decoder = false;
                                 // Present the newest buffer ASAP (timestamped)
                                 if (android.os.Build.VERSION.SDK_INT >= 21) {
                                     videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                                    gpuKickPresentHook();
+
                                 } else {
                                     videoDecoder.releaseOutputBuffer(__last, true);
+                                    gpuKickPresentHook();
+
                                 }
 
                                 try {
@@ -1638,8 +1708,12 @@ boolean isC2Decoder = false;
                                             long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                                gpuKickPresentHook();
+
                                             } else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                                gpuKickPresentHook();
+
                                             }
                                             long nowNs = System.nanoTime();
                                             lastPresentNs = nowNs;
@@ -1678,6 +1752,8 @@ boolean isC2Decoder = false;
                                         }
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        gpuKickPresentHook();
+
                                         lastPresentNs = nowNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
 
@@ -1685,8 +1761,12 @@ boolean isC2Decoder = false;
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
                                             long __ts = System.nanoTime();
                                             videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                            gpuKickPresentHook();
+
                                         } else {
                                             videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                            gpuKickPresentHook();
+
                                         }
                                     }
                                 }
@@ -1729,6 +1809,8 @@ boolean isC2Decoder = false;
                                         }
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        gpuKickPresentHook();
+
                                         lastPresentNs = nowNs;
                                         if (!isLate) lateStreak = 0;
                                         recentDrops = Math.max(0, recentDrops - 1);
@@ -1737,8 +1819,12 @@ boolean isC2Decoder = false;
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
                                             long __ts = System.nanoTime();
                                             videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                            gpuKickPresentHook();
+
                                         } else {
                                             videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                            gpuKickPresentHook();
+
                                         }
                                     }
                                 }
@@ -1819,6 +1905,8 @@ boolean isC2Decoder = false;
                     } catch (IllegalStateException e) {
                         handleDecoderException(e);
                     } finally {
+                        try { if (gpuKickPbuffer != null) { gpuKickPbuffer.release(); gpuKickPbuffer = null; } } catch (Throwable ignored) {}
+
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
                 }
@@ -2886,6 +2974,14 @@ boolean isC2Decoder = false;
         }
     }
 
+    // Call after presenting a frame to nudge GPU clocks in Direct Present path
+    private void gpuKickPresentHook() {
+        try {
+            if (gpuKickPbuffer != null && gpuKickPbuffer.isEnabled()) {
+                gpuKickPbuffer.kickOnce();
+            }
+        } catch (Throwable ignored) {}
+    }
 
 private boolean isMTKDecoderName(String name) {
     if (name == null) return false;

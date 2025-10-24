@@ -263,7 +263,15 @@
             seekbar:min="0"
             seekbar:step="1"
             android:text="%" />
-    </PreferenceCategory>
+    
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="pref_gpu_kick_enable"
+            android:title="@string/pref_gpu_kick_enable_title"
+            android:summary="@string/pref_gpu_kick_enable_summary"
+            app:iconSpaceReserved="false" />
+    
+</PreferenceCategory>
 
     <PreferenceCategory
         android:title="@string/category_audio_settings"

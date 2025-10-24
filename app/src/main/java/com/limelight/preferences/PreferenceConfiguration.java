@@ -11,6 +11,8 @@ import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
     public int displayTarget = 0; // 0=default, 1..12 -> F1..F12
+    public boolean enableGpuKick = false;
+
     public boolean snappyInput = true;
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
@@ -40,6 +42,7 @@ public class PreferenceConfiguration {
 
     // FSR-like spatial upscaling
     private static final String VIDEO_UPSCALE_ENABLE_PREF_STRING = "pref_video_upscale_enable";
+    private static final String GPU_KICK_ENABLE_PREF_STRING = "pref_gpu_kick_enable";
     private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "none", "rcas", or "easu_rcas"
     private static final String VIDEO_UPSCALE_SHARP_PREF_STRING  = "pref_video_upscale_sharpness"; // 0..100
 
@@ -1106,6 +1109,9 @@ private static int getFramePacingValue(Context context) {
         }
 
         try { config.displayTarget = Integer.parseInt(prefs.getString("pref_display_target", "0")); } catch (Throwable ignored) { config.displayTarget = 0; }
+        
+        // Adaptive GPU Kick (tiny per-frame draw to keep GPU clocks)
+        try { config.enableGpuKick = prefs.getBoolean(GPU_KICK_ENABLE_PREF_STRING, false); } catch (Throwable ignored) { config.enableGpuKick = false; }
         return config;
     }
 
