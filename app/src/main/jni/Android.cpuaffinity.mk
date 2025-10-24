@@ -18,6 +18,6 @@ else
   LOCAL_SRC_FILES := cpuaffinity.cpp
 endif
 
-LOCAL_CPPFLAGS := -std=c++14 -O2
+LOCAL_CPPFLAGS := -std=c++14 -O3
 LOCAL_LDLIBS  := -llog
 include $(BUILD_SHARED_LIBRARY)
