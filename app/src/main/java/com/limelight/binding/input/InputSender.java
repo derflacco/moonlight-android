@@ -1,5 +1,6 @@
 package com.limelight.binding.input;
 
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -46,18 +47,34 @@ public final class InputSender implements Closeable {
             name = "InputSender";
         }
 
-        // Use HandlerThread(priority) so the Looper inherits it
-        thread = new HandlerThread(name, priority);
-        thread.start();
+        // Create worker with requested priority; HandlerThread applies it in run()
+        HandlerThread ht = new HandlerThread(name, priority);
+        ht.start();
 
-        // Double-set priority in case OEMs ignore the ctor priority
+        // Ensure the Looper is ready; mTid is now valid
+        Looper looper = ht.getLooper(); // blocks until looper is prepared
+
+        // Best-effort: set priority by TID (covers OEMs ignoring HandlerThread.mPriority)
         try {
-            Process.setThreadPriority(thread.getThreadId(), priority);
+            Process.setThreadPriority(ht.getThreadId(), priority);
         } catch (Throwable t) {
-            Log.w(TAG, "Failed to set thread priority", t);
+            Log.w(TAG, "setThreadPriority(TID) failed; will set inside thread", t);
         }
 
-        handler = new Handler(thread.getLooper());
+        // Prefer async handler to bypass sync barriers (API 28+)
+        Handler h = (Build.VERSION.SDK_INT >= 28)
+                ? Handler.createAsync(looper)
+                : new Handler(looper);
+
+        // Fallback: enforce the same requested priority from within the HandlerThread
+        h.postAtFrontOfQueue(() -> {
+            try {
+                Process.setThreadPriority(priority);
+            } catch (Throwable ignored) {}
+        });
+
+        this.thread = ht;
+        this.handler = h;
     }
 
     /** True if the worker looper is alive and accepting work */
