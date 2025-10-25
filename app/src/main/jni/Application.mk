@@ -23,13 +23,15 @@ ifeq ($(APP_PERF),1)
     else ifeq ($(APP_LTO_FULL),1)
         APP_CFLAGS   += -flto
         APP_CPPFLAGS += -flto
-        APP_LDFLAGS  += -flto -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections
-        $(info [NDK] PERF: Full LTO)
+        # (1) LTO backend a O3
+        APP_LDFLAGS  += -flto -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections -Wl,--lto-O3
+        $(info [NDK] PERF: Full LTO (+lto-O3))
     else
         APP_CFLAGS   += -flto=thin
         APP_CPPFLAGS += -flto=thin
-        APP_LDFLAGS  += -flto=thin -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections
-        $(info [NDK] PERF: ThinLTO)
+        # (1) LTO backend a O3
+        APP_LDFLAGS  += -flto=thin -fuse-ld=lld -Wl,--icf=safe -Wl,--gc-sections -Wl,--lto-O3
+        $(info [NDK] PERF: ThinLTO (+lto-O3))
     endif
 
     # Base perf flags
