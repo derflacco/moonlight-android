@@ -229,7 +229,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean waitingForAllModifiersUp = false;
     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
 
-    private com.limelight.utils.FSRSizerInstaller.AutoCloser fsrSizer;
+    private com.limelight.utils.FSRSizerInstaller fsrSizer;
     private StreamContainer streamContainer;
     private long synthTouchDownTime = 0;
 
@@ -515,9 +515,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             }
             if (__surface != null) {
-                com.limelight.utils.DisplaySizer.applyTo(__surface);
-                fsrSizer = com.limelight.utils.FSRSizerInstaller.installForSurfaceView(this, __surface, /*renderer*/ null);
-                if (fsrSizer != null) fsrSizer.start();
+            fsrSizer = com.limelight.utils.FSRSizerInstaller.attach(this, __surface, /*renderer*/ null);
             }
         } catch (Throwable ignored) {}
         streamContainer.setOnGenericMotionListener(this);
@@ -1782,7 +1780,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onStop() {
 
-        try { if (fsrSizer != null) fsrSizer.stop(); } catch (Throwable ignored) {}
+        if (fsrSizer != null) {
+            try { fsrSizer.close(); } catch (java.io.IOException ignored) {}
+            fsrSizer = null;
+        }
 
         super.onStop();
 

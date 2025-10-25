@@ -19,6 +19,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.limelight.utils.DisplaySizer;
 
 /*
  * FidelityFX Super Resolution 1.0 (FSR1) — EASU + RCAS (GLES3 + OES port)
@@ -199,56 +200,50 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     public void setPresentationSizeHint(int w, int h) {
         hintOutW = Math.max(0, w);
         hintOutH = Math.max(0, h);
+        // Ensure we render at least once with the new target even if no new frame arrives
+        sizeChangedSinceLastSwap = true;
     }
+    /** Called by sizers/installer when the presentation size changes. */
+    public void onPresentationSizeChanged(int w, int h) {
+        setPresentationSizeHint(w, h);
+    }
+
+    /** Aliases for installer/reflection compatibility. */
+    public void setPresentationSize(int w, int h) { onPresentationSizeChanged(w, h); }
+    public void setOutputSize(int w, int h)       { onPresentationSizeChanged(w, h); }
+    public void setRenderTargetSize(int w, int h) { onPresentationSizeChanged(w, h); }
 
     public void setPresentationSizeHintFromDisplay(android.view.Display display) {
         if (display == null) return;
         try {
-            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
-            display.getRealMetrics(dm);
-            setPresentationSizeHint(dm.widthPixels, dm.heightPixels);
+            int w = 0, h = 0;
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                android.view.Display.Mode m = display.getMode();
+                if (m != null) {
+                    w = Math.max(w, m.getPhysicalWidth());
+                    h = Math.max(h, m.getPhysicalHeight());
+                }
+            }
+            if (w <= 0 || h <= 0) {
+                android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+                display.getRealMetrics(dm);
+                w = Math.max(w, dm.widthPixels);
+                h = Math.max(h, dm.heightPixels);
+            }
+            if (w > 0 && h > 0) setPresentationSizeHint(w, h);
         } catch (Throwable ignored) {}
     }
 
     /** Derive a sane presentation size hint from Context (multi-API strategy). */
     public void setPresentationSizeHintFromContext(android.content.Context ctx) {
         if (ctx == null) return;
-        int w = 0, h = 0;
-        // API 30+: WindowMetrics
-        try {
-            android.view.WindowManager wm = ctx.getSystemService(android.view.WindowManager.class);
-            if (wm != null) {
-                try {
-                    android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
-                    android.graphics.Rect b = m.getBounds();
-                    if (b != null) { w = Math.max(w, b.width()); h = Math.max(h, b.height()); }
-                } catch (Throwable ignored) {}
-            }
-        } catch (Throwable ignored) {}
-        // DisplayManager.getDisplay
-        try {
-            android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
-            android.view.Display d = (dm != null ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null);
-            if (d != null) {
-                android.util.DisplayMetrics dmets = new android.util.DisplayMetrics();
-                d.getRealMetrics(dmets);
-                w = Math.max(w, dmets.widthPixels);
-                h = Math.max(h, dmets.heightPixels);
-            }
-        } catch (Throwable ignored) {}
-        // Resource metrics
-        if (w <= 0 || h <= 0) {
-            try {
-                android.util.DisplayMetrics dmets = ctx.getResources().getDisplayMetrics();
-                w = Math.max(w, dmets.widthPixels);
-                h = Math.max(h, dmets.heightPixels);
-            } catch (Throwable ignored) {}
-        }
-        if (w > 0 && h > 0) {
-            setPresentationSizeHint(w, h);
-            try { LimeLog.info("FSR: presentation hint (auto) = " + w + "x" + h); } catch (Throwable ignored) {}
+        int[] sz = DisplaySizer.getDisplaySizePx(ctx, null);
+        if (sz[0] > 0 && sz[1] > 0) {
+            setPresentationSizeHint(sz[0], sz[1]);
+            try { LimeLog.info("FSR: presentation hint (auto) = " + sz[0] + "x" + sz[1]); } catch (Throwable ignored) {}
         }
     }
+
 
     public Surface createDecoderInputSurface() {
         if (!isGlReady()) {
