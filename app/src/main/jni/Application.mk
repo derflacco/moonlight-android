@@ -35,4 +35,10 @@ ifeq ($(APP_PERF),1)
     # Base perf flags
     APP_CFLAGS   += -O3 -DNDEBUG -ffunction-sections -fdata-sections
     APP_CPPFLAGS += -O3 -DNDEBUG -ffunction-sections -fdata-sections
+
+    # AArch64: uses LSE when available (safe fallback)
+    ifneq (,$(findstring arm64-v8a,$(APP_ABI)))
+        APP_CFLAGS   += -moutline-atomics
+        APP_CPPFLAGS += -moutline-atomics
+    endif
 endif
