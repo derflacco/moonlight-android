@@ -9,15 +9,30 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
+// imports for grouping & caching
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+// watcher lock + safe file access
+import java.util.concurrent.locks.ReentrantLock;
+
+import android.os.Build;
+
 /**
  * CpuAffinity — helpers to pin threads to big cores safely.
  * Backed by libcpuaffinity.so (System.loadLibrary("cpuaffinity")).
  *
  * Improvements:
  * - Big-core detection cache with expiry and explicit invalidation
- * - Safer watcher lifecycle (lock, min period, graceful shutdown)
+ * - Safer watcher lifecycle (single ReentrantLock, graceful shutdown)
  * - One-shot regex pin utility
  * - Clearer logging and guardrails
+  * - Cpuset cache (group -> allowed mask) with TTL to avoid per-TID filesystem reads
+ * - Watcher and one-shot pin now operate per cpuset group for consistency and lower overhead
+ * - Intersections are computed once per group; all threads in the same group get the same mask
+ * - SafeFs wrapper for /proc and /sys reads to avoid crashes on Android 14+ restrictions
  */
 public final class CpuAffinity {
     private CpuAffinity() {}
@@ -34,11 +49,16 @@ public final class CpuAffinity {
     private static volatile ScheduledFuture<?> sWatchFuture;
     private static volatile long sWatcherPeriodMs = 0L;
     private static volatile Pattern sInclude, sExclude;
-    private static final Object sWatcherLock = new Object();
+    // Single lock guarding ALL watcher state transitions (start/stop/isRunning)
+    private static final ReentrantLock sWatcherLock = new ReentrantLock();
 
     // Big-core cache
     private static final AtomicReference<CacheEntry> sBigCoresCache = new AtomicReference<>();
     private static volatile long sCacheExpiryMs = 30_000L; // default 30s
+
+    // NEW: Cpuset cache (group -> parsed allowed CPUs) + TTL
+    private static final ConcurrentHashMap<String, __CpusetEntry> sCpusetCache = new ConcurrentHashMap<>();
+    private static volatile long sCpusetCacheTtlMs = 2_000L; // default 2s, tweak via setCpusetCacheTtlMs()
 
     // ---- Config ----
     private static final class Config {
@@ -61,6 +81,21 @@ public final class CpuAffinity {
         boolean isValid() {
             if (expiryMs <= 0L) return true; // never expire when <= 0
             return (System.currentTimeMillis() - timestampMs) < expiryMs;
+        }
+    }
+
+    // NEW: cpuset cache entry
+    private static final class __CpusetEntry {
+        final String effStr;  // raw string (e.g., "0-3,6-7")
+        final int[]  mask;    // parsed ints
+        final long   tsMs;    // stored at
+        __CpusetEntry(String effStr, int[] mask) {
+            this.effStr = effStr;
+            this.mask = mask;
+            this.tsMs = System.currentTimeMillis();
+        }
+        boolean isValid() {
+            return sCpusetCacheTtlMs <= 0L || (System.currentTimeMillis() - tsMs) < sCpusetCacheTtlMs;
         }
     }
 
@@ -161,17 +196,49 @@ public final class CpuAffinity {
             if (cached != null && cached.isValid()) {
                 return cached.bigCores.clone();
             }
+            int[] result = new int[0];
             try {
-                int[] v = nativeDetectBigCores();
-                int[] result = (v != null) ? v : new int[0];
+                // 1) Native first
+                int[] nativeBig = nativeDetectBigCores();
+                int[] online = __readOnlineCpus();
+                if (nativeBig == null) nativeBig = new int[0];
+
+                // 2) Normalize + guardrails
+                nativeBig = __sortedUnique(nativeBig);
+                online    = __sortedUnique(online);
+
+                boolean looksUniform = (nativeBig.length == 0) ||
+                        __sameSet(nativeBig, online) ||
+                        nativeBig.length == online.length;
+
+                // 3) If uniform/empty, fallback to Java detector (BIG ∪ PRIME, avoid PRIME-only)
+                if (looksUniform) {
+                    int[] javaBig = detectPerfCpusAvoidPrimeOnly();
+                    if (javaBig != null && javaBig.length > 1) {
+                        result = javaBig;
+                        __logOnce("Uniform topology detected from native; using Java fallback: " + Arrays.toString(result));
+                    } else {
+                        result = new int[0];
+                        __logOnce("Uniform topology detected; skipping big-core pinning.");
+                    }
+                } else {
+                    result = nativeBig;
+                }
+
+                // 4) NOTE: do NOT intersect with current thread's cpuset here.
+                //          Intersection is done later per TID/group to ensure correctness.
+
+                // 5) Save cache and shadow
+                if (result == null) result = new int[0];
                 sBigCoresCache.set(new CacheEntry(result, sCacheExpiryMs));
-                sCachedBigCores = result; // keep shadow updated
+                sCachedBigCores = result;
+
                 if (result.length > 0) {
                     __v("Detected big cores: " + Arrays.toString(result));
                 } else {
                     __v("Detected big cores: <none>");
                 }
-                return result;
+                return result.clone();
             } catch (Throwable t) {
                 int[] empty = new int[0];
                 sBigCoresCache.set(new CacheEntry(empty, sCacheExpiryMs));
@@ -205,6 +272,19 @@ public final class CpuAffinity {
         __v("Cache expiry set to " + expiryMs + " ms");
     }
 
+    // NEW: configure & clear cpuset cache
+    /** Set cpuset cache TTL in milliseconds. Set to 0 to disable expiry. */
+    public static void setCpusetCacheTtlMs(long ttlMs) {
+        sCpusetCacheTtlMs = Math.max(0L, ttlMs);
+        __v("Cpuset cache TTL set to " + sCpusetCacheTtlMs + " ms");
+    }
+
+    /** Clear the cpuset cache (group->allowed mask). */
+    public static void clearCpusetCache() {
+        sCpusetCache.clear();
+        __v("Cpuset cache cleared");
+    }
+
     public static void pinCurrentThreadToBigCoresIf(boolean enabled) {
         if (!enabled) return;
         int[] big = detectBigCores();
@@ -215,18 +295,37 @@ public final class CpuAffinity {
     public static void clearAffinityAllOnline() { clearCurrentThreadAffinityAllOnline(); }
 
     // ---- Fixed-delay watcher ----
-    public static synchronized void startAffinityWatcherWithFixedDelay(long delayMs) {
+
+    /** Convenience overload without filters. */
+    public static void startAffinityWatcher(long periodMs) {
+        sInclude = null; sExclude = null;
+        startAffinityWatcherWithFixedDelay(periodMs);
+    }
+
+    /** Start watcher with include/exclude regex (case-insensitive). */
+    public static void startAffinityWatcher(long periodMs, String includeRegex, String excludeRegex) {
+        sInclude = null; sExclude = null;
+        try { if (includeRegex != null && !includeRegex.isEmpty()) sInclude = Pattern.compile(includeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
+        try { if (excludeRegex != null && !excludeRegex.isEmpty()) sExclude = Pattern.compile(excludeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
+        startAffinityWatcherWithFixedDelay(periodMs);
+    }
+
+    public static void startAffinityWatcherWithFixedDelay(long delayMs) {
         if (!ensureLoaded()) return;
-        synchronized (sWatcherLock) {
+
+        sWatcherLock.lock();
+        try {
             if (sWatchFuture != null && !sWatchFuture.isCancelled()) {
                 __v("Affinity watcher already running (period=" + sWatcherPeriodMs + " ms)");
                 return;
             }
             if (sWatcherExec == null || sWatcherExec.isShutdown()) {
                 sWatcherExec = new ScheduledThreadPoolExecutor(1, r -> {
-                    Thread t = new Thread(r, "AffinityWatcher");
+                    Thread t = new Thread(() -> {
+                        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); } catch (Throwable ignored) {}
+                        r.run();
+                    }, "AffinityWatcher");
                     try { t.setDaemon(true); } catch (Throwable ignored) {}
-                    try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); } catch (Throwable ignored) {}
                     return t;
                 });
                 try {
@@ -236,6 +335,7 @@ public final class CpuAffinity {
                     sWatcherExec.allowCoreThreadTimeOut(true);
                 } catch (Throwable ignored) {}
             }
+
             final long p = (delayMs <= 0L) ? 2000L : Math.max(delayMs, Config.MIN_WATCHER_INTERVAL_MS);
             sWatcherPeriodMs = p;
             try {
@@ -243,21 +343,40 @@ public final class CpuAffinity {
                     try {
                         int[] big = detectBigCores();
                         if (big == null || big.length == 0) return;
+
                         int[] tids = listTids();
-                        int processed = 0;
+
+                        // Group candidate TIDs by cpuset group to compute "allowed" once per group
+                        HashMap<String, ArrayList<Integer>> byGroup = new HashMap<>();
                         for (int tid : tids) {
                             try {
                                 String name = readThreadName(tid);
                                 if (name == null) name = "";
                                 boolean ok = (sInclude == null) || sInclude.matcher(name).find();
                                 if (ok && sExclude != null && sExclude.matcher(name).find()) ok = false;
-                                if (ok) {
-                                    nativeSetAffinityForTid(tid, big);
-                                    processed++;
-                                }
+                                if (!ok) continue;
+
+                                String grp = readCpusetGroupForTid(tid);
+                                if (grp == null) grp = "";
+                                byGroup.computeIfAbsent(grp, k -> new ArrayList<>()).add(tid);
                             } catch (Throwable ignored) {}
                         }
-                        __v("Watcher tick: processed " + processed + " / " + tids.length + " threads");
+
+                        int processed = 0;
+
+                        // For each group, intersect once and apply to all TIDs in the group
+                        for (Map.Entry<String, ArrayList<Integer>> e : byGroup.entrySet()) {
+                            int[] allowed = __getAllowedMaskForGroupCached(e.getKey());
+                            int[] mask = __intersect(big, allowed);
+                            // Guardrail: avoid single-core "choke" pins; must be >1 to be useful
+                            if (mask.length <= 1) continue;
+
+                            for (int tid : e.getValue()) {
+                                try { nativeSetAffinityForTid(tid, mask); processed++; } catch (Throwable ignored) {}
+                            }
+                        }
+
+                        __v("Watcher tick: processed " + processed + " / " + tids.length + " threads (groups=" + byGroup.size() + ")");
                     } catch (Throwable ignored) {}
                 }, p, p, TimeUnit.MILLISECONDS);
                 __v("Affinity watcher started (period=" + p + " ms)");
@@ -268,31 +387,26 @@ public final class CpuAffinity {
                 sWatchFuture = null;
                 sWatcherPeriodMs = 0L;
             }
+        } finally {
+            sWatcherLock.unlock();
         }
     }
 
-    /** Convenience overload without filters. */
-    public static synchronized void startAffinityWatcher(long periodMs) {
-        sInclude = null; sExclude = null;
-        startAffinityWatcherWithFixedDelay(periodMs);
-    }
-
-    /** Start watcher with include/exclude regex (case-insensitive). */
-    public static synchronized void startAffinityWatcher(long periodMs, String includeRegex, String excludeRegex) {
-        sInclude = null; sExclude = null;
-        try { if (includeRegex != null && !includeRegex.isEmpty()) sInclude = Pattern.compile(includeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
-        try { if (excludeRegex != null && !excludeRegex.isEmpty()) sExclude = Pattern.compile(excludeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
-        startAffinityWatcherWithFixedDelay(periodMs);
-    }
-
-    /** Returns true if the watcher future exists and is not cancelled. */
+    /** Returns true if the watcher future exists and is not cancelled/done and executor is alive. */
     public static boolean isWatcherRunning() {
-        ScheduledFuture<?> f = sWatchFuture;
-        return f != null && !f.isCancelled();
+        sWatcherLock.lock();
+        try {
+            ScheduledFuture<?> f = sWatchFuture;
+            ScheduledThreadPoolExecutor ex = sWatcherExec;
+            return f != null && !f.isCancelled() && !f.isDone() && ex != null && !ex.isShutdown();
+        } finally {
+            sWatcherLock.unlock();
+        }
     }
 
-    public static synchronized void stopAffinityWatcher() {
-        synchronized (sWatcherLock) {
+    public static void stopAffinityWatcher() {
+        sWatcherLock.lock();
+        try {
             __v("Stopping affinity watcher...");
             // Cancel future
             if (sWatchFuture != null) {
@@ -309,12 +423,15 @@ public final class CpuAffinity {
                     }
                 } catch (Throwable ignored) {
                     try { sWatcherExec.shutdownNow(); } catch (Throwable ignored2) {}
+                } finally {
+                    sWatcherExec = null;
                 }
-                sWatcherExec = null;
             }
             sWatcherPeriodMs = 0L;
             sInclude = sExclude = null;
             __v("Affinity watcher stopped");
+        } finally {
+            sWatcherLock.unlock();
         }
     }
 
@@ -326,18 +443,33 @@ public final class CpuAffinity {
         try { if (excludeRegex != null && !excludeRegex.isEmpty()) exc = Pattern.compile(excludeRegex, Pattern.CASE_INSENSITIVE); } catch (Throwable ignored) {}
         int[] big = detectBigCores();
         if (big == null || big.length == 0) return 0;
-        int count = 0;
+
+        // Group by cpuset, compute intersection once, apply to all
+        HashMap<String, ArrayList<Integer>> byGroup = new HashMap<>();
         int[] tids = listTids();
         for (int tid : tids) {
             String name = readThreadName(tid);
             if (name == null) name = "";
             boolean include = (inc == null) || inc.matcher(name).find();
             boolean exclude = (exc != null) && exc.matcher(name).find();
-            if (include && !exclude) {
-                try { nativeSetAffinityForTid(tid, big); count++; } catch (Throwable ignored) {}
+            if (!include || exclude) continue;
+
+            String grp = readCpusetGroupForTid(tid);
+            if (grp == null) grp = "";
+            byGroup.computeIfAbsent(grp, k -> new ArrayList<>()).add(tid);
+        }
+
+        int count = 0;
+        for (Map.Entry<String, ArrayList<Integer>> e : byGroup.entrySet()) {
+            int[] allowed = __getAllowedMaskForGroupCached(e.getKey());
+            int[] mask = __intersect(big, allowed);
+            if (mask.length <= 1) continue;
+            for (int tid : e.getValue()) {
+                try { nativeSetAffinityForTid(tid, mask); count++; } catch (Throwable ignored) {}
             }
         }
-        __v("One-shot pin applied to " + count + " threads");
+
+        __v("One-shot pin applied to " + count + " threads (groups=" + byGroup.size() + ")");
         return count;
     }
 
@@ -345,30 +477,27 @@ public final class CpuAffinity {
     public static void cleanupAllResources() {
         stopAffinityWatcher();
         clearBigCoresCache();
+        clearCpusetCache(); // NEW: also clear cpuset cache
         __v("All resources cleaned up");
     }
 
     // ---- cpuset debug helpers ----
+
+    /** SAFE: read first line of a file using SafeFs wrapper. */
     private static String readFileFirstLine(String path) {
-        java.io.BufferedReader br = null;
-        try {
-            br = new java.io.BufferedReader(new java.io.FileReader(path));
-            String s = br.readLine();
-            return (s != null) ? s.trim() : "";
-        } catch (Throwable ignored) {
-            return "";
-        } finally {
-            try { if (br != null) br.close(); } catch (Throwable ignored) {}
-        }
+        return SafeFs.readFirstLine(path);
     }
 
     /** Returns cpuset group path for a TID, like "/top-app" or "/foreground". */
     public static String readCpusetGroupForTid(int tid) {
+        final String cgroupPath = "/proc/self/task/" + tid + "/cgroup";
         StringBuilder sb = new StringBuilder();
-        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader("/proc/self/task/" + tid + "/cgroup"))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                if (line.contains("cpuset:")) { sb.append(line.trim()); break; }
+        try (java.io.BufferedReader br = SafeFs.newBufferedReader(cgroupPath)) {
+            if (br != null) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (line.contains("cpuset:")) { sb.append(line.trim()); break; }
+                }
             }
         } catch (Throwable ignored) {}
         String cg = sb.toString();
@@ -439,9 +568,11 @@ public final class CpuAffinity {
                     java.io.File f = new java.io.File("/sys/devices/system/cpu/cpu"+i+"/cpu_capacity");
                     if (!f.exists()) break;
                     long cap = 0L;
-                    try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f))) {
-                        String s = br.readLine();
-                        if (s != null) cap = Long.parseLong(s.trim());
+                    try (java.io.BufferedReader br = SafeFs.newBufferedReader(f.getAbsolutePath())) {
+                        if (br != null) {
+                            String s = br.readLine();
+                            if (s != null) cap = Long.parseLong(s.trim());
+                        }
                     } catch (Throwable ignored) {}
                     if (cap > 0) all.add(i);
                 }
@@ -493,7 +624,7 @@ public final class CpuAffinity {
                 java.util.Arrays.sort(chosenArr);
                 if (allowedArr.length == chosenArr.length && java.util.Arrays.equals(allowedArr, chosenArr)) {
                     __v("AffinityDetect: already pinned. Skip pin.");
-                    return null;
+                    return chosen; // NOTE: returning chosen (not null) avoids re-detect loop callers may expect
                 }
             }
 
@@ -512,10 +643,8 @@ public final class CpuAffinity {
         __Cluster(int[] c, long hz, String m) { this.cpus=c; this.maxHz=hz; this.method=m; }
     }
     private static String __readFirst(java.io.File policyDir, String name) {
-        java.io.File f = new java.io.File(policyDir, name);
-        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f))) {
-            String s = br.readLine(); return (s==null) ? "" : s;
-        } catch (Throwable ignored) { return ""; }
+        String p = new java.io.File(policyDir, name).getAbsolutePath();
+        return SafeFs.readFirstLine(p);
     }
     // supports "0 1 2 3", "0-3", "0-3,6-7"
     private static int[] __parseCpuList(String s) {
@@ -567,6 +696,208 @@ public final class CpuAffinity {
     }
     private static void __v(String msg) {
         try { com.limelight.LimeLog.info("[CpuAffinity] " + msg); } catch (Throwable ignored) {}
-        try { android.util.Log.i("CpuAffinity", msg); } catch (Throwable ignored) {}
+        // If you also want direct Logcat, enable the line below:
+        // try { android.util.Log.i("CpuAffinity", msg); } catch (Throwable ignored) {}
+    }
+
+    // Reads online CPU list; fallback to cpuN scan (up to 32)
+    private static int[] __readOnlineCpus() {
+        String s = readFileFirstLine("/sys/devices/system/cpu/online");
+        if (s != null && !s.trim().isEmpty()) {
+            return __parseCpuList(s.trim());
+        }
+        java.util.ArrayList<Integer> list = new java.util.ArrayList<>();
+        for (int i = 0; i < 32; i++) {
+            java.io.File f = new java.io.File("/sys/devices/system/cpu/cpu" + i);
+            if (f.isDirectory()) list.add(i);
+        }
+        int[] arr = new int[list.size()];
+        for (int i = 0; i < list.size(); i++) arr[i] = list.get(i);
+        java.util.Arrays.sort(arr);
+        return arr;
+    }
+
+    private static int[] __sortedUnique(int[] in) {
+        if (in == null || in.length == 0) return new int[0];
+        java.util.TreeSet<Integer> set = new java.util.TreeSet<>();
+        for (int v : in) set.add(v);
+        int[] out = new int[set.size()];
+        int i=0; for (Integer v : set) out[i++]=v;
+        return out;
+    }
+
+    private static boolean __sameSet(int[] a, int[] b) {
+        if (a == null || b == null) return false;
+        int[] aa = __sortedUnique(a), bb = __sortedUnique(b);
+        if (aa.length != bb.length) return false;
+        for (int i=0;i<aa.length;i++) if (aa[i]!=bb[i]) return false;
+        return true;
+    }
+
+    // Intersect with current thread's effective cpuset (kept for other use-cases)
+    @SuppressWarnings("unused")
+    private static int[] __intersectWithAllowedCpuset(int[] cores) {
+        if (cores == null || cores.length == 0) return new int[0];
+        try {
+            int tid = android.os.Process.myTid();
+            String grp = readCpusetGroupForTid(tid);          // e.g. "/top-app"
+            String eff = readCpusetEffectiveCpus(grp);        // e.g. "0-3,6-7"
+            int[] allowed = __parseCpuList(eff);
+            if (allowed.length == 0) return cores;            // no info → leave as is
+            int[] out = __intersect(cores, allowed);
+            // If intersection is too small, better disable pin (avoid single-core choke)
+            return (out.length > 1) ? out : new int[0];
+        } catch (Throwable ignored) {
+            return cores;
+        }
+    }
+
+    // NEW: cached fetch of the allowed mask for a cpuset group
+    private static int[] __getAllowedMaskForGroupCached(String group) {
+        String key = (group == null) ? "" : group;
+        if (key.equals("/")) key = "";
+        if (key.startsWith("/")) key = key.substring(1);
+
+        __CpusetEntry e = sCpusetCache.get(key);
+        if (e != null && e.isValid()) {
+            return e.mask.clone();
+        }
+
+        String eff = readCpusetEffectiveCpus(key);
+        int[] mask = __parseCpuList(eff);
+
+        // If we failed to read now but have a recent cached value, reuse it
+        if ((mask == null || mask.length == 0) && e != null && e.isValid()) {
+            return e.mask.clone();
+        }
+
+        sCpusetCache.put(key, new __CpusetEntry(eff, (mask != null) ? mask : new int[0]));
+        return (mask != null) ? mask : new int[0];
+    }
+
+    // Log-once for recurring messages
+    private static final java.util.concurrent.atomic.AtomicBoolean __onceUniform = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private static void __logOnce(String msg) {
+        if (__onceUniform.compareAndSet(false, true)) {
+            __v(msg);
+        }
+    }
+
+    // ===== SafeFs wrapper =====
+    /**
+     * SafeFs centralizes access to /proc and /sys files to minimize crashes on Android 14+.
+     * Strategy:
+     *  - Prefer java.nio.Files (API 26+) which respects scoped access and throws SecurityException clearly.
+     *  - Fallback to classic java.io.
+     *  - Optional shell fallback ("cat <file>") disabled by default; enable explicitly if desired.
+     *  All methods MUST fail gracefully and never crash the app.
+     */
+    private static final class SafeFs {
+        private static volatile boolean SHELL_FALLBACK_ENABLED = false;
+
+        /** Enable or disable shell fallback globally. Default: false. */
+        public static void setShellFallbackEnabled(boolean enabled) {
+            SHELL_FALLBACK_ENABLED = enabled;
+        }
+
+        /** Read first line of a file or return empty string on failure. */
+        static String readFirstLine(String path) {
+            if (path == null || path.isEmpty()) return "";
+            // Try NIO first (API 26+)
+            if (Build.VERSION.SDK_INT >= 26) {
+                java.nio.file.Path p = null;
+                try {
+                    p = java.nio.file.Paths.get(path);
+                    try (java.io.BufferedReader br = java.nio.file.Files.newBufferedReader(p)) {
+                        String s = br.readLine();
+                        if (s != null) return s.trim();
+                    }
+                } catch (SecurityException se) {
+                    // Restricted by platform; try classical IO or shell below
+                } catch (Throwable ignored) {}
+            }
+            // Fallback to java.io
+            try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(path))) {
+                String s = br.readLine();
+                if (s != null) return s.trim();
+            } catch (SecurityException se) {
+                // Try shell if allowed
+                if (SHELL_FALLBACK_ENABLED) {
+                    String s = readFirstLineViaShell(path);
+                    if (s != null) return s;
+                }
+            } catch (Throwable ignored) {
+                // Try shell if allowed and io failed
+                if (SHELL_FALLBACK_ENABLED) {
+                    String s = readFirstLineViaShell(path);
+                    if (s != null) return s;
+                }
+            }
+            return "";
+        }
+
+        /** Returns a BufferedReader or null on failure, using NIO when possible. */
+        static java.io.BufferedReader newBufferedReader(String path) {
+            if (path == null || path.isEmpty()) return null;
+            if (Build.VERSION.SDK_INT >= 26) {
+                try {
+                    java.nio.file.Path p = java.nio.file.Paths.get(path);
+                    return java.nio.file.Files.newBufferedReader(p);
+                } catch (SecurityException se) {
+                    // fall through to IO
+                } catch (Throwable ignored) {}
+            }
+            try {
+                return new java.io.BufferedReader(new java.io.FileReader(path));
+            } catch (SecurityException se) {
+                // As a last resort, emulate a reader via shell if allowed
+                if (SHELL_FALLBACK_ENABLED) {
+                    String s = readAllViaShell(path);
+                    if (s != null) return new java.io.BufferedReader(new java.io.StringReader(s));
+                }
+            } catch (Throwable ignored) {}
+            return null;
+        }
+
+        private static String readFirstLineViaShell(String path) {
+            String full = readAllViaShell(path);
+            if (full == null) return null;
+            int nl = full.indexOf('\n');
+            if (nl >= 0) return full.substring(0, nl).trim();
+            return full.trim();
+        }
+
+        private static String readAllViaShell(String path) {
+            java.lang.Process proc = null;
+            try {
+                // Using sh avoids relying on toybox/busybox presence.
+                proc = new ProcessBuilder("/system/bin/sh", "-c", "cat " + escapeShellArg(path))
+                        .redirectErrorStream(true)
+                        .start();
+                try (java.io.InputStream in = proc.getInputStream();
+                     java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+                    byte[] buf = new byte[1024];
+                    int r;
+                    while ((r = in.read(buf)) > 0) bos.write(buf, 0, r);
+                    // Wait a short time; ignore exit code (still return what we got)
+                    try { proc.waitFor(100, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (Throwable ignored) {}
+                    String out = bos.toString("UTF-8");
+                    if (out != null) out = out.trim();
+                    return (out == null || out.isEmpty()) ? null : out;
+                }
+            } catch (Throwable ignored) {
+                return null;
+            } finally {
+                if (proc != null) {
+                    try { proc.destroy(); } catch (Throwable ignored) {}
+                }
+            }
+        }
+
+        private static String escapeShellArg(String s) {
+            // very conservative escaping for POSIX sh
+            if (s == null) return "''";
+            return "'" + s.replace("'", "'\"'\"'") + "'";
+        }
     }
 }
