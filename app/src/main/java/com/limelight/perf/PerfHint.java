@@ -183,15 +183,14 @@ public final class PerfHint implements AutoCloseable {
     }
 
     // ---- Simple helpers for frame-scoped measurements ----
-
-    /** Call at the start of a frame to get a timestamp. */
+    /** Call at the start of a frame to get a CPU-time timestamp (current thread). */
     public static long tick() {
-        return System.nanoTime();
+        return android.os.Debug.threadCpuTimeNanos();
     }
 
-    /** Report CPU work duration from tick(). */
-    public void tockAndReport(long tickNs) {
-        long d = Math.max(0L, System.nanoTime() - tickNs);
+    /** Report per-thread CPU work duration from tick(). */
+    public void tockAndReport(long cpuStartNs) {
+        long d = Math.max(0L, android.os.Debug.threadCpuTimeNanos() - cpuStartNs);
         report(d);
     }
 }
