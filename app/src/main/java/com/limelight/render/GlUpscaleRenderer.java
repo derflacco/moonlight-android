@@ -382,54 +382,66 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return;
         }
 
-        sizeChangedSinceLastSwap = true; // force a first draw
+        sizeChangedSinceLastSwap = true; // force first draw
+        long lastFrameNs = 0L;
+        final long maxIdleWaitMs = 33L; // ~30Hz idle sleep
+        final long minIdleWaitMs = 5L;  // responsive lower bound
+
         while (running.get()) {
             synchronized (frameLock) {
-                // Robust wait-loop: guard against spurious wakeups.
-                // Idle wait kept short (~16 ms) to avoid “30 FPS cap” effect when no frames arrive.
-                final long idleWaitMs = 16L;
-                while (running.get()
-                        && pendingFrames.get() == 0
-                        && !sizeChangedSinceLastSwap) {
-                    try { frameLock.wait(idleWaitMs); }
-                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                boolean hasWork = (pendingFrames.get() > 0 || sizeChangedSinceLastSwap);
+                if (!hasWork) {
+                    long now = System.nanoTime();
+                    long deltaMs;
+                    if (lastFrameNs == 0L) {
+                        deltaMs = maxIdleWaitMs;
+                    } else {
+                        long elapsedMs = (now - lastFrameNs) / 1_000_000L;
+                        deltaMs = Math.max(minIdleWaitMs, Math.min(maxIdleWaitMs, elapsedMs));
+                    }
+
+                    try {
+                        frameLock.wait(deltaMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
             }
 
+            if (!running.get()) break;
             if (!isGlReady()) continue;
             if (!makeCurrent()) continue;
             if (!fixedStateApplied) { applyFixedState(); }
 
             boolean didUpdateTex = updateTexture();
-            boolean valid = refreshWindowSizeIfNeeded(); // may also set sizeChangedSinceLastSwap
+            boolean valid = refreshWindowSizeIfNeeded();
             if (!valid || fbW <= 0 || fbH <= 0) continue;
 
-            // If nothing to draw and size didn't change, skip work to reduce jitter
-            if (!didUpdateTex && !sizeChangedSinceLastSwap) {
-                continue;
-            }
+            // Skip frame if nothing changed
+            if (!didUpdateTex && !sizeChangedSinceLastSwap) continue;
 
             ensureViewport(fbW, fbH);
 
-            // Special GPU path: just blit OES to screen
             if (prefs != null && prefs.gpuPathMode) {
                 drawOesToScreen();
                 presentFrame();
                 sizeChangedSinceLastSwap = false;
+                lastFrameNs = System.nanoTime();
                 continue;
             }
 
             RenderResult result = renderFrame();
             if (!result.success) {
-                // Fallback: direct blit
                 drawOesToScreen();
             }
 
             if (!presentFrame()) {
-                break; // stop loop on persistent failure / invalid surface
+                break; // stop loop on persistent failure
             }
 
             sizeChangedSinceLastSwap = false;
+            lastFrameNs = System.nanoTime();
         }
     }
 
