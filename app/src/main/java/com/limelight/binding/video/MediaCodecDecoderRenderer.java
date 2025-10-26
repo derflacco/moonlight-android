@@ -1218,7 +1218,7 @@ try {
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
             // Mark start of CPU work for this frame
             if (MediaCodecDecoderRenderer.this.perfHint != null) {
-                MediaCodecDecoderRenderer.this.phmWorkStartNs = System.nanoTime();
+                MediaCodecDecoderRenderer.this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
             }
             // Render up to one frame when in frame pacing mode.
             //
@@ -1258,13 +1258,8 @@ try {
                     if (MediaCodecDecoderRenderer.this.perfHint != null
                             && MediaCodecDecoderRenderer.this.perfHint.isActive()
                             && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                        long __dur = System.nanoTime() - MediaCodecDecoderRenderer.this.phmWorkStartNs;
-                        try { MediaCodecDecoderRenderer.this.perfHint.report(__dur); } catch (Throwable ignored) {}
-
-                        // (opzionale) log ogni ~2s @120fps / ~1s @60fps
-                        if ((activeWindowVideoStats.totalFramesRendered % 120) == 0) {
-                            LimeLog.info("PHM: lastWorkNs=" + __dur);
-                        }
+                        try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
+                        MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
                     }
                 } catch (IllegalStateException ignored) {
                     try {
@@ -1609,13 +1604,8 @@ boolean isC2Decoder = false;
                                     if (MediaCodecDecoderRenderer.this.perfHint != null
                                             && MediaCodecDecoderRenderer.this.perfHint.isActive()
                                             && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                                        long __dur = System.nanoTime() - MediaCodecDecoderRenderer.this.phmWorkStartNs;
-                                        try { MediaCodecDecoderRenderer.this.perfHint.report(__dur); } catch (Throwable ignored) {}
-
-                                        // (opzionale) log ogni ~2s @120fps / ~1s @60fps
-                                        if ((activeWindowVideoStats.totalFramesRendered % 120) == 0) {
-                                            LimeLog.info("PHM: lastWorkNs=" + __dur);
-                                        }
+                                        try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
+                                        MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
                                     }
 
                                     numFramesOut++;
@@ -1832,8 +1822,9 @@ boolean isC2Decoder = false;
                                 activeWindowVideoStats.totalFramesRendered++;
                                 if (MediaCodecDecoderRenderer.this.perfHint != null
                                         && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                                    long __dur = System.nanoTime() - MediaCodecDecoderRenderer.this.phmWorkStartNs;
-                                    try { MediaCodecDecoderRenderer.this.perfHint.report(__dur); } catch (Throwable ignored) {}
+                                    try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
+                                    MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+
                                 }
                             }
                             else {
