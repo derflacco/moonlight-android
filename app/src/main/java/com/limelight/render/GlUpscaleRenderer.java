@@ -42,6 +42,10 @@ import com.limelight.utils.DisplaySizer;
  * - RCAS_OES health-check waits for first content & uses 2×2 texel steps
  * - Consistent sharpness mapping (single dead-zone constant)
  * - Prefer LINEAR sampling for OES on both up/down-scale to reduce aliasing
+ * - Skip EASU when target is downscale (RCAS-only path)
+ * - Faster recovery for SurfaceTexture "not attached" by re-attaching once
+ * - Immediate EGL/GL reinit on EGL_BAD_SURFACE / EGL_CONTEXT_LOST
+ * - Optional avoidance of uTexMatrix rebinds when no new frame landed
  */
 public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
 
@@ -61,6 +65,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // RCAS_OES health-check state (ES3 only)
     private boolean rcasOesChecked = false;
     private boolean rcasOesHealthy = false;
+
+    // OES extension availability probe
+    private boolean hasOesExternal = true;
+
+    // Track when the SurfaceTexture transform matrix actually changed
+    private boolean texMatrixDirty = false;
 
     // ===== FSR Telemetry (lightweight) =====
     private static final class FsrTelemetry {
@@ -423,9 +433,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             ensureViewport(fbW, fbH);
 
+            // Special GPU path: just blit OES to screen
             if (prefs != null && prefs.gpuPathMode) {
                 drawOesToScreen();
-                presentFrame();
+                if (!presentFrame()) break;
+                texMatrixDirty = false;
                 sizeChangedSinceLastSwap = false;
                 lastFrameNs = System.nanoTime();
                 continue;
@@ -433,13 +445,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             RenderResult result = renderFrame();
             if (!result.success) {
+                // Fallback: direct blit
                 drawOesToScreen();
             }
 
             if (!presentFrame()) {
-                break; // stop loop on persistent failure
+                break; // stop loop on persistent failure / invalid surface
             }
 
+            texMatrixDirty = false;
             sizeChangedSinceLastSwap = false;
             lastFrameNs = System.nanoTime();
         }
@@ -463,8 +477,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
                     try { lastFrameTexTimestampNs = decoderSurfaceTex.getTimestamp(); } catch (Throwable ignored) {}
+                    texMatrixDirty = true;
                     didUpdateTex = true;
                 }
+            }
+        } catch (RuntimeException e) {
+            // Fast recovery: re-attach the SurfaceTexture to current context and retry once
+            try {
+                ensureOesAttachmentAfterReinit();
+
+                // Important: restore buffer size after re-attachment
+                try {
+                    decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
+                } catch (Throwable ignoredRestore) {}
+
+                decoderSurfaceTex.updateTexImage();
+                decoderSurfaceTex.getTransformMatrix(texMatrix);
+                try { lastFrameTexTimestampNs = decoderSurfaceTex.getTimestamp(); } catch (Throwable ignored) {}
+                texMatrixDirty = true;
+                didUpdateTex = true;
+            } catch (Throwable ignored2) {
+                try { LimeLog.warning("Texture update retry failed: " + e.getMessage()); } catch (Throwable ignored3) {}
             }
         } catch (Throwable t) {
             try { LimeLog.warning("Texture update failed: " + t.getMessage()); } catch (Throwable ignored) {}
@@ -505,8 +538,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
         final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
         boolean nearNative = isNearNativeScale(dstTargetW, dstTargetH);
+        final boolean isDownscale = (dstTargetW < srcW) || (dstTargetH < srcH);
 
         RenderMode renderMode = determineRenderMode(upscaleEnabled, mode, nearNative);
+        // Guard: EASU is an upsampler; skip it when actually downscaling
+        if (isDownscale && renderMode == RenderMode.EASU_RCAS) {
+            renderMode = RenderMode.RCAS_ONLY;
+        }
+
         float effectiveSharpness = mapUiSharpToInternal(sharpUser, nearNative);
 
         boolean success = false;
@@ -587,13 +626,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!swapped) {
             int err = EGL14.eglGetError();
             try { LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
-            swapFailStreak++;
+            // If the Surface itself is invalid, stop gracefully
             if (windowSurfaceInput == null || !windowSurfaceInput.isValid()) {
                 running.set(false);
                 return false;
             }
-            // Attempt one-shot EGL/GL re-init before bailing out
-            if (swapFailStreak >= MAX_SWAP_FAIL_STREAK) {
+
+            final boolean fatalSurface =
+                    (err == EGL14.EGL_BAD_SURFACE /*0x300D*/) ||
+                            (err == EGL14.EGL_CONTEXT_LOST /*0x300E*/);
+
+            swapFailStreak++;
+            if (fatalSurface || swapFailStreak >= MAX_SWAP_FAIL_STREAK) {
                 boolean reinitOk = reinitEglAndGl();
                 if (reinitOk) {
                     swapFailStreak = 0;
@@ -617,7 +661,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUseProgram(progBlit);
         bindQuad(progBlit);
 
-        GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+        if (texMatrixDirty) {
+            GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+        }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
         setOesFilter(false); // Prefer LINEAR to reduce aliasing
@@ -642,7 +688,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
             GLES20.glUniform1f(rcasOes_uSharp, clamp01(sharp));
-            GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
+            if (texMatrixDirty) {
+                GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
+            }
 
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
@@ -670,7 +718,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // OES -> 2D
         GLES20.glUseProgram(progBlit);
         bindQuad(progBlit);
-        GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+        if (texMatrixDirty) {
+            GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+        }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
         setOesFilter(false); // LINEAR in downscale too
@@ -723,7 +773,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         GLES20.glUniform1i(easu_uTex, 0);
         GLES20.glUniform2f(easu_uInvSrcSize, 1.0f / srcW, 1.0f / srcH);
-        GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
+        if (texMatrixDirty) {
+            GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
+        }
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
@@ -897,6 +949,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Best-effort non-blocking swaps (driver may ignore)
             try { EGL14.eglSwapInterval(eglDisplay, 0); } catch (Throwable ignored) {}
 
+            // Extension probe for OES external
+            try {
+                String exts = GLES20.glGetString(GLES20.GL_EXTENSIONS);
+                hasOesExternal = exts != null &&
+                        (exts.contains("GL_OES_EGL_image_external_essl3") ||
+                                exts.contains("GL_OES_EGL_image_external"));
+                if (!hasOesExternal) {
+                    try { LimeLog.warning("Missing GL_OES_EGL_image_external; OES path may fail."); } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+
             // Confirm GL version string
             try {
                 String ver = GLES20.glGetString(GLES20.GL_VERSION);
@@ -911,6 +974,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (p > 0) {
                     do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
+                    texMatrixDirty = true;
                 }
             }
         } catch (Throwable t) {
@@ -1248,7 +1312,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "#ifdef USE_OES\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "#endif\n" +
-                    "precision highp float;\n" + // highp per ridurre banding
+                    "precision highp float;\n" + // highp to reduce banding
                     // If vertex precomputes uv/steps, expose them here
                     "#ifdef USE_OES\n" +
                     "#ifdef RCAS_OES_VS\n" +
@@ -1487,12 +1551,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         int v = compileKickShader(GLES20.GL_VERTEX_SHADER, vs);
         int f = compileKickShader(GLES20.GL_FRAGMENT_SHADER, fs);
+        if (v == 0 || f == 0) {
+            // Disable kick path gracefully on shader failure
+            try { if (v != 0) GLES20.glDeleteShader(v); } catch (Throwable ignored) {}
+            try { if (f != 0) GLES20.glDeleteShader(f); } catch (Throwable ignored) {}
+            kickProg = 0;
+            return;
+        }
+
         kickProg = GLES20.glCreateProgram();
         GLES20.glAttachShader(kickProg, v);
         GLES20.glAttachShader(kickProg, f);
         GLES20.glLinkProgram(kickProg);
+        int[] ok = new int[1];
+        GLES20.glGetProgramiv(kickProg, GLES20.GL_LINK_STATUS, ok, 0);
         GLES20.glDeleteShader(v);
         GLES20.glDeleteShader(f);
+        if (ok[0] == 0) {
+            try { GLES20.glDeleteProgram(kickProg); } catch (Throwable ignored) {}
+            kickProg = 0;
+            return;
+        }
 
         // Big triangle VBO
         float[] tri = new float[]{ -1f,-1f, 3f,-1f, -1f,3f };
@@ -1591,6 +1670,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         int s = GLES20.glCreateShader(type);
         GLES20.glShaderSource(s, src);
         GLES20.glCompileShader(s);
+        int[] ok = new int[1];
+        GLES20.glGetShaderiv(s, GLES20.GL_COMPILE_STATUS, ok, 0);
+        if (ok[0] == 0) {
+            GLES20.glDeleteShader(s);
+            return 0;
+        }
         return s;
     }
 
