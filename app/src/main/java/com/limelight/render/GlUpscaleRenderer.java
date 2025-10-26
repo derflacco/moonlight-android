@@ -120,7 +120,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
     private final PreferenceConfiguration prefs;
-    // --- GPU Kick (GL path) ---
+
     // --- GPU Kick (GL path) ---
     private boolean enableGpuKick = false;
     private int kickFbo = 0, kickTex = 0, kickProg = 0, kickVbo = 0;
@@ -184,7 +184,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread renderThread;
     private final Object frameLock = new Object();
-    private boolean frameAvailable = false;
     private final java.util.concurrent.atomic.AtomicInteger pendingFrames = new java.util.concurrent.atomic.AtomicInteger(0);
 
     private android.os.HandlerThread stCbThread;
@@ -208,10 +207,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     /** Optional: hint actual on-screen buffer size. */
     public void setPresentationSizeHint(int w, int h) {
-        hintOutW = Math.max(0, w);
-        hintOutH = Math.max(0, h);
+        int W = Math.max(0, w);
+        int H = Math.max(0, h);
         // Ensure we render at least once with the new target even if no new frame arrives
-        sizeChangedSinceLastSwap = true;
+        synchronized (frameLock) {
+            hintOutW = W;
+            hintOutH = H;
+            sizeChangedSinceLastSwap = true;
+            // Wake renderer if it was idling waiting for a frame
+            frameLock.notifyAll();
+        }
     }
     /** Called by sizers/installer when the presentation size changes. */
     public void onPresentationSizeChanged(int w, int h) {
@@ -299,6 +304,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     public void stop() {
         running.set(false);
+        // Wake the wait-loop if sleeping
+        synchronized (frameLock) {
+            frameLock.notifyAll();
+        }
         if (renderThread != null) {
             try { renderThread.join(); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
             renderThread = null;
@@ -316,6 +325,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 try {
                     if (stCbThread != null) {
                         stCbThread.quitSafely();
+                        try {
+                            // Wait a bit to ensure clean shutdown
+                            stCbThread.join(500L);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
                         stCbThread = null;
                         stCbHandler = null;
                     }
@@ -334,9 +349,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     @Override
     public void onFrameAvailable(SurfaceTexture st) {
         if (!isGlReady()) { return; }
+        // Pure atomic path for backlog + single notify under lock
+        pendingFrames.incrementAndGet();
         synchronized (frameLock) {
-            frameAvailable = true;
-            pendingFrames.incrementAndGet();
             frameLock.notifyAll();
         }
     }
@@ -370,10 +385,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         sizeChangedSinceLastSwap = true; // force a first draw
         while (running.get()) {
             synchronized (frameLock) {
-                if (!frameAvailable) {
-                    try { frameLock.wait(33); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                // Robust wait-loop: guard against spurious wakeups.
+                // Idle wait kept short (~16 ms) to avoid “30 FPS cap” effect when no frames arrive.
+                final long idleWaitMs = 16L;
+                while (running.get()
+                        && pendingFrames.get() == 0
+                        && !sizeChangedSinceLastSwap) {
+                    try { frameLock.wait(idleWaitMs); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
                 }
-                frameAvailable = false;
             }
 
             if (!isGlReady()) continue;
@@ -556,9 +576,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             int err = EGL14.eglGetError();
             try { LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
             swapFailStreak++;
-            if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= MAX_SWAP_FAIL_STREAK) {
+            if (windowSurfaceInput == null || !windowSurfaceInput.isValid()) {
                 running.set(false);
                 return false;
+            }
+            // Attempt one-shot EGL/GL re-init before bailing out
+            if (swapFailStreak >= MAX_SWAP_FAIL_STREAK) {
+                boolean reinitOk = reinitEglAndGl();
+                if (reinitOk) {
+                    swapFailStreak = 0;
+                    // Force a redraw after reinit
+                    sizeChangedSinceLastSwap = true;
+                    return true;
+                } else {
+                    running.set(false);
+                    return false;
+                }
             }
         } else {
             if (swapFailStreak != 0) swapFailStreak = 0;
@@ -646,6 +679,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        setTex2DFilter(false); // restore
         if (__fsr.enabled) { __fsr.tocRcas(); }
 
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
@@ -772,6 +806,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         twoDNearest = false;
+        glCheckError("createOrResizeFbo");
     }
 
     private boolean isFboComplete() {
@@ -855,6 +890,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 String ver = GLES20.glGetString(GLES20.GL_VERSION);
                 if (ver != null && ver.startsWith("OpenGL ES 2.")) isEs3 = false;
             } catch (Throwable ignored) {}
+            // Basic error probe after context/surface binding
+            glCheckError("eglMakeCurrent");
 
             // Avoid updateTexImage call if SurfaceTexture not ready
             if (decoderSurfaceTex != null) {
@@ -871,6 +908,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
         initializeGeometry();
+        glCheckError("initializeGeometry");
         initializeShaders();
         this.enableGpuKick = (prefs != null && prefs.enableGpuKick);
         initGpuKickIfNeeded();
@@ -934,6 +972,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 try {
                     int vsRcasOes = compileShader(GLES20.GL_VERTEX_SHADER, VS_RCAS_OES_ES3);
                     progRcasOes = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n" + FS_RCAS_ES3, false);
+                    // delete VS object now that program is linked
+                    GLES20.glDeleteShader(vsRcasOes);
+
                     rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
                     rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
                     rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
@@ -941,12 +982,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 } catch (Throwable t) {
                     progRcasOes = 0; // keep 2D fallback
                 }
+
+                // VS can be deleted after programs are linked
+                if (progVs != 0) { GLES20.glDeleteShader(progVs); progVs = 0; }
             } else {
                 // ES2 fallback — requires explicit attribute binding
                 progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES2);
                 progBlit = linkProgram(progVs, FS_OES_BLIT_ES2, /*bindAttribs*/ true);
                 progEasu = linkProgram(progVs, FS_EASU_ES2,     /*bindAttribs*/ true);
                 progRcas = linkProgram(progVs, FS_RCAS_ES2,     /*bindAttribs*/ true);
+                // VS can be deleted after programs are linked
+                if (progVs != 0) { GLES20.glDeleteShader(progVs); progVs = 0; }
                 progRcasOes = 0; // not available on ES2
             }
         } catch (Throwable t) {
@@ -957,13 +1003,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     if (isEs3) {
                         progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES3);
                         progBlit = linkProgram(progVs, FS_OES_BLIT_ES3, false);
+                        if (progVs != 0) { GLES20.glDeleteShader(progVs); progVs = 0; }
                     } else {
                         progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS_ES2);
                         progBlit = linkProgram(progVs, FS_OES_BLIT_ES2, true);
+                        if (progVs != 0) { GLES20.glDeleteShader(progVs); progVs = 0; }
                     }
                 }
             } catch (Throwable ignored) {}
         }
+        glCheckError("initializeShaders");
 
         // Resolve uniforms (only for successfully linked programs)
         if (progBlit != 0) {
@@ -1187,7 +1236,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "#ifdef USE_OES\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "#endif\n" +
-                    "precision mediump float;\n" +
+                    "precision highp float;\n" + // highp per ridurre banding
+                    // If vertex precomputes uv/steps, expose them here
+                    "#ifdef USE_OES\n" +
+                    "#ifdef RCAS_OES_VS\n" +
+                    "in vec2 vUv0;\n" +
+                    "in vec2 vStepX;\n" +
+                    "in vec2 vStepY;\n" +
+                    "#endif\n" +
+                    "#endif\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "#ifdef USE_OES\n" +
@@ -1202,9 +1259,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "#ifdef USE_OES\n" +
                     "void main(){\n" +
                     "  vec2 texel = uInvDstSize;\n" +
-                    "  vec2 uv0    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
-                    "  vec2 stepX  = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
-                    "  vec2 stepY  = (uTexMatrix * vec4(0.0, texel.y, 0.0, 0.0)).xy;\n" +
+                    "#ifdef RCAS_OES_VS\n" +
+                    "  vec2 uv0   = vUv0;\n" +
+                    "  vec2 stepX = vStepX;\n" +
+                    "  vec2 stepY = vStepY;\n" +
+                    "#else\n" +
+                    "  vec2 uv0   = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  vec2 stepX = (uTexMatrix * vec4(texel.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  vec2 stepY = (uTexMatrix * vec4(0.0, texel.y, 0.0, 0.0)).xy;\n" +
+                    "#endif\n" +
                     "  vec3 c  = texture(uTexOES, uv0).rgb;\n" +
                     "  vec3 rx = texture(uTexOES, uv0 + stepX).rgb;\n" +
                     "  vec3 lx = texture(uTexOES, uv0 - stepX).rgb;\n" +
@@ -1379,6 +1442,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         try { LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
 
     }
+
     // --- GPU Kick helpers (GL path) ---
     private void initGpuKickIfNeeded() {
         if (!enableGpuKick) return;
@@ -1518,4 +1582,51 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         return s;
     }
 
+    // --- GL error helper (lightweight, debug-friendly) ---
+    private void glCheckError(String where) {
+        try {
+            int err = GLES20.glGetError();
+            if (err != GLES20.GL_NO_ERROR) {
+                LimeLog.warning("GL error after " + where + ": 0x" + Integer.toHexString(err));
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // Re-attach decoder SurfaceTexture to the new GL context with a fresh OES texture
+    private void ensureOesAttachmentAfterReinit() {
+        if (decoderSurfaceTex == null) return;
+        // Create a new external texture name in the *new* context
+        GLES20.glGenTextures(1, tmpIntArray, 0);
+        oesTexId = tmpIntArray[0];
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        try {
+            decoderSurfaceTex.attachToGLContext(oesTexId);
+        } catch (RuntimeException alreadyAttached) {
+            // If the ST still thinks it's attached somewhere, detach and try again
+            try {
+                decoderSurfaceTex.detachFromGLContext();
+                decoderSurfaceTex.attachToGLContext(oesTexId);
+            } catch (Throwable t) {
+                try { LimeLog.warning("FSR: ST reattach failed: " + t.getMessage()); } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    // --- EGL/GL recovery path on persistent swap failures ---
+    private boolean reinitEglAndGl() {
+        try { destroyGl(); } catch (Throwable ignored) {}
+        try { destroyEgl(); } catch (Throwable ignored) {}
+        initEglAndGl();
+        if (!isGlReady()) return false;
+        // After recreating the context, the OES texture name is gone.
+        // Recreate and reattach SurfaceTexture -> current context.
+        ensureOesAttachmentAfterReinit();
+        // Wake loop so we don't idle post-reinit
+        synchronized (frameLock) { frameLock.notifyAll(); }
+        return true;
+    }
 }
