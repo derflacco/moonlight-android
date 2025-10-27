@@ -769,7 +769,7 @@ try {
 
         // Start the decoder
         videoDecoder.start();
-
+        MediaCodecHelper.applyFrameworkLowLatencyPostStart(videoDecoder);
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
 try {
     MediaFormat __inF = videoDecoder.getInputFormat();
