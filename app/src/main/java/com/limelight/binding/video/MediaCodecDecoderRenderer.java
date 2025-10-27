@@ -699,6 +699,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Start the decoder
         videoDecoder.start();
+        MediaCodecHelper.applyFrameworkLowLatencyPostStart(videoDecoder);
+// Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
+try {
+    MediaFormat __inF = videoDecoder.getInputFormat();
+    MediaFormat __outF = videoDecoder.getOutputFormat();
+    LimeLog.info("Decoder input format: " + (__inF != null ? __inF.toString() : "<null>"));
+    LimeLog.info("Decoder output format: " + (__outF != null ? __outF.toString() : "<null>"));
+} catch (Throwable t) {
+    LimeLog.info("Decoder formats unavailable after start");
+}
+
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             legacyInputBuffers = videoDecoder.getInputBuffers();

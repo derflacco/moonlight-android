@@ -1192,4 +1192,24 @@ public class MediaCodecHelper {
         }
     }
 
+    /** Apply framework low-latency after codec.start() on API 30+. */
+    public static void applyFrameworkLowLatencyPostStart(final android.media.MediaCodec codec) {
+        if (codec == null) return;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                android.os.Bundle b = new android.os.Bundle();
+                b.putInt("low-latency", 1);   // A11+ parameter key
+                codec.setParameters(b);
+                try { LimeLog.info("Applied post-start low-latency parameter"); } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /** Overload compatible with the 3-argument call. */
+    public static void applyFrameworkLowLatencyPostStart(final android.media.MediaCodec codec,
+                                                         final android.media.MediaCodecInfo decoderInfo,
+                                                         final String mime) {
+        // decoderInfo/mime not needed now: delegate to 1-arg version
+        applyFrameworkLowLatencyPostStart(codec);
+    }
 }
