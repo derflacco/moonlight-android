@@ -1986,25 +1986,32 @@ boolean isC2Decoder = false;
         startTime = SystemClock.uptimeMillis();
 
         try {
+            // Pick a shorter dequeue timeout for high-FPS streams to avoid throttling the RX path
+            int dequeueTimeoutUs = 10_000; // default = 10 ms
+            float wantedFps = (targetFps > 0f) ? targetFps : (prefs != null ? prefs.fps : 60f);
+            if (preferLowerDelays || wantedFps >= 100f) {
+                // keep RX snappy for 100/120 fps or LFR/ULL
+                dequeueTimeoutUs = 2_000; // 2 ms
+            }
+
             // If we don't have an input buffer index yet, fetch one now
             while (nextInputBufferIndex < 0 && !stopping) {
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(dequeueTimeoutUs);
+                if (nextInputBufferIndex < 0 && (preferLowerDelays || wantedFps >= 100f)) {
+                    // Don't sit here forever when running at high frame rates
+                    break;
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
             if (nextInputBufferIndex >= 0) {
-                // Using the new getInputBuffer() API on Lollipop allows
-                // the framework to do some performance optimizations for us
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
-                        // According to the Android docs, getInputBuffer() can return null "if the
-                        // index is not a dequeued input buffer". I don't think this ever should
-                        // happen but if it does, let's try to get a new input buffer next time.
+                        // Not a valid dequeued buffer, try again next frame
                         nextInputBufferIndex = -1;
                     }
-                }
-                else {
+                } else {
                     nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
 
                     // Clear old input data pre-Lollipop
@@ -2047,6 +2054,7 @@ boolean isC2Decoder = false;
 
         return true;
     }
+
 
     @Override
     public void start() {
