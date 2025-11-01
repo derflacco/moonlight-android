@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 import android.os.Build;
+import android.os.SystemClock;
 
 /**
  * CpuAffinity — helpers to pin threads to big cores safely.
@@ -40,6 +41,9 @@ public final class CpuAffinity {
     // ---- State ----
     private static volatile boolean sTriedLoad = false;
     private static volatile boolean sNativeLoaded = false;
+    // watcher log throttle
+    private static volatile long sLastWatcherLogMs = 0L;
+    private static final long sWatcherQuietLogMs = 30_000L; //
 
     // Back-compat shadow (kept for toString() and old callers that may read it)
     private static volatile int[] sCachedBigCores = null;
@@ -54,7 +58,7 @@ public final class CpuAffinity {
 
     // Big-core cache
     private static final AtomicReference<CacheEntry> sBigCoresCache = new AtomicReference<>();
-    private static volatile long sCacheExpiryMs = 30_000L; // default 30s
+    private static volatile long sCacheExpiryMs = 120_000L; // default 120s
 
     // NEW: Cpuset cache (group -> parsed allowed CPUs) + TTL
     private static final ConcurrentHashMap<String, __CpusetEntry> sCpusetCache = new ConcurrentHashMap<>();
@@ -62,7 +66,7 @@ public final class CpuAffinity {
 
     // ---- Config ----
     private static final class Config {
-        static final long MIN_WATCHER_INTERVAL_MS = 1000L;   // avoid too-frequent scans
+        static final long MIN_WATCHER_INTERVAL_MS = 5000L;   // calmer default
         static final long SHUTDOWN_WAIT_MS        = 5000L;   // await termination timeout
     }
 
@@ -336,7 +340,7 @@ public final class CpuAffinity {
                 } catch (Throwable ignored) {}
             }
 
-            final long p = (delayMs <= 0L) ? 2000L : Math.max(delayMs, Config.MIN_WATCHER_INTERVAL_MS);
+            final long p = (delayMs <= 0L) ? 5000L : Math.max(delayMs, Config.MIN_WATCHER_INTERVAL_MS);
             sWatcherPeriodMs = p;
             try {
                 sWatchFuture = sWatcherExec.scheduleWithFixedDelay(() -> {
@@ -376,7 +380,19 @@ public final class CpuAffinity {
                             }
                         }
 
-                        __v("Watcher tick: processed " + processed + " / " + tids.length + " threads (groups=" + byGroup.size() + ")");
+                        long now = SystemClock.uptimeMillis();
+                        boolean shouldLog = (processed > 0);
+                        if (!shouldLog) {
+                            long dt = now - sLastWatcherLogMs;
+                            if (dt >= sWatcherQuietLogMs) {
+                                shouldLog = true;
+                            }
+                        }
+                        if (shouldLog) {
+                            __v("Watcher tick: processed " + processed + " / " + tids.length + " threads (groups=" + byGroup.size() + ")");
+                            sLastWatcherLogMs = now;
+                        }
+
                     } catch (Throwable ignored) {}
                 }, p, p, TimeUnit.MILLISECONDS);
                 __v("Affinity watcher started (period=" + p + " ms)");
