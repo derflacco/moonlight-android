@@ -1482,28 +1482,41 @@ boolean isC2Decoder = false;
                 while (!stopping) {
                     // If user turned the toggle OFF at runtime, tear down immediately
                     if (gpuKickPbuffer != null && prefs != null && !prefs.enableGpuKick) {
-                        try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
+                        try {
+                            gpuKickPbuffer.release();
+                        } catch (Throwable ignored) {}
                         gpuKickPbuffer = null;
                     }
 
                     // --- GPU Kick adaptive switch on DP runtime changes ---
                     if (prefs != null && prefs.enableGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
-                        boolean __dpNow =
+                        boolean dpNow =
                                 (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW)
-                                        || (prefs.gpuPathMode);
-                        if (__dpNow != __dpLast) {
-                            try { if (gpuKickPbuffer != null) { gpuKickPbuffer.release(); gpuKickPbuffer = null; } } catch (Throwable ignored) {}
-                            if (__dpNow) {
+                                        || prefs.gpuPathMode;
+                        if (dpNow != __dpLast) {
+                            try {
+                                if (gpuKickPbuffer != null) {
+                                    gpuKickPbuffer.release();
+                                    gpuKickPbuffer = null;
+                                }
+                            } catch (Throwable ignored) {}
+
+                            if (dpNow) {
                                 try {
                                     gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
                                     gpuKickPbuffer.setEnabled(true);
                                     gpuKickPbuffer.initOnThisThread();
                                     LimeLog.info("GpuKickPbuffer: re-init after DP toggle (now DP=true)");
-                                } catch (Throwable t) { gpuKickPbuffer = null; }
+                                } catch (Throwable t) {
+                                    gpuKickPbuffer = null;
+                                }
                             } else {
-                                try { LimeLog.info("GpuKickPbuffer: disabled after DP toggle (now DP=false)"); } catch (Throwable ignored) {}
+                                try {
+                                    LimeLog.info("GpuKickPbuffer: disabled after DP toggle (now DP=false)");
+                                } catch (Throwable ignored) {}
                             }
-                            __dpLast = __dpNow;
+
+                            __dpLast = dpNow;
                         }
                     }
 
@@ -1882,8 +1895,6 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                     } catch (IllegalStateException e) {
                         handleDecoderException(e);
                     } finally {
-                        try { if (gpuKickPbuffer != null) { gpuKickPbuffer.release(); gpuKickPbuffer = null; } } catch (Throwable ignored) {}
-
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
                 }
