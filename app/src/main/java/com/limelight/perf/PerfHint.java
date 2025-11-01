@@ -25,7 +25,6 @@ public final class PerfHint implements AutoCloseable {
     private static final int REPORT_LOG_EVERY = 120;
 
     // ---- Session + reflection state ----
-    private final Context appContext;
     private final Object phm; // android.os.PerformanceHintManager
     private final java.lang.reflect.Method mCreate; // createHintSession(int[], long)
     private final java.lang.reflect.Method mUpdateTarget; // Session.updateTargetWorkDuration(long)
@@ -37,11 +36,13 @@ public final class PerfHint implements AutoCloseable {
     private volatile long targetWorkNs;
     private volatile int[] threadIds;
 
+    // remember last prefer-power value so recreate() keeps the same behavior
+    private volatile boolean lastPreferPower = false;
+
     // counter for rate-limiting report() logs
     private int reportLogCounter = 0;
 
-    private PerfHint(Context ctx,
-                     Object phm,
+    private PerfHint(Object phm,
                      java.lang.reflect.Method create,
                      Object session,
                      java.lang.reflect.Method upd,
@@ -50,7 +51,6 @@ public final class PerfHint implements AutoCloseable {
                      java.lang.reflect.Method setPreferPower,
                      int[] tids,
                      long targetWorkNs) {
-        this.appContext = ctx.getApplicationContext();
         this.phm = phm;
         this.mCreate = create;
         this.session = session;
@@ -171,7 +171,7 @@ public final class PerfHint implements AutoCloseable {
                         + (setPrefer != null ? " (setPreferPowerEfficiency available)" : ""));
             }
 
-            return new PerfHint(ctx, phm, create, session, upd, rep, cls, setPrefer, copyTids(tids), targetWorkNs);
+            return new PerfHint(phm, create, session, upd, rep, cls, setPrefer, copyTids(tids), targetWorkNs);
         } catch (Throwable t) {
             if (DEBUG) Log.d(TAG, "ADPF create failed: " + t + (fallback ? " (fallback)" : ""));
             return null;
@@ -217,6 +217,7 @@ public final class PerfHint implements AutoCloseable {
 
     /** Optional: prefer power efficiency; set to false during gameplay to favor performance. */
     public void setPreferPowerEfficiency(boolean prefer) {
+        this.lastPreferPower = prefer;
         Object s = this.session;
         if (s == null || mSetPreferPower == null) return;
         try {
@@ -243,6 +244,7 @@ public final class PerfHint implements AutoCloseable {
                         + ", tids=" + toString(threadIds)
                         + ", target=" + targetWorkNs + " ns"
                         + ", sdk=" + Build.VERSION.SDK_INT
+                        + ", preferPower=" + lastPreferPower
                         + "}");
     }
 
@@ -292,11 +294,17 @@ public final class PerfHint implements AutoCloseable {
                 }
                 session = s;
                 try { mUpdateTarget.invoke(session, targetWorkNs); } catch (Throwable ignored) {}
+                if (mSetPreferPower != null) {
+                    try { mSetPreferPower.invoke(session, lastPreferPower); } catch (Throwable ignored) {}
+                }
                 if (DEBUG) Log.d(TAG, "ADPF session recreated via fallback for tids=[" + selfTid + "]");
                 return;
             }
             session = s;
             try { mUpdateTarget.invoke(session, targetWorkNs); } catch (Throwable ignored) {}
+            if (mSetPreferPower != null) {
+                try { mSetPreferPower.invoke(session, lastPreferPower); } catch (Throwable ignored) {}
+            }
             if (DEBUG) Log.d(TAG, "ADPF session recreated for tids=" + toString(threadIds));
         } catch (Throwable ignored) {
             session = null;
