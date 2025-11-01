@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Build;
 import android.os.PerformanceHintManager;
 import android.os.Process;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.io.BufferedReader;
@@ -30,22 +31,32 @@ public final class RxBoost {
     private RxBoost() {}
 
     private static final String TAG = "RxBoost";
-    private static volatile boolean sDebugLogCandidates = true;
 
-    // Più mirati: nomi che nella nostra codebase indicano davvero RX/NET
+    // Less noise by default
+    private static volatile boolean sDebugLogCandidates = false;
+    private static final boolean LOG_SCAN_SUMMARY = true;
+
+    // Log limit per each scan (each refresher pass)
+    private static final int MAX_LOG_PER_SCAN = 6;
+
+    // To silence repeated PHM failures
+    private static final long PHM_FAIL_MUTE_MS = 120_000L; // 2 minutes
+    private static volatile long sLastPhmFailRealtime = 0L;
+
+    // More targeted: names that in our codebase truly indicate RX/NET
     private static final String[] NAME_HINTS = new String[] {
             "video-recv", "audio-recv", "control-recv",
             "gs-recv", "recv", "rx", "udp", "rtp", "quic",
             "socket", "net", "gamestream"
     };
 
-    // Nomi da ignorare (thread noti non RX che possono contenere 'net' o simili)
+    // Names to ignore (known non-RX threads that may contain 'net' or similar)
     private static final String[] NAME_EXCLUDES = new String[] {
             "rxboostrefresher", "renderthread", "finalizerwatchdog", "hwui", "hwuiTask",
             "binder", "hwbinder", "HeapTaskDaemon", "ReferenceQueueDaemon"
     };
 
-    // Indizi wchan: SOLO vere call-path di ricezione pacchetti
+    // Wchan hints: ONLY true packet reception call-paths
     private static final String[] WCHAN_HINTS = new String[] {
             "udp_recvmsg", "inet_recvmsg", "__skb_wait_for_more_packets", "skb_copy_datagram"
     };
@@ -56,12 +67,12 @@ public final class RxBoost {
     private static final Object sPhmLock = new Object();
     private static volatile PerformanceHintManager.Session sPhmSession = null;
     private static volatile int[] sPhmSessionTids = null;
-    private static final long PHM_TARGET_WORK_NS = 1_000_000L; // ~1 ms per RX
+    private static final long PHM_TARGET_WORK_NS = 1_000_000L; // ~1 ms for RX
 
-    // Cache "big/perf" CPUs per processo per evitare parse ripetuti di sysfs
+    // Cache "big/perf" CPUs per process to avoid repeated sysfs parsing
     private static volatile int[] sCachedBigCpus = null;
 
-    // Refresher control (mantiene retro-compat: 10 pass ogni 1s; ora stoppabile da cleanup())
+    // Refresher control
     private static volatile boolean sStopRefresh = false;
     private static volatile Thread sRefreshThread = null;
 
@@ -209,9 +220,20 @@ public final class RxBoost {
     private static void ensurePhmSession(Context ctx, int[] tids) {
         if (Build.VERSION.SDK_INT < 31 || ctx == null || tids == null || tids.length == 0) return;
         try {
+            final long now = SystemClock.elapsedRealtime();
+
             synchronized (sPhmLock) {
+                // if we already detected that PowerHAL is not available, don't spam every second
+                if (sPhmSession == null && (now - sLastPhmFailRealtime) < PHM_FAIL_MUTE_MS) {
+                    return;
+                }
+
                 PerformanceHintManager phm = ctx.getSystemService(PerformanceHintManager.class);
-                if (phm == null) return;
+                if (phm == null) {
+                    // no PHM → don't spam
+                    sLastPhmFailRealtime = now;
+                    return;
+                }
 
                 boolean recreate = (sPhmSession == null) || !sameTidSet(sPhmSessionTids, tids);
                 if (recreate) {
@@ -219,14 +241,17 @@ public final class RxBoost {
                     try {
                         sPhmSession = phm.createHintSession(tids, PHM_TARGET_WORK_NS);
                     } catch (Throwable t) {
-                        sPhmSession = null; // PowerHAL non supportato su molti device
+                        sPhmSession = null; // PowerHAL not supported on many devices
                     }
                     sPhmSessionTids = (sPhmSession != null) ? tids.clone() : null;
+
                     if (sPhmSession != null) {
                         try { sPhmSession.updateTargetWorkDuration(PHM_TARGET_WORK_NS); } catch (Throwable ignored) {}
                         if (sDebugLogCandidates) Log.i(TAG, "PHM session created tids=" + tids.length);
-                    } else if (sDebugLogCandidates) {
-                        Log.i(TAG, "PHM session failed tids=" + tids.length);
+                    } else {
+                        // mark failure and silence for a while
+                        sLastPhmFailRealtime = now;
+                        if (sDebugLogCandidates) Log.i(TAG, "PHM session failed tids=" + tids.length + " (muted for a while)");
                     }
                 }
             }
@@ -297,8 +322,18 @@ public final class RxBoost {
             int[] big = pickBigOrPerfCpus(preferBigCores);
             int[] tids = CpuAffinity.listTids();
 
+            // maximum log for this scan
+            final boolean verbose = sDebugLogCandidates;
+            int logBudget = verbose ? MAX_LOG_PER_SCAN : 0;
+
+            int totalTids = 0;
+            int matchCount = 0;
+            int newManagedCount = 0;
+            int alreadyManagedCount = 0;
+
             for (int tid : tids) {
                 if (tid <= 0) continue;
+                totalTids++;
 
                 // Avoid rework
                 boolean already = sManagedTids.contains(tid);
@@ -310,39 +345,53 @@ public final class RxBoost {
                 String wchan = null;
                 boolean matchByWchan = false;
 
-                // Leggi wchan solo se serve (o se vogliamo log verbose)
-                if (sDebugLogCandidates || !matchByName) {
+                // Read wchan only if needed or if we still have log budget
+                if (!matchByName) {
                     wchan = readWchan(tid);
                     matchByWchan = wchanLooksRx(wchan);
+                } else if (verbose && logBudget > 0) {
+                    wchan = readWchan(tid);
                 }
 
                 boolean match = matchByName || matchByWchan;
+                // we already have a name match, but also log wchan if there's budget
+                if (match) {
+                    matchCount++;
+                    if (already) {
+                        alreadyManagedCount++;
+                    }
+                }
 
-                if (sDebugLogCandidates) {
+                // verbose logs
+                if (verbose && logBudget > 0) {
                     Log.i(TAG, "RX? tid=" + tid +
                             " name='" + (name != null ? name : "?") + "'" +
                             " wchan='" + (wchan != null ? wchan : "?") + "'" +
                             " -> " + (match ? "MATCH" : "skip") +
                             (already ? " (already managed)" : ""));
+                    logBudget--;
                 }
 
-                if (!match || already) continue;
+                if (!match || already) {
+                    continue;
+                }
 
-                // Aumenta priorità
-                try { Process.setThreadPriority(tid, Process.THREAD_PRIORITY_URGENT_DISPLAY); } catch (Throwable ignored) {}
+                // Increase priority
+                try {
+                    Process.setThreadPriority(tid, Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                } catch (Throwable ignored) {}
 
-                // Pin ai big (se disponibili)
+                // Pin to big cores (if available)
                 if (big != null) {
                     try { CpuAffinity.setAffinityForTid(tid, big); } catch (Throwable ignored) {}
                 }
 
                 sManagedTids.add(tid);
+                newManagedCount++;
 
-                if (sDebugLogCandidates) {
-                    Log.i(TAG, "BOOST tid=" + tid +
-                            (big != null ? (" pin=" + Arrays.toString(big)) : " pin=<none>") +
-                            " prio=URGENT_DISPLAY");
-                }
+                Log.i(TAG, "RX BOOST tid=" + tid +
+                        " name='" + (name != null ? name : "?") + "'" +
+                        (big != null ? (" pin=" + Arrays.toString(big)) : " pin=<none>"));
             }
 
             // Build/refresh a PHM session with the union of all managed RX tids
@@ -350,6 +399,15 @@ public final class RxBoost {
                 int[] all = new int[sManagedTids.size()];
                 int i = 0; for (int t : sManagedTids) all[i++] = t;
                 ensurePhmSession(ctx, all);
+            }
+
+            // summary always visibile
+            if (LOG_SCAN_SUMMARY) {
+                Log.i(TAG, "RX scan: total=" + totalTids
+                        + " match=" + matchCount
+                        + " new=" + newManagedCount
+                        + " already=" + alreadyManagedCount
+                        + " managed_total=" + sManagedTids.size());
             }
 
         } catch (Throwable ignored) {}
@@ -377,13 +435,13 @@ public final class RxBoost {
 
     /** Optional: call at stream end to drop state and close PHM session. */
     public static void cleanup() {
-        // ferma eventuale refresher in corso
+        // Stop the refresh
         sStopRefresh = true;
         try {
             Thread r = sRefreshThread;
             if (r != null) {
                 sRefreshThread = null;
-                // Non blocchiamo: è daemon e termina da solo
+         // We don't block: it's a daemon and terminates on its own
             }
         } catch (Throwable ignored) {}
 
