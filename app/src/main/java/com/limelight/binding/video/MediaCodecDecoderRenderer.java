@@ -125,7 +125,8 @@ private volatile boolean forceTightThresholds = false;
 public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
 // Toggle at runtime if needed
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
-private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
+// PTS(us) -> enqueue time (ns), preallocated to avoid frequent resizes
+private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64);
     private final Object enqueueNsLock = new Object();
 
 
@@ -276,8 +277,13 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
     private String minDecodeTimeFullLog = "";
 
     private long lastNetDataNum;
-    private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
-    private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
+    // Output buffer queue for frames waiting for Choreographer/vsync
+// Cap at 3 so we never accumulate too many frames if consumer is late
+    private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>(3);
+
+    private static final int OUTPUT_BUFFER_QUEUE_LIMIT_BALANCED = 2;
+    private static final int OUTPUT_BUFFER_QUEUE_LIMIT_MAX_SMOOTHNESS = 3;
+    private static final int OUTPUT_BUFFER_QUEUE_LIMIT_LL = 1;
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
@@ -1248,17 +1254,14 @@ try {
             Integer nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != null) {
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        // timestamped release su L+
+                    if (Build.VERSION.SDK_INT >= 21) {
+                        // Timestamped release on L+ to align with vsync
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                    } else if (Build.VERSION.SDK_INT >= 21) {
-                        // vecchi ma con timestamp
-                        long __ts = System.nanoTime();
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
                     } else {
-                        // device molto vecchi
+                        // Very old devices: immediate render
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                     }
+
                     gpuKickPresentHook();
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
@@ -1325,7 +1328,7 @@ try {
                 boolean usingDirectPresent = false;
                 try {
                     usingDirectPresent =
-                            (prefs != null && (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW))
+                            (prefs != null && (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW))
                                     || (prefs != null && prefs.gpuPathMode);
                 } catch (Throwable ignored) {}
 
@@ -1345,25 +1348,27 @@ try {
                 }
 
 // Track DP state to adapt at runtime
-                boolean __dpLast = usingDirectPresent;
+                boolean dpLast = usingDirectPresent;
 
-
-                // Log TID and allowed CPUs before pin
+                // Log TID and current affinity
                 try {
-                    int __tid = android.os.Process.myTid();
-                    String __allowedBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                    LimeLog.info("RendererAffinity: tid=" + __tid
-                            + " allowed_before=" + __allowedBefore
+                    int tid = android.os.Process.myTid();
+                    String allowedBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                    LimeLog.info("RendererAffinity: tid=" + tid
+                            + " allowed_before=" + allowedBefore
                             + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
                 } catch (Throwable ignored) {}
 
-// Best-effort: pin renderer thread to big cores if requested (non-root, optional JNI)
+                // Best-effort pinning to big cores
                 try {
                     if (prefs != null && prefs.preferBigCores) {
-                        try { com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true); } catch (Throwable ignored) {}
-                        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY); } catch (Throwable ignored) {}
+                        try {
+                            com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+                        } catch (Throwable ignored) {}
+                        try {
+                            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                        } catch (Throwable ignored) {}
 
-                        // 2) Pinna/prioritizza SOLO i thread veramente "hot" (NO mass pin, NO Binder/HwBinder)
                         try {
                             int[] big = com.limelight.utils.CpuAffinity.detectBigCores();
                             if (big != null && big.length > 0) {
@@ -1372,16 +1377,19 @@ try {
                                     String name = com.limelight.utils.CpuAffinity.readThreadName(tid);
                                     if (name == null) name = "";
 
+                                    // Do not touch Binder/HwBinder
                                     if (name.startsWith("Binder:") || name.startsWith("HwBinder:")) {
-                                        // Evita di toccare Binder/HwBinder per non rischiare jank/ANR
                                         continue;
                                     }
-                                    boolean isCodec = name.contains("CodecCb") || name.contains("MediaCodec")
-                                            || name.contains("CCodec")  || name.contains("CodecLooper");
-                                    boolean isGL    = name.contains("GLThread") || name.contains("RenderThread") || name.contains("Renderer");
-                                    boolean isChor  = name.contains("Choreographer");
 
-                                    if (!(isCodec || isGL || isChor)) continue;
+                                    boolean isCodec = name.contains("CodecCb") || name.contains("MediaCodec")
+                                            || name.contains("CCodec") || name.contains("CodecLooper");
+                                    boolean isGL = name.contains("GLThread") || name.contains("RenderThread") || name.contains("Renderer");
+                                    boolean isChor = name.contains("Choreographer");
+
+                                    if (!(isCodec || isGL || isChor)) {
+                                        continue;
+                                    }
 
                                     int prio = isChor
                                             ? android.os.Process.THREAD_PRIORITY_DISPLAY
@@ -1394,34 +1402,28 @@ try {
                             }
                         } catch (Throwable ignored) {}
 // Log what we tried to set (native detection) + the kernel result
-                        int[] __bigNative = com.limelight.utils.CpuAffinity.detectBigCoresForDebug();
-                        String __allowedAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                        int[] bigNative = com.limelight.utils.CpuAffinity.detectBigCoresForDebug();
+                        String allowedAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
                         LimeLog.info("RendererAffinity: nativeLoaded=" + com.limelight.utils.CpuAffinity.isNativeLoaded()
-                                + " big_native=" + java.util.Arrays.toString(__bigNative)
-                                + " allowed_after=" + __allowedAfter);
+                                + " big_native=" + java.util.Arrays.toString(bigNative)
+                                + " allowed_after=" + allowedAfter);
 
-
-                        // Remember what we pinned to and when
-                        MediaCodecDecoderRenderer.this.lastAllowedMask = __allowedAfter;
+                        MediaCodecDecoderRenderer.this.lastAllowedMask = allowedAfter;
                         MediaCodecDecoderRenderer.this.affinityPinned = true;
                         MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
-// Optional: current CPU
-                        int __cpu = com.limelight.utils.CpuAffinity.getCurrentCpuOrMinus1();
-                        LimeLog.info("RendererAffinity: current_cpu=" + __cpu);
+
+                        int currentCpu = com.limelight.utils.CpuAffinity.getCurrentCpuOrMinus1();
+                        LimeLog.info("RendererAffinity: current_cpu=" + currentCpu);
                     }
                 } catch (Throwable ignored) {}
 
-                /* PHM */ android.os.PerformanceHintManager.Session __hs = null;
-
-// ADPF via PerfHint (API 31+)
+                // ADPF / PerfHint (API 31+)
                 if (android.os.Build.VERSION.SDK_INT >= 31 && context != null && prefs != null && prefs.enablePerfHints) {
                     try {
                         final double fps = Math.max(1.0, (targetFps > 0f ? (double) targetFps : 60.0));
                         final long framePeriodNs = (long) (1_000_000_000.0 / fps);
-                        final boolean gpuRaw = (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                        final boolean gpuRaw = (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
-                        // More aggressive target when GPU_RAW (immediate-present): ~90% of frame budget, min 6 ms.
-                        // Otherwise keep a conservative target to reduce power impact.
                         final long targetWorkNs = gpuRaw
                                 ? Math.max(6_000_000L, (long) (framePeriodNs * 0.90))
                                 : Math.max(1_000_000L, (long) (framePeriodNs * 0.60));
@@ -1455,12 +1457,12 @@ try {
                 /* ADPF: set target based on normalized stream period; single, stable update */
                 if (MediaCodecDecoderRenderer.this.perfHint != null
                         && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
-                    final boolean __gpuRaw = (prefs != null
-                            && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-                    final long __targetNs = __gpuRaw
+                    final boolean gpuRaw = (prefs != null
+                            && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                    final long targetNs = gpuRaw
                             ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
                             : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
-                    try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(__targetNs); } catch (Throwable ignored) {}
+                    try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs); } catch (Throwable ignored) {}
                 }
 
 
@@ -1484,36 +1486,46 @@ boolean isC2Decoder = false;
                 final double MIN_FACTOR = 1.00;
                 final double MAX_FACTOR = 1.20;
 
-                long   lastDecoderPtsUs        = 0L;
-                long   lastPresentNs           = 0L;
-                long   lastDropNs              = 0L;
-                int    lateStreak              = 0;
-                int    tryAgainStreak          = 0;
-                int    recentDrops             = 0;
+                long   lastDecoderPtsUs  = 0L;
+                long   lastPresentNs     = 0L;
+                long   lastDropNs        = 0L;
+                int    lateStreak        = 0;
+                int    tryAgainStreak    = 0;
+                int    recentDrops       = 0;
 
-                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1f, tfps));
+                double ewmaInterArrivalNs    = (1_000_000_000.0 / Math.max(1f, tfps));
                 double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
-                double ewmaJitterNs = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
+                double ewmaJitterNs          = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
-                boolean __phmGpuRawLast = (prefs != null
-                        && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+// Reused by latest-only / low-latency drain to avoid per-loop allocations
+                final android.media.MediaCodec.BufferInfo latestInfo = new android.media.MediaCodec.BufferInfo();
+                boolean phmGpuRawLast = (prefs != null
+                        && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
                 while (!stopping) {
-                    // If user turned the toggle OFF at runtime, tear down immediately
-                    if (gpuKickPbuffer != null && prefs != null && !prefs.enableGpuKick) {
-                        try {
-                            gpuKickPbuffer.release();
-                        } catch (Throwable ignored) {}
+                    // Start ADPF work interval for non-Choreographer paths
+                    if (MediaCodecDecoderRenderer.this.perfHint != null
+                            && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                            && MediaCodecDecoderRenderer.this.phmWorkStartNs == 0L) {
+                        MediaCodecDecoderRenderer.this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
+                    }
+
+                    // Snapshot prefs once per loop (correct outer reference)
+                    final PreferenceConfiguration p = MediaCodecDecoderRenderer.this.prefs;
+
+                    // Runtime disable -> tear down
+                    if (gpuKickPbuffer != null && p != null && !p.enableGpuKick) {
+                        try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
                         gpuKickPbuffer = null;
                     }
 
-                    // --- GPU Kick adaptive switch on DP runtime changes ---
-                    if (prefs != null && prefs.enableGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
+                    // Runtime DP change -> reinit / release
+                    if (p != null && p.enableGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
                         boolean dpNow =
-                                (prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW)
-                                        || prefs.gpuPathMode;
-                        if (dpNow != __dpLast) {
+                                (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW)
+                                        || p.gpuPathMode;
+                        if (dpNow != dpLast) {
                             try {
                                 if (gpuKickPbuffer != null) {
                                     gpuKickPbuffer.release();
@@ -1536,52 +1548,52 @@ boolean isC2Decoder = false;
                                 } catch (Throwable ignored) {}
                             }
 
-                            __dpLast = dpNow;
+                            dpLast = dpNow;
                         }
                     }
-
-
 //* Pin hot threads to big cluster *//
-                    // Periodic sticky affinity refresh (cheap): re-pin if mask changed
-                    if (prefs != null && prefs.preferBigCores) {
-                        final long __now = android.os.SystemClock.elapsedRealtimeNanos();
-                        if (__now - lastAffinityRefreshNs >= AFFINITY_REFRESH_NS) {
+                    // Periodic sticky affinity refresh
+                    if (p != null && p.preferBigCores) {
+                        final long now = android.os.SystemClock.elapsedRealtimeNanos();
+                        if (now - lastAffinityRefreshNs >= AFFINITY_REFRESH_NS) {
                             try {
-                                String __maskBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                                if (lastAllowedMask == null || !__maskBefore.equals(lastAllowedMask)) {
+                                String maskBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                                if (lastAllowedMask == null || !maskBefore.equals(lastAllowedMask)) {
                                     com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
-                                    String __maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                                    String maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
                                     if (BuildConfig.DEBUG) {
-                                    LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + __maskBefore + " allowed_after=" + __maskAfter);
+                                        LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + maskBefore
+                                                + " allowed_after=" + maskAfter);
                                     }
-                                    lastAllowedMask = __maskAfter;
+                                    lastAllowedMask = maskAfter;
                                 }
                             } catch (Throwable ignored) {}
-                            lastAffinityRefreshNs = __now;
+                            lastAffinityRefreshNs = now;
                         }
                     }
-//* Pin hot threads to big cluster *//
-                    /* ADPF: GPU_RAW toggle guard — recompute only when mode changes materially */
-if (MediaCodecDecoderRenderer.this.perfHint != null
-        && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
-    final boolean __curGpuRaw = (prefs != null
-            && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-    if (__curGpuRaw != __phmGpuRawLast) {
-        final long __targetNs = __curGpuRaw
-                ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
-                : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
-        try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(__targetNs); } catch (Throwable ignored) {}
-        __phmGpuRawLast = __curGpuRaw;
-        if (BuildConfig.DEBUG) {
-            LimeLog.info("PHM: runtime target update (gpuRaw=" + __curGpuRaw + ", targetNs=" + __targetNs + ")");
-        }
-    }
-}
 
-                    /* LATEST_ONLY_LOW_LATENCY */
+                    // ADPF retarget when GPU_RAW toggles at runtime
+                    if (MediaCodecDecoderRenderer.this.perfHint != null
+                            && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
+                        final boolean curGpuRaw = (p != null
+                                && p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                        if (curGpuRaw != phmGpuRawLast) {
+                            final long targetNs = curGpuRaw
+                                    ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
+                                    : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
+                            try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs); } catch (Throwable ignored) {}
+                            phmGpuRawLast = curGpuRaw;
+                            if (BuildConfig.DEBUG) {
+                                LimeLog.info("PHM: runtime target update (gpuRaw=" + curGpuRaw + ", targetNs=" + targetNs + ")");
+                            }
+                        }
+                    }
+
+                    // PURE LFR / ULL path
                     if (preferLowerDelays) {
                         try {
-                            final android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
+                            // Reuse a single BufferInfo to avoid per-loop allocations
+                            final android.media.MediaCodec.BufferInfo __tmpInfo = latestInfo;
                             int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
                             int __last = -1;
                             long __lastPtsUs = -1L;
@@ -1596,7 +1608,6 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                 if (__last >= 0) {
                                     // Drop older buffer without rendering
                                     try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-
                                 }
 
                                 __last = __idx;
@@ -1611,11 +1622,9 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                 if (android.os.Build.VERSION.SDK_INT >= 21) {
                                     videoDecoder.releaseOutputBuffer(__last, __nowNs);
                                     gpuKickPresentHook();
-
                                 } else {
                                     videoDecoder.releaseOutputBuffer(__last, true);
                                     gpuKickPresentHook();
-
                                 }
 
                                 try {
@@ -1623,7 +1632,9 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                     if (MediaCodecDecoderRenderer.this.perfHint != null
                                             && MediaCodecDecoderRenderer.this.perfHint.isActive()
                                             && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                                        try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
+                                        try {
+                                            MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                                        } catch (Throwable ignored) {}
                                         MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
                                     }
 
@@ -1631,10 +1642,10 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                     lastDecoderPtsUs = __lastPtsUs;
                                 } catch (Throwable ignored) {}
 
-                                // EWMA decode->present:
+                                // EWMA decode->present
                                 if (__lastPtsUs >= 0) {
                                     final long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (__d2pNs - ewmaDecodeToPresentNs);
+                                    ewmaDecodeToPresentNs += 0.25 * (__d2pNs - ewmaDecodeToPresentNs);
                                 }
 
                                 continue;
@@ -1693,11 +1704,11 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                             }
                             lastDecoderPtsUs = presentationTimeUs;
 
-                            final PreferenceConfiguration p = prefs; // snapshot for null safety
+                            final PreferenceConfiguration pNow = MediaCodecDecoderRenderer.this.prefs;
 
                             // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (p == null || p.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                // Keep only the newest: measure decode for each new frame at DEQUEUE
+                            if (pNow == null || pNow.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
                                     final long newPtsUs = info.presentationTimeUs;
                                     try { updateDecodeLatencyStats(newPtsUs); } catch (Throwable ignored) {}
@@ -1710,7 +1721,7 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                     lastPtsUs = newPtsUs;
                                 }
 // --- Present policy per profilo di pacing ---
-                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+                                if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Immediate present using frame PTS; no decoder-side pacing
                                     if (lastIndex >= 0) {
                                         try {
@@ -1720,7 +1731,7 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                                 gpuKickPresentHook();
 
                                             } else {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                                videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
                                             long nowNs = System.nanoTime();
@@ -1734,24 +1745,20 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                         } catch (Throwable ignored) {}
                                     }
                                 }
-                                else
-
-                                if (p != null && (p.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                                        p.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
-                                    // Smoothness/Cap: avoid drop, present ASAP if not beyond threshold
+                                else if (pNow != null && (pNow.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS
+                                        || pNow.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
 
-                                        // Smoothness: tighter threshold 1.05..1.2×
                                         double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
                                         double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
                                         factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
 
-                                        long dropThresholdSmoothNs = (long)(periodNs * factorSmooth);
+                                        long dropThresholdSmoothNs = (long) (periodNs * factorSmooth);
 
                                         if (frameAgeNs >= dropThresholdSmoothNs) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
+                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
@@ -1766,14 +1773,12 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
 
                                     } else {
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                            long __ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                            long ts = System.nanoTime();
+                                            videoDecoder.releaseOutputBuffer(lastIndex, ts);
                                             gpuKickPresentHook();
-
                                         } else {
                                             videoDecoder.releaseOutputBuffer(lastIndex, true);
                                             gpuKickPresentHook();
-
                                         }
                                     }
                                 }
@@ -1784,9 +1789,10 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
 
                                         // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
-                                        double backPressure = Math.min(1.0, (double)tryAgainStreak / 6.0);
-                                        double streamHz = Math.max(1.0, (double)tfps);
-                                        double mismatch = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
+                                        double backPressure = Math.min(1.0, (double) tryAgainStreak / 6.0);
+                                        double streamHz = Math.max(1.0, (double) tfps);
+                                        double mismatch = Math.abs((1_000_000_000.0 / streamHz)
+                                                - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
                                         mismatch = Math.min(2.0, mismatch);
 
                                         double factorLatency = 1.02 + 0.13 * (0.5 * (ewmaJitterNs / vsyncPeriodNs)
@@ -1794,9 +1800,10 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                                 + 0.2 * mismatch);
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
 
-                                        long dropThresholdNs = (long)(periodNs * factorLatency);
+                                        long dropThresholdNs = (long) (periodNs * factorLatency);
 
-                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
+                                        final long sinceLastPresent = (lastPresentNs == 0L)
+                                                ? Long.MAX_VALUE : (nowNs - lastPresentNs);
                                         final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
@@ -1804,11 +1811,11 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                         final boolean shouldDrop =
                                                 isLate &&
                                                         (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long)(periodNs * 0.5)) &&
+                                                        (sinceLastPresent < (long) (periodNs * 0.5)) &&
                                                         dropCooldownOk;
 
                                         if (shouldDrop) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
+                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
                                             recentDrops = Math.min(10, recentDrops + 1);
@@ -1819,13 +1826,15 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                         gpuKickPresentHook();
 
                                         lastPresentNs = nowNs;
-                                        if (!isLate) lateStreak = 0;
+                                        if (!isLate) {
+                                            lateStreak = 0;
+                                        }
                                         recentDrops = Math.max(0, recentDrops - 1);
 
                                     } else {
                                         if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                            long __ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, __ts);
+                                            long ts = System.nanoTime();
+                                            videoDecoder.releaseOutputBuffer(lastIndex, ts);
                                             gpuKickPresentHook();
 
                                         } else {
@@ -1853,18 +1862,39 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                 // NB: We have to do this on the producer side because the consumer may not
                                 // run for a while (if there is a huge mismatch between stream FPS and display
                                 // refresh rate).
-                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
-                                    try {
-                                        videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
-                                        frameDropped = true;
-                                    } catch (InterruptedException e) {
-                                        return;
+                                // Use the same limits defined at class level so producer and consumer stay in sync.
+                                final int qLimit;
+                                if (pNow != null) {
+                                    switch (pNow.framePacing) {
+                                        case PreferenceConfiguration.FRAME_PACING_BALANCED:
+                                            qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_BALANCED;
+                                            break;
+                                        case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+                                            qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_MAX_SMOOTHNESS;
+                                            break;
+                                        case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+                                            qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_BALANCED;
+                                            break;
+                                        default:
+                                            qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_LL;
+                                            break;
                                     }
+                                } else {
+                                    qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_LL;
                                 }
 
-                                // Add this buffer
-                                outputBufferQueue.add(lastIndex);
+                                // Enforce per-profile queue depth
+                                while (outputBufferQueue.size() >= qLimit) {
+                                    try {
+                                        Integer old = outputBufferQueue.poll();
+                                        if (old != null) {
+                                            videoDecoder.releaseOutputBuffer(old, false);
+                                        }
+                                    } catch (Throwable ignored) {}
+                                }
                                 // NB: in BALANCED we don't present here; stats already updated at dequeue
+
+                                outputBufferQueue.add(lastIndex);
                             }
 
                             // --- Fallback stats update ---
@@ -1881,27 +1911,26 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                     LimeLog.info("Output format changed");
                                     outputFormat = videoDecoder.getOutputFormat();
                                     try {
-                                        android.media.MediaFormat __fmt = outputFormat;
-                                        int __std = -1, __tr = -1, __rng = -1;
-                                        try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                                        try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                                        try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+                                        android.media.MediaFormat fmt = outputFormat;
+                                        int std = -1, tr = -1, rng = -1;
+                                        try { std = fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                                        try { tr  = fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+                                        try { rng = fmt.getInteger("color-range"); } catch (Throwable ignored) {}
                                         // BT.2020 + (PQ o HLG) => HDR
-                                        boolean __isHdr =
-                                                (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
-                                                        (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
-                                                                || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
+                                        boolean isHdr =
+                                                (std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
+                                                        (tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
+                                                                || tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
                                         // Update shared flag so overlays/renderer can see it
-                                        hdrActive = __isHdr;
-                                        // Notify window color mode (no-op <26)
-                                        try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
+                                        hdrActive = isHdr;
+                                        try { com.limelight.Game.updateHdrWindowMode(isHdr); } catch (Throwable ignored) {}
                                         // Pass HDR static info to GL upscaler if available
-                                        java.nio.ByteBuffer __hdr = null;
-                                        try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
-                                        byte[] __hdrArr = null;
-                                        if (__hdr != null && __hdr.remaining() > 0) {
-                                            __hdrArr = new byte[__hdr.remaining()];
-                                            __hdr.get(__hdrArr);
+                                        java.nio.ByteBuffer hdr = null;
+                                        try { hdr = fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+                                        if (hdr != null && hdr.remaining() > 0) {
+                                            byte[] hdrArr = new byte[hdr.remaining()];
+                                            hdr.get(hdrArr);
+                                            // pass to upscaler if needed
                                         }
                                     } catch (Throwable ignored) {}
                                     LimeLog.info("New output format: " + outputFormat);
@@ -1935,8 +1964,8 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                     MediaCodecDecoderRenderer.this.lastAllowedMask = null;
                     MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
                     LimeLog.info("RendererAffinity: cleared to all online CPUs");
-                    String __cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                    LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
+                    String cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                    LimeLog.info("RendererAffinity: cleared_mask=" + cleared);
                 } catch (Throwable ignored) {}
                 //* Pin hot threads to big cluster *//
             }
@@ -2279,8 +2308,16 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                     decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) lastTwo.totalFramesReceived;
                 }
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
-                StringBuilder sb = new StringBuilder(160);
-
+                StringBuilder sb = new StringBuilder();
+// Pre-size to reduce reallocations based on overlay flavor
+                int sbCap;
+                if (prefs != null && prefs.enablePerfOverlayMini) {
+                    sbCap = 96;
+                } else if (prefs != null && prefs.enablePerfOverlayLite) {
+                    sbCap = 192;
+                } else {
+                    sbCap = 384;
+                }
                 // --- PERF OVERLAY MINI ---
                 if (prefs.enablePerfOverlayMini) {
                     if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
