@@ -144,10 +144,14 @@ public final class PerfHint implements AutoCloseable {
             Object session = create.invoke(phm, tids, targetWorkNs);
             if (session == null) {
                 if (DEBUG) {
-                    Log.d(TAG, "ADPF: createHintSession returned null"
-                            + (fallback ? " (fallback path)" : "")
-                            + " tids=" + toString(tids)
-                            + " target=" + targetWorkNs);
+                    if ("samsung".equalsIgnoreCase(android.os.Build.MANUFACTURER)) {
+                        Log.d(TAG, "ADPF: not supported on Samsung devices (createHintSession returned null)");
+                    } else {
+                        Log.d(TAG, "ADPF: createHintSession returned null"
+                                + (fallback ? " (fallback path)" : "")
+                                + " tids=" + toString(tids)
+                                + " target=" + targetWorkNs);
+                    }
                 }
                 return null;
             }
