@@ -708,19 +708,24 @@ return videoFormat;
         if (prefs != null && prefs.videoUpscaleEnable) {
             try {
                 if (glUpscaler == null) {
-                    glUpscaler = __fsrMaybeCreate((Object)glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
+                    glUpscaler = __fsrMaybeCreate((Object) glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
                     decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
                     // Provide presentation-size hint from Context if available
                     try {
-                        java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
-                        __m.invoke(glUpscaler, context);
+                        java.lang.reflect.Method m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
+                        m.invoke(glUpscaler, context);
                     } catch (Throwable ignored) {}
 }
                 __codecSurface = decoderInputSurfaceForUpscale;
+                if (__codecSurface == null) {
+                    __codecSurface = renderTarget;
+                }
             } catch (Throwable t) {
                 LimeLog.warning("GL upscaler init failed; falling back: " + t);
                 try { if (glUpscaler != null) __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
-                glUpscaler = null; decoderInputSurfaceForUpscale = null;
+                glUpscaler = null;
+                decoderInputSurfaceForUpscale = null;
+                __codecSurface = renderTarget;
             }
         }
         videoDecoder.configure(format, __codecSurface, null, 0);
