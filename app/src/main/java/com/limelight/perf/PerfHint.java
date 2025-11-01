@@ -20,7 +20,7 @@ import android.util.Log;
  */
 public final class PerfHint implements AutoCloseable {
     private static final String TAG = "PerfHint";
-    private static final boolean DEBUG = true; // set to false to silence
+    private static final boolean DEBUG = false; // set to false to silence
     // Log report() at most every N calls to avoid logspam on 60/120 fps streams
     private static final int REPORT_LOG_EVERY = 120;
 
