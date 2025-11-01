@@ -1417,25 +1417,44 @@ try {
                     }
                 } catch (Throwable ignored) {}
 
-                // ADPF / PerfHint (API 31+)
-                if (android.os.Build.VERSION.SDK_INT >= 31 && context != null && prefs != null && prefs.enablePerfHints) {
+// ADPF / PerfHint (API 31+)
+                if (android.os.Build.VERSION.SDK_INT >= 31
+                        && context != null
+                        && prefs != null
+                        && prefs.enablePerfHints
+                        && com.limelight.perf.PerfHint.isAdpfAvailable(context)) {
                     try {
                         final double fps = Math.max(1.0, (targetFps > 0f ? (double) targetFps : 60.0));
                         final long framePeriodNs = (long) (1_000_000_000.0 / fps);
-                        final boolean gpuRaw = (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                        final boolean gpuRaw =
+                                (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
+                        // Renderer wants a tighter target when GPU_RAW is on
                         final long targetWorkNs = gpuRaw
                                 ? Math.max(6_000_000L, (long) (framePeriodNs * 0.90))
                                 : Math.max(1_000_000L, (long) (framePeriodNs * 0.60));
 
+                        // safe: renderer-only, CpuAffinity already pins the rest
                         MediaCodecDecoderRenderer.this.perfHint =
-                                com.limelight.perf.PerfHint.createForCurrentThread(context, targetWorkNs);
+                                com.limelight.perf.PerfHint.createForCurrentThread(
+                                        context,
+                                        targetWorkNs
+                                );
+
                         if (MediaCodecDecoderRenderer.this.perfHint != null) {
-                            try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetWorkNs); } catch (Throwable ignored) {}
-                            try { MediaCodecDecoderRenderer.this.perfHint.setPreferPowerEfficiency(false); } catch (Throwable ignored) {}
-                            LimeLog.info("PHM: session active via PerfHint (gpuRaw=" + gpuRaw + ", targetNs=" + targetWorkNs + ")");
+                            try {
+                                MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetWorkNs);
+                            } catch (Throwable ignored) {}
+                            try {
+                                // during gameplay we want performance, not power saving
+                                MediaCodecDecoderRenderer.this.perfHint.setPreferPowerEfficiency(false);
+                            } catch (Throwable ignored) {}
+                            // optional: debug current state
+                            MediaCodecDecoderRenderer.this.perfHint.dumpToLog("PHM-Renderer");
                         }
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable ignored) {
+                        // ADPF not available or failed -> no-op
+                    }
                 }
 //* Pin hot threads to big cluster *//
 
