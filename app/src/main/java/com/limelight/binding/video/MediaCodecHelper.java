@@ -633,47 +633,37 @@ public class MediaCodecHelper {
 //                    videoFormat.setInteger("vendor.mtk.ext.dolby.vision.cpu-boost", 1);
 //                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
 //                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
-            else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
-                if (tryNumber < 4) {
-                    // --- PRESET: MTK Low-Latency (safe & balanced) ---
-                    // -note: this will likely do little to nothing. In my testing most values are hardcoded,
-                    // at least on my two mtk devices: mtk g99, mtk Dimensity 8300 ultra.
+                        else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
+                        if (tryNumber < 4) {
+                            // --- MTK Essential Low Latency Configuration ---
+                            // -note: some settings will likely do little to nothing. In my testing most values are hardcoded,
+                            // at least on my two mtk devices: mtk g99, mtk Dimensity 8300 ultra.
+                            // Core low latency enable
+                            safeSet(videoFormat, "vdec-lowlatency", 1);
 
-                    // Boost/DVFS: moderate profile
-                    safeSet(videoFormat, "vdec-lowlatency", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);
+                            // Performance optimization - prevent CPU scaling and boost decoder performance
+                            safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
+                            safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);
 
-                    // Pipeline / code path
-                    safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
-                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 1);   // ULL off for stability
-                    safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
-                    safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
+                            // Buffer queue optimization - minimize buffering for reduced latency
+                            safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 2);
+                            safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 2);
+                            safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
 
-                    // Queue / timeouts (moderate)
-                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 4);
-                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 4);
-                    safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 3);
-                    safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 3);
+                            // Ultra low latency disabled for stability (conflicts with standard low latency mode)
+                            safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);
 
-                    // Pacing: controlled by the app
-                    safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);
-                    safeSet(videoFormat, "vendor.mtk.vdec.pq", 0); // if supported, disableq PQ
+                            // Skip non-VCL NAL units to improve decoding efficiency
+                            safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);
 
-                    // Skip/drop: only NVOP
-                    safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 0);
-                    safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 0);
-                    safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);
-
-                    // Standard Android hints
-                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
-                    safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
-                }
-                setNewOption = true;
-            }
+                            // Standard Android performance hints
+                            safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+                            safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                            // --Note: Combined with vdec-lowlatency (if supported) and reference frame invalidation (RFI),
+                            // these settings provide optimal low latency performance on MTK devices
+                        }
+                        setNewOption = true;
+                    }
 
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
