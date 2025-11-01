@@ -1989,7 +1989,8 @@ boolean isC2Decoder = false;
             // Pick a shorter dequeue timeout for high-FPS streams to avoid throttling the RX path
             int dequeueTimeoutUs = 10_000; // default = 10 ms
             float wantedFps = (targetFps > 0f) ? targetFps : (prefs != null ? prefs.fps : 60f);
-            if (preferLowerDelays || wantedFps >= 100f) {
+            boolean ultraLowLatency = (preferLowerDelays || wantedFps >= 100f);
+            if (ultraLowLatency) {
                 // keep RX snappy for 100/120 fps or LFR/ULL
                 dequeueTimeoutUs = 2_000; // 2 ms
             }
@@ -1997,7 +1998,7 @@ boolean isC2Decoder = false;
             // If we don't have an input buffer index yet, fetch one now
             while (nextInputBufferIndex < 0 && !stopping) {
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(dequeueTimeoutUs);
-                if (nextInputBufferIndex < 0 && (preferLowerDelays || wantedFps >= 100f)) {
+                if (nextInputBufferIndex < 0 && ultraLowLatency) {
                     // Don't sit here forever when running at high frame rates
                     break;
                 }
