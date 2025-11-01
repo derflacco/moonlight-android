@@ -1229,29 +1229,17 @@ try {
             if (nextOutputBuffer != null) {
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        // timestamped release su L+
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                        gpuKickPresentHook();
-
+                    } else if (Build.VERSION.SDK_INT >= 21) {
+                        // vecchi ma con timestamp
+                        long __ts = System.nanoTime();
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
+                    } else {
+                        // device molto vecchi
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                     }
-                    else {
-                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                long __ts = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
-                            gpuKickPresentHook();
-
-                        } else {
-                if (android.os.Build.VERSION.SDK_INT >= 21) {
-    long __ts = System.nanoTime();
-    videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
                     gpuKickPresentHook();
-
-                } else {
-    videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                    gpuKickPresentHook();
-
-                }
-            }
-                    }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
