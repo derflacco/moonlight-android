@@ -2316,9 +2316,9 @@ boolean isC2Decoder = false;
                     decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) lastTwo.totalFramesReceived;
                 }
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
-                StringBuilder sb = new StringBuilder();
-// Pre-size to reduce reallocations based on overlay flavor
-                int sbCap;
+
+                // Pre-size to reduce reallocations based on overlay flavor
+                final int sbCap;
                 if (prefs != null && prefs.enablePerfOverlayMini) {
                     sbCap = 96;
                 } else if (prefs != null && prefs.enablePerfOverlayLite) {
@@ -2326,6 +2326,8 @@ boolean isC2Decoder = false;
                 } else {
                     sbCap = 384;
                 }
+                StringBuilder sb = new StringBuilder(sbCap);
+
                 // --- PERF OVERLAY MINI ---
                 if (prefs.enablePerfOverlayMini) {
                     if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
