@@ -2247,7 +2247,17 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
 
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
-            if (prefs.enablePerfOverlay || prefs.enablePerfLogging) {
+            // Fast path: no overlay/logging at all → just rotate stats
+            if (prefs == null ||
+                    (!prefs.enablePerfOverlay
+                            && !prefs.enablePerfOverlayLite
+                            && !prefs.enablePerfOverlayMini
+                            && !prefs.enablePerfLogging)) {
+                globalVideoStats.add(activeWindowVideoStats);
+                lastWindowVideoStats.copy(activeWindowVideoStats);
+                activeWindowVideoStats.clear();
+                activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+            } else {
                 VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
                 lastTwo.add(activeWindowVideoStats);
@@ -2255,58 +2265,76 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                 String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
-                    decoder = avcDecoder.getName();
+                    decoder = (avcDecoder != null) ? avcDecoder.getName() : "(avc-null)";
                 } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
-                    decoder = hevcDecoder.getName();
+                    decoder = (hevcDecoder != null) ? hevcDecoder.getName() : "(hevc-null)";
                 } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
-                    decoder = av1Decoder.getName();
+                    decoder = (av1Decoder != null) ? av1Decoder.getName() : "(av1-null)";
                 } else {
                     decoder = "(unknown)";
                 }
 
-                float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
+                float decodeTimeMs = 0f;
+                if (lastTwo.totalFramesReceived > 0) {
+                    decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) lastTwo.totalFramesReceived;
+                }
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
-                StringBuilder sb = new StringBuilder();
-                if(prefs.enablePerfOverlayMini){
-                    if(TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED){
-                        long netData=TrafficStatsHelper.getPackageRxBytes(Process.myUid())+TrafficStatsHelper.getPackageTxBytes(Process.myUid());
-                        if(lastNetDataNum!=0){
-                            float realtimeNetData=(netData-lastNetDataNum)/1024f;
-                            if(realtimeNetData>=1000){
-                                sb.append("BW: ").append(String.format("%.1f", realtimeNetData/1024f)).append(" M/s\n");
-                            }else{
+                StringBuilder sb = new StringBuilder(160);
+
+                // --- PERF OVERLAY MINI ---
+                if (prefs.enablePerfOverlayMini) {
+                    if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
+                        long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
+                                + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
+                        if (lastNetDataNum != 0) {
+                            float realtimeNetData = (netData - lastNetDataNum) / 1024f;
+                            if (realtimeNetData >= 1000) {
+                                sb.append("BW: ").append(String.format("%.1f", realtimeNetData / 1024f)).append(" M/s\n");
+                            } else {
                                 sb.append("BW: ").append(String.format("%.1f", realtimeNetData)).append(" K/s\n");
                             }
                         }
-                        lastNetDataNum=netData;
+                        lastNetDataNum = netData;
                     }
-                    sb.append("PL: ").append(String.format("%.0f", (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append("%\n");
-                    sb.append("Net: ").append((int)(rttInfo >> 32)).append("ms | Dec: ").append(String.format("%.1f", decodeTimeMs)).append("ms\n");
+                    float plPct = 0f;
+                    if (lastTwo.totalFrames > 0) {
+                        plPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
+                    }
+                    sb.append("PL: ").append(String.format("%.0f", plPct)).append("%\n");
+                    sb.append("Net: ").append((int) (rttInfo >> 32))
+                            .append("ms | Dec: ").append(String.format("%.1f", decodeTimeMs)).append("ms\n");
                     sb.append(String.format("%.2f", fps.totalFps)).append(" FPS");
 
-                } else if(prefs.enablePerfOverlayLite){
-                    if(TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED){
-                        long netData=TrafficStatsHelper.getPackageRxBytes(Process.myUid())+TrafficStatsHelper.getPackageTxBytes(Process.myUid());
-                        if(lastNetDataNum!=0){
-                            sb.append(context.getString(R.string.perf_overlay_lite_bandwidth) + ": ");
-                            float realtimeNetData=(netData-lastNetDataNum)/1024f;
-                            if(realtimeNetData>=1000){
-                                sb.append(String.format("%.2f", realtimeNetData/1024f) +"M/s\t ");
-                            }else{
-                                sb.append(String.format("%.2f", realtimeNetData) +"K/s\t ");
+                }
+                // --- PERF OVERLAY LITE ---
+                else if (prefs.enablePerfOverlayLite) {
+                    if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
+                        long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
+                                + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
+                        if (lastNetDataNum != 0) {
+                            sb.append(context.getString(R.string.perf_overlay_lite_bandwidth)).append(": ");
+                            float realtimeNetData = (netData - lastNetDataNum) / 1024f;
+                            if (realtimeNetData >= 1000) {
+                                sb.append(String.format("%.2f", realtimeNetData / 1024f)).append("M/s\t ");
+                            } else {
+                                sb.append(String.format("%.2f", realtimeNetData)).append("K/s\t ");
                             }
                         }
-                        lastNetDataNum=netData;
+                        lastNetDataNum = netData;
                     }
 //                    sb.append("分辨率：");
 //                    sb.append(initialWidth + "x" + initialHeight);
                     sb.append(context.getString(R.string.perf_overlay_lite_network_decoding_delay) + ": ");
                     sb.append(context.getString(R.string.perf_overlay_lite_net,(int)(rttInfo >> 32)));
                     sb.append(" / ");
-                    sb.append(context.getString(R.string.perf_overlay_lite_dectime,decodeTimeMs));
+                    sb.append(context.getString(R.string.perf_overlay_lite_dectime, decodeTimeMs));
                     sb.append("\t");
-                    sb.append(context.getString(R.string.perf_overlay_lite_packet_loss) + ": ");
-                    sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
+                    sb.append(context.getString(R.string.perf_overlay_lite_packet_loss)).append(": ");
+                    float liteLossPct = 0f;
+                    if (lastTwo.totalFrames > 0) {
+                        liteLossPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
+                    }
+                    sb.append(context.getString(R.string.perf_overlay_lite_netdrops, liteLossPct));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
                     // __APPLY_LITE_SHIFT: OLED protection (horizontal nudge)
@@ -2339,17 +2367,12 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                     } catch (Throwable ignored) {}
 
                     /* ADV_LITE_START */
-                    if (prefs != null && prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteAdvanced) {
+                    if (prefs.enablePerfOverlayLiteAdvanced) {
                         // IN (incoming frames per sec) and R (rendered FPS) for the same stats window
-                        sb.append("  IN:");
-                        sb.append((int) fps.receivedFps);
-                        sb.append("  R:");
-                        sb.append((int) fps.renderedFps);
-
+                        sb.append("  IN:").append((int) fps.receivedFps);
+                        sb.append("  R:").append((int) fps.renderedFps);
                         // HDR/SDR indicator
                         sb.append("  ").append(hdrActive ? "HDR" : "SDR");
-
-                        // FSR indicator (only when upscaler is enabled and Direct Present is OFF)
                     }
                     /* ADV_LITE_END */
 
@@ -2373,9 +2396,12 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_drawdelay, Stereo3DRenderer.drawDelay));
                     }
-                }else{
-                    if(Stereo3DRenderer.isActive) {
-                        sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps));
+                }
+                // --- FULL OVERLAY ---
+                else {
+                    if (Stereo3DRenderer.isActive) {
+                        sb.append(context.getString(R.string.perf_overlay_streamdetails,
+                                initialWidth + "x" + initialHeight, fps.totalFps));
                         sb.append('\n');
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
@@ -2389,46 +2415,55 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                         sb.append(context.getString(R.string.perf_overlay_drawdelay, Stereo3DRenderer.drawDelay));
                     } else {
                         // If GPU renders the frames, the render FPS is the actual drawn and visible fps for the user
-                        sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps));
+                        sb.append(context.getString(R.string.perf_overlay_streamdetails,
+                                initialWidth + "x" + initialHeight, fps.totalFps));
                     }
                     sb.append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
-                    sb.append(context.getString(R.string.perf_overlay_netdrops,
-                            (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
-                    if(TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED){
-                        long netData=TrafficStatsHelper.getPackageRxBytes(Process.myUid())+TrafficStatsHelper.getPackageTxBytes(Process.myUid());
-                        if(lastNetDataNum!=0){
-                            sb.append(context.getString(R.string.perf_overlay_lite_bandwidth) + ": ");
-                            float realtimeNetData=(netData-lastNetDataNum)/1024f;
-                            if(realtimeNetData>=1000){
-                                sb.append(String.format("%.2f", realtimeNetData/1024f) +"M/s\n");
-                            }else{
-                                sb.append(String.format("%.2f", realtimeNetData) +"K/s\n");
+                    float fullLossPct = 0f;
+                    if (lastTwo.totalFrames > 0) {
+                        fullLossPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
+                    }
+                    sb.append(context.getString(R.string.perf_overlay_netdrops, fullLossPct)).append('\n');
+                    if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
+                        long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
+                                + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
+                        if (lastNetDataNum != 0) {
+                            sb.append(context.getString(R.string.perf_overlay_lite_bandwidth)).append(": ");
+                            float realtimeNetData = (netData - lastNetDataNum) / 1024f;
+                            if (realtimeNetData >= 1000) {
+                                sb.append(String.format("%.2f", realtimeNetData / 1024f)).append("M/s\n");
+                            } else {
+                                sb.append(String.format("%.2f", realtimeNetData)).append("K/s\n");
                             }
                         }
-                        lastNetDataNum=netData;
+                        lastNetDataNum = netData;
                     }
                     sb.append(context.getString(R.string.perf_overlay_netlatency,
-                            (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
+                            (int) (rttInfo >> 32), (int) rttInfo)).append('\n');
                     if (lastTwo.framesWithHostProcessingLatency > 0) {
                         sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
-                                (float)lastTwo.minHostProcessingLatency / 10,
-                                (float)lastTwo.maxHostProcessingLatency / 10,
-                                (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
+                                        (float) lastTwo.minHostProcessingLatency / 10,
+                                        (float) lastTwo.maxHostProcessingLatency / 10,
+                                        (float) lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency))
+                                .append('\n');
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
                 }
-                    try {
-                        String __fsr = __fsrGetOverlayLine(glUpscaler);
-                        if (__fsr != null && !__fsr.isEmpty()) {
-                            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
-                            sb.append(__fsr).append('\n');
-                        }
-                    } catch (Throwable ignored) {}
+
+                // Append FSR overlay line if available
+                try {
+                    String __fsr = __fsrGetOverlayLine(glUpscaler);
+                    if (__fsr != null && !__fsr.isEmpty()) {
+                        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
+                        sb.append(__fsr).append('\n');
+                    }
+                } catch (Throwable ignored) {}
 
                 String fullLog = sb.toString();
+
                 if (prefs.enablePerfOverlayLite && prefs.enablePerfOverlayLiteOledShift) {
                     try {
                         sb.insert(0, new String(new char[Math.max(0, liteShiftSpaces)]).replace('\0', ' '));
@@ -2450,20 +2485,22 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                 String rawLog = fullLog;         // prima delle trasformazioni
                 String renderedLog = sb.toString(); // dopo shift/blink ecc.
 
-                if (prefs.enablePerfOverlay) {
+                if (perfListener != null && prefs.enablePerfOverlay) {
                     perfListener.onPerfUpdate(renderedLog);
                 }
+
                 // Best latency is only met at requested highest fps, rest can be ignored
-                Boolean targetFpsMatched = ((int) fps.totalFps == (int) prefs.fps);
-                if(minDecodeTime > decodeTimeMs && targetFpsMatched) {
+                boolean targetFpsMatched = ((int) fps.totalFps == (int) prefs.fps);
+                if (minDecodeTime > decodeTimeMs && targetFpsMatched) {
                     minDecodeTime = decodeTimeMs;
                     minDecodeTimeFullLog = fullLog;
-                }
+}
+
+                globalVideoStats.add(activeWindowVideoStats);
+                lastWindowVideoStats.copy(activeWindowVideoStats);
+                activeWindowVideoStats.clear();
+                activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
             }
-            globalVideoStats.add(activeWindowVideoStats);
-            lastWindowVideoStats.copy(activeWindowVideoStats);
-            activeWindowVideoStats.clear();
-            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
         }
 
         boolean csdSubmittedForThisFrame = false;
