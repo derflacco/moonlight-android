@@ -1702,14 +1702,12 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                                             } else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
                                                 gpuKickPresentHook();
-
                                             }
                                             long nowNs = System.nanoTime();
                                             lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
                                             recentDrops = 0;
-                                            updateDecodeLatencyStats(presentationTimeUs);
-                                            statsUpdated = true;
+                                            // FIX: Do NOT call updateDecodeLatencyStats() here:
                                         } catch (IllegalStateException e) {
                                             handleDecoderException(e);
                                             return;
