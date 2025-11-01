@@ -50,7 +50,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
-    private com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
+    private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
 
     private static final long AFFINITY_REFRESH_NS = 10_000_000_000L; // 10s (was 2s)
     private volatile long lastAffinityRefreshNs = 0L;
@@ -125,7 +125,9 @@ private volatile boolean forceTightThresholds = false;
 public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
 // Toggle at runtime if needed
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
-    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
+private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
+    private final Object enqueueNsLock = new Object();
+
 
     // When preferLowerDelays = true (PURE LFR/ULL): force non-blocking (0 µs).
 // When preferLowerDelays = false (managed): small timeout per profile to stabilize pacing.
@@ -157,9 +159,14 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
-        Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
+        Long enqNs;
+        synchronized (enqueueNsLock) {
+            enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
+            if (enqNs != null) {
+                enqueueNsByPtsUs.delete(presentationTimeUs);
+            }
+        }
         if (enqNs != null) {
-            enqueueNsByPtsUs.delete(presentationTimeUs);
             long decMs = (System.nanoTime() - enqNs) / 1_000_000L;
             if (decMs >= 0 && decMs < 1000) {
                 activeWindowVideoStats.decoderTimeMs += decMs;
@@ -214,7 +221,8 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
     // ADPF Performance Hint (optional)
-    private com.limelight.perf.PerfHint perfHint;
+    private volatile com.limelight.perf.PerfHint perfHint;
+
     private long phmWorkStartNs = 0L;
     // Performance Hint Manager session
     // --- OLED burn-in protection for Lite overlay (horizontal pixel/text shift) ---
@@ -966,9 +974,14 @@ try {
             // This is the final thread to quiesce, so let's perform the codec recovery now.
             if (codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL) {
                 // Input and output buffers are invalidated by stop() and reset().
+// Input and output buffers are invalidated by stop() and reset().
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
                 outputBufferQueue.clear();
+// Also drop decode-latency entries tied to the old codec instance
+                synchronized (enqueueNsLock) {
+                    enqueueNsByPtsUs.clear();
+                }
 
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
@@ -1219,7 +1232,9 @@ try {
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
         long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
+// Avoid division by zero if refresh rate is not known yet
+        int rr = (refreshRate > 0) ? refreshRate : 60;
+        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
             // Mark start of CPU work for this frame
             if (MediaCodecDecoderRenderer.this.perfHint != null) {
@@ -1276,7 +1291,7 @@ try {
     }
 
     private void startChoreographerThread() {
-        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        if (prefs == null || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
             // Not using Choreographer in this pacing mode
             return;
         }
@@ -2144,7 +2159,9 @@ if (MediaCodecDecoderRenderer.this.perfHint != null
                     timestampUs, codecFlags);
 
             // Track enqueue time for this PTS
-            try { enqueueNsByPtsUs.put(timestampUs, System.nanoTime()); } catch (Throwable ignored) {}
+            synchronized (enqueueNsLock) {
+                enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
+            }
 
             // We need a new buffer now
             nextInputBufferIndex = -1;
