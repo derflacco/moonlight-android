@@ -1983,16 +1983,20 @@ boolean isC2Decoder = false;
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
-                                    // If we opened an ADPF work interval but produced no output, close it defensively
                                     if (MediaCodecDecoderRenderer.this.perfHint != null
                                             && MediaCodecDecoderRenderer.this.perfHint.isActive()
                                             && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                                        try {
-                                            MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs);
-                                        } catch (Throwable ignored) {}
+                                        try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
                                         MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
                                     }
+                                    if (preferLowerDelays && preferLowerDelaysTimeoutUs == 0) {
+                                        // yield leggerissimo per non peggiorare la latenza
+                                        try { android.os.Trace.beginSection("ull-yield"); } catch (Throwable ignored) {}
+                                        try { Thread.onSpinWait(); } catch (Throwable ignored) {}
+                                        try { android.os.Trace.endSection(); } catch (Throwable ignored) {}
+                                    }
                                     break;
+
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
                                     LimeLog.info("Output format changed");
                                     outputFormat = videoDecoder.getOutputFormat();
