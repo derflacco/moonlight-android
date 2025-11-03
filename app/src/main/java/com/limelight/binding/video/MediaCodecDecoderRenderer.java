@@ -1231,20 +1231,18 @@ try {
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-        }
-
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
         long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-// Avoid division by zero if refresh rate is not known yet
+
+        // Avoid division by zero if refresh rate is not known yet
         int rr = (refreshRate > 0) ? refreshRate : 60;
         long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
+
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Mark start of CPU work for this frame
-            if (MediaCodecDecoderRenderer.this.perfHint != null) {
-                MediaCodecDecoderRenderer.this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
+            // Mark start of CPU work for this frame (ADPF)
+            if (this.perfHint != null) {
+                this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
             }
             // Render up to one frame when in frame pacing mode.
             //
@@ -1255,10 +1253,10 @@ try {
             if (nextOutputBuffer != null) {
                 try {
                     if (Build.VERSION.SDK_INT >= 21) {
-                        // Timestamped release on L+ to align with vsync
+                        // Timestamped release aligned to vsync
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
                     } else {
-                        // Very old devices: immediate render
+                        // Legacy immediate render
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                     }
 
@@ -1266,21 +1264,23 @@ try {
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
-                    if (MediaCodecDecoderRenderer.this.perfHint != null
-                            && MediaCodecDecoderRenderer.this.perfHint.isActive()
-                            && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                        try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
-                        MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+
+                } catch (Throwable e) {
+                    // Best effort: avoid leaking the output buffer if still valid
+                    try { handleDecoderException((IllegalStateException) e); } catch (Throwable ignored) {}
+                    try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored) {}
+
+                    // Close any open ADPF interval on error
+                    if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
+                        try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
+                        this.phmWorkStartNs = 0L;
                     }
-                } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
-                    }
+                }
+            } else {
+                // No buffer this vsync: close ADPF interval to avoid bogus long work durations
+                if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
+                    try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
+                    this.phmWorkStartNs = 0L;
                 }
             }
         }
@@ -1626,7 +1626,12 @@ boolean isC2Decoder = false;
 
                                 if (__last >= 0) {
                                     // Drop older buffer without rendering
-                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                    if (__last >= 0) {
+                                        // Drop older buffer without rendering (count as recent drop for adaptive thresholds)
+                                        try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                        recentDrops = Math.min(10, recentDrops + 1);
+                                    }
+
                                 }
 
                                 __last = __idx;
@@ -1665,6 +1670,13 @@ boolean isC2Decoder = false;
                                 if (__lastPtsUs >= 0) {
                                     final long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
                                     ewmaDecodeToPresentNs += 0.25 * (__d2pNs - ewmaDecodeToPresentNs);
+                                    // EWMA inter-arrival + jitter anche nel percorso LFR
+                                    if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
+                                        final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
+                                        ewmaInterArrivalNs += EWMA_ALPHA * (sampleNs - ewmaInterArrivalNs);
+                                        double dev = Math.abs(sampleNs - ewmaInterArrivalNs);
+                                        ewmaJitterNs += EWMA_ALPHA * (dev - ewmaJitterNs);
+                                    }
                                 }
 
                                 continue;
@@ -1719,6 +1731,9 @@ boolean isC2Decoder = false;
                                 if (interUs > 0) {
                                     double sample = interUs * 1000.0;
                                     ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
+                                    // EWMA jitter = EWMA della deviazione assoluta dall'inter-arrivo medio
+                                    double dev = Math.abs(sample - ewmaInterArrivalNs);
+                                    ewmaJitterNs += EWMA_ALPHA * (dev - ewmaJitterNs);
                                 }
                             }
                             lastDecoderPtsUs = presentationTimeUs;
@@ -1744,16 +1759,15 @@ boolean isC2Decoder = false;
                                     // Immediate present using frame PTS; no decoder-side pacing
                                     if (lastIndex >= 0) {
                                         try {
-                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
+// Always use monotonic now; PTS is not guaranteed to be on the same clock domain
+                                            final long nowNs = System.nanoTime();
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                                 gpuKickPresentHook();
-
                                             } else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
-                                            long nowNs = System.nanoTime();
                                             lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
                                             recentDrops = 0;
@@ -1925,6 +1939,15 @@ boolean isC2Decoder = false;
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
+                                    // If we opened an ADPF work interval but produced no output, close it defensively
+                                    if (MediaCodecDecoderRenderer.this.perfHint != null
+                                            && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                                            && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                        try {
+                                            MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                                        } catch (Throwable ignored) {}
+                                        MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+                                    }
                                     break;
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
                                     LimeLog.info("Output format changed");
@@ -1949,8 +1972,11 @@ boolean isC2Decoder = false;
                                         if (hdr != null && hdr.remaining() > 0) {
                                             byte[] hdrArr = new byte[hdr.remaining()];
                                             hdr.get(hdrArr);
-                                            // pass to upscaler if needed
+                                            // Latch for future reconfig/restart
+                                            if (!Arrays.equals(currentHdrMetadata, hdrArr)) {
+                                                currentHdrMetadata = hdrArr;
                                         }
+                                      }
                                     } catch (Throwable ignored) {}
                                     LimeLog.info("New output format: " + outputFormat);
                                     break;
