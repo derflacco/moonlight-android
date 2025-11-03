@@ -47,6 +47,36 @@ import android.view.SurfaceView;
 
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    // Lock-free single-producer/single-consumer ring for output indices
+    private static final class SpscRing {
+        private final int[] buf;
+        private final int capMask;
+        private volatile int head = 0; // consumer index
+        private volatile int tail = 0; // producer index
+
+        SpscRing(int requestedCapacity) {
+            int cap = 1;
+            while (cap < requestedCapacity) cap <<= 1; // power-of-two
+            this.buf = new int[cap];
+            this.capMask = cap - 1;
+        }
+        boolean offer(int v) {
+            final int t = tail + 1;
+            // Full if producer would lap consumer
+            if ((t - head) > buf.length) return false;
+            buf[tail & capMask] = v;
+            tail = t;
+            return true;
+        }
+        Integer poll() {
+            if (head == tail) return null;
+            final int v = buf[head & capMask];
+            head++;
+            return v;
+        }
+        int size() { return tail - head; }
+        void clear() { head = tail = 0; }
+    }
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
@@ -279,7 +309,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private long lastNetDataNum;
     // Output buffer queue for frames waiting for Choreographer/vsync
 // Cap at 3 so we never accumulate too many frames if consumer is late
-    private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>(3);
+    private final SpscRing outputBufferQueue = new SpscRing(3);
 
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT_BALANCED = 2;
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT_MAX_SMOOTHNESS = 3;
@@ -1918,16 +1948,17 @@ boolean isC2Decoder = false;
 
                                 // Enforce per-profile queue depth
                                 while (outputBufferQueue.size() >= qLimit) {
-                                    try {
-                                        Integer old = outputBufferQueue.poll();
-                                        if (old != null) {
-                                            videoDecoder.releaseOutputBuffer(old, false);
-                                        }
-                                    } catch (Throwable ignored) {}
+                                    Integer old = outputBufferQueue.poll();
+                                    if (old != null) {
+                                        try { videoDecoder.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
+                                    } else break;
                                 }
-                                // NB: in BALANCED we don't present here; stats already updated at dequeue
-
-                                outputBufferQueue.add(lastIndex);
+// Non bloccare: se l'offer fallisce per race, droppa il più vecchio e riprova una volta
+                                if (!outputBufferQueue.offer(lastIndex)) {
+                                    Integer old = outputBufferQueue.poll();
+                                    if (old != null) { try { videoDecoder.releaseOutputBuffer(old, false); } catch (Throwable ignored) {} }
+                                    outputBufferQueue.offer(lastIndex);
+                                }
                             }
 
                             // --- Fallback stats update ---
