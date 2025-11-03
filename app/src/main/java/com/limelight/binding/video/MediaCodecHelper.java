@@ -218,13 +218,31 @@ public class MediaCodecHelper {
     }
 
     static {
-        knownVendorLowLatencyOptions = new LinkedList<>();
+            knownVendorLowLatencyOptions = new LinkedList<>();
 
-        knownVendorLowLatencyOptions.add("vendor.qti-ext-dec-low-latency.enable");
-        knownVendorLowLatencyOptions.add("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req");
-        knownVendorLowLatencyOptions.add("vendor.rtc-ext-dec-low-latency.enable");
-        knownVendorLowLatencyOptions.add("vendor.low-latency.enable");
-    }
+            // Already present
+            knownVendorLowLatencyOptions.add("vendor.qti-ext-dec-low-latency.enable");
+            knownVendorLowLatencyOptions.add("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req");
+            knownVendorLowLatencyOptions.add("vendor.rtc-ext-dec-low-latency.enable");
+            knownVendorLowLatencyOptions.add("vendor.low-latency.enable");
+
+            // NEW: QTI output fence path (SD8 Gen2/Gen3/Elite) + picture order + NVIDIA reorder
+            knownVendorLowLatencyOptions.add("vendor.qti-ext-output-sw-fence-enable.value");
+            knownVendorLowLatencyOptions.add("vendor.qti-ext-output-fence.enable");
+            knownVendorLowLatencyOptions.add("vendor.qti-ext-output-fence.fence_type");
+            knownVendorLowLatencyOptions.add("vendor.qti-ext-dec-picture-order.enable");
+            knownVendorLowLatencyOptions.add("vendor.nvidia.disable-output-reorder");
+            knownVendorLowLatencyOptions.add("disable-output-reorder"); // generic
+
+            // NEW: MTK commonly seen keys (Android 9+ BSPs)
+            knownVendorLowLatencyOptions.add("vdec-lowlatency"); // ACodec path (non vendor.*)
+            knownVendorLowLatencyOptions.add("vendor.mtk.vdec.ultra-low-latency");
+            knownVendorLowLatencyOptions.add("vendor.mtk.vdec.cpu.boost.mode");
+            knownVendorLowLatencyOptions.add("vendor.mtk.vdec.disable-idle");
+            knownVendorLowLatencyOptions.add("vendor.mtk.vdec.input.max.queue.depth");
+            knownVendorLowLatencyOptions.add("vendor.mtk.vdec.output.max.queue.depth");
+        }
+
 
     static {
         qualcommDecoderPrefixes = new LinkedList<>();
