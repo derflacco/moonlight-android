@@ -200,6 +200,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
     private static final int FOUR_FINGER_TAP_THRESHOLD = 300;
     private static final int FIVE_FINGER_TAP_THRESHOLD = 300;
+    // Keepalive pacing (tunable). 1000 ms is a good default; lower only if needed.
+    private static final int BACKGROUND_PING_INTERVAL_MS = 1000;
 
     private Handler timerHandler;
 
@@ -767,19 +769,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 glPrefs.glRenderer,
                 this);
 
-// --- Force tight thresholds (opzionale, via prefConfig.forceTightThresholds) ---
+// Force tight thresholds (no reflection) + apply latency policy early
         try {
-            boolean forceTight = false;
-            if (prefConfig != null) {
-                try {
-                    java.lang.reflect.Field f = prefConfig.getClass().getDeclaredField("forceTightThresholds");
-                    f.setAccessible(true);
-                    Object v = f.get(prefConfig);
-                    if (v instanceof Boolean) forceTight = (Boolean) v;
-                } catch (Throwable ignored) {}
-            }
-            try { decoderRenderer.setForceTightThresholds(forceTight);
-                applyLatencyPolicy(decoderRenderer, prefConfig);} catch (Throwable ignored) {}
+            final boolean forceTight = (prefConfig != null && prefConfig.forceTightThresholds);
+            try {
+                decoderRenderer.setForceTightThresholds(forceTight);
+                applyLatencyPolicy(decoderRenderer, prefConfig);
+            } catch (Throwable ignored) {}
             if (forceTight) {
                 LimeLog.info("ForceTightThresholds enabled: using vsync-based thresholds on all devices");
             }
@@ -3923,49 +3919,48 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             holder.getSurface().setFrameRate(desiredFrameRate,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+        }
 
 // Hint the SoC to keep sustained clocks ONLY when Direct Present (GPU_RAW) is active
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                try {
-                    final boolean gpuRaw = (prefConfig != null &&
-                            prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-                    getWindow().setSustainedPerformanceMode(gpuRaw);
-                } catch (Throwable ignored) {}
-            }
-
-
-            // Apply latency policy BEFORE decoder/present loops start
-            try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
-            // High-Hz nudge: request the highest supported refresh ONLY for Direct Present (GPU_RAW).
-// This is a *request* (not a guarantee). It can improve DVFS on devices that allow it.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             try {
                 final boolean gpuRaw = (prefConfig != null &&
                         prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-
-                if (gpuRaw && holder != null && holder.getSurface() != null) {
-                    final float requestHz = getMaxSupportedRefreshHz();
-
-                    if (android.os.Build.VERSION.SDK_INT >= 31) {
-                        holder.getSurface().setFrameRate(
-                                requestHz,
-                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                                android.view.Surface.CHANGE_FRAME_RATE_ALWAYS
-                        );
-                    } else if (android.os.Build.VERSION.SDK_INT >= 30) {
-                        holder.getSurface().setFrameRate(
-                                requestHz,
-                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
-                        );
-                    } else {
-                        // Legacy fallback (API < 30): prefer closest refresh
-                        android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
-                        lp.preferredRefreshRate = requestHz;
-                        getWindow().setAttributes(lp);
-                    }
-                }
+                getWindow().setSustainedPerformanceMode(gpuRaw);
             } catch (Throwable ignored) {}
-
         }
+
+// Apply latency policy BEFORE decoder/present loops start
+        try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
+
+        // High-Hz nudge: request the highest supported refresh ONLY for Direct Present (GPU_RAW).
+// This is a *request* (not a guarantee). It can improve DVFS on devices that allow it.
+        try {
+            final boolean gpuRaw = (prefConfig != null &&
+                    prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+
+            if (gpuRaw && holder != null && holder.getSurface() != null) {
+                final float requestHz = getMaxSupportedRefreshHz();
+
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    holder.getSurface().setFrameRate(
+                            requestHz,
+                            android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                            android.view.Surface.CHANGE_FRAME_RATE_ALWAYS
+                    );
+                } else if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    holder.getSurface().setFrameRate(
+                            requestHz,
+                            android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                    );
+                } else {
+                    // Legacy fallback (API < 30): prefer closest refresh
+                    android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                    lp.preferredRefreshRate = requestHz;
+                    getWindow().setAttributes(lp);
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     @Override
