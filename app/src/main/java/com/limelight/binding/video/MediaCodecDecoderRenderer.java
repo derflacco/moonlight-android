@@ -1267,7 +1267,17 @@ try {
 
         // Avoid division by zero if refresh rate is not known yet
         int rr = (refreshRate > 0) ? refreshRate : 60;
-        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
+        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // 80% of the period
+
+        // Sanity check: if we come from a non-Choreographer path (nanoTime timebase),
+        // realign the reference to avoid negative/absurd deltas at the first tick.
+        if (lastRenderedFrameTimeNanos != 0L) {
+            long delta = frameTimeNanos - lastRenderedFrameTimeNanos;
+            if (delta < 0 || delta > 250_000_000L) { // >250 ms not realistic
+                lastRenderedFrameTimeNanos = frameTimeNanos - (1_000_000_000L / rr);
+                actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
+            }
+        }
 
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
             // Mark start of CPU work for this frame (ADPF)
@@ -1294,12 +1304,12 @@ try {
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
-
-                } catch (Throwable e) {
-                    // Best effort: avoid leaking the output buffer if still valid
-                    try { handleDecoderException((IllegalStateException) e); } catch (Throwable ignored) {}
+                } catch (IllegalStateException e) {
+                    try { handleDecoderException(e); } catch (Throwable ignored) {}
                     try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored) {}
-
+                } catch (Throwable ignored) {
+                    try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored2) {}
+                } finally {
                     // Close any open ADPF interval on error
                     if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
                         try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
