@@ -1813,9 +1813,12 @@ boolean isC2Decoder = false;
                                             recentDrops = 0;
                                             // FIX: Do NOT call updateDecodeLatencyStats() here:
                                         } catch (IllegalStateException e) {
-                                            handleDecoderException(e);
-                                            return;
-                                        } catch (Throwable ignored) {}
+                                            try { handleDecoderException(e); } catch (Throwable ignored) {}
+                                            // Continue the loop; recovery happens via doCodecRecoveryIfRequired()
+                                            continue;
+                                        } catch (Throwable ignored) {
+                                            // Keep running
+                                        }
                                     }
                                 }
                                 else if (pNow != null && (pNow.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS
