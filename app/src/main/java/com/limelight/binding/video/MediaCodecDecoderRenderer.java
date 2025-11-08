@@ -1398,6 +1398,7 @@ try {
         // - Balanced: ~80% (smooth, avoids double render in the same slot)
         // - Cap FPS: ~85% (a bit more conservative)
         // - Max Smoothness: ~90% (longer gate, favors stability over reactivity)
+        // - Warp, Warp 2, Lowest Latency: render exactly once per period (tight = 100%)
         double gatePct;
         if (preferLowerDelays || pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
             gatePct = 1.00; // tight
@@ -1405,8 +1406,10 @@ try {
             gatePct = 0.80;
         } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
             gatePct = 0.85;
-        } else { // MAX_SMOOTHNESS or others
+        } else if (pacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
             gatePct = 0.90;
+        } else { // others: Warp, Warp2, Lower Latency
+            gatePct = 1.00;
         }
         final long gateNs = (long) (periodNs * gatePct);
 
