@@ -1261,67 +1261,113 @@ try {
             return;
         }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
+        // Reduces phase error on some devices. Wrapped in try/catch to avoid vendor quirks.
+        try {
+            android.view.WindowManager wm =
+                    (android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE);
+            if (wm != null) {
+                android.view.Display d = wm.getDefaultDisplay();
+                if (d != null) {
+                    // getAppVsyncOffsetNanos() may not exist on some builds; keep it guarded
+                    long appOffsetNs = 0L;
+                    try { appOffsetNs = (Long) android.view.Display.class
+                            .getMethod("getAppVsyncOffsetNanos")
+                            .invoke(d); } catch (Throwable ignored) {}
+                    frameTimeNanos -= appOffsetNs;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // ---- Compute display period and gating threshold based on pacing profile ----
+        final int rr = (refreshRate > 0) ? refreshRate : 60;
+        final long periodNs = 1_000_000_000L / Math.max(1, rr);
+
+        int pacing = (prefs != null) ? prefs.framePacing
+                : com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED;
+
+        // Gate percentage per profile:
+        // - GPU_RAW: render exactly once per period (tight = 100%)
+        // - Balanced: ~80% (smooth, avoids double render in the same slot)
+        // - Cap FPS: ~85% (a bit more conservative)
+        // - Max Smoothness: ~90% (longer gate, favors stability over reactivity)
+        double gatePct;
+        if (preferLowerDelays || pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+            gatePct = 1.00; // tight
+        } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            gatePct = 0.80;
+        } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+            gatePct = 0.85;
+        } else { // MAX_SMOOTHNESS or others
+            gatePct = 0.90;
+        }
+        final long gateNs = (long) (periodNs * gatePct);
+
+        // ---- Sanity: fix absurd deltas on first tick or timebase jumps ----
         long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-
-        // Avoid division by zero if refresh rate is not known yet
-        int rr = (refreshRate > 0) ? refreshRate : 60;
-        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // 80% of the period
-
-        // Sanity check: if we come from a non-Choreographer path (nanoTime timebase),
-        // realign the reference to avoid negative/absurd deltas at the first tick.
         if (lastRenderedFrameTimeNanos != 0L) {
-            long delta = frameTimeNanos - lastRenderedFrameTimeNanos;
-            if (delta < 0 || delta > 250_000_000L) { // >250 ms not realistic
-                lastRenderedFrameTimeNanos = frameTimeNanos - (1_000_000_000L / rr);
+            if (actualFrameTimeDeltaNs < 0 || actualFrameTimeDeltaNs > 250_000_000L) { // >250 ms not realistic
+                lastRenderedFrameTimeNanos = frameTimeNanos - periodNs;
                 actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
             }
+        } else {
+            // First frame after start/resume: seed the reference to one period earlier
+            lastRenderedFrameTimeNanos = frameTimeNanos - periodNs;
+            actualFrameTimeDeltaNs = periodNs;
         }
 
-        if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Mark start of CPU work for this frame (ADPF)
-            if (this.perfHint != null) {
-                this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
+        // ---- Render gating: skip if we're still inside the gate for this vsync slot ----
+        if (actualFrameTimeDeltaNs < gateNs) {
+            // Close any open ADPF interval cleanly (no work this slot)
+            if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
+                try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
+                this.phmWorkStartNs = 0L;
             }
-            // Render up to one frame when in frame pacing mode.
-            //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
-                try {
-                    if (Build.VERSION.SDK_INT >= 21) {
-                        // Timestamped release aligned to vsync
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                    } else {
-                        // Legacy immediate render
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                    }
+            // Attempt codec recovery even if we don't render
+            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+            // Request next frame
+            android.view.Choreographer.getInstance().postFrameCallback(this);
+            return;
+        }
 
-                    gpuKickPresentHook();
+        // ---- Mark start of CPU work for this frame (ADPF) ----
+        if (this.perfHint != null) {
+            this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
+        }
 
-                    lastRenderedFrameTimeNanos = frameTimeNanos;
-                    activeWindowVideoStats.totalFramesRendered++;
-                } catch (IllegalStateException e) {
-                    try { handleDecoderException(e); } catch (Throwable ignored) {}
-                    try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored) {}
-                } catch (Throwable ignored) {
-                    try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored2) {}
-                } finally {
-                    // Close any open ADPF interval on error
-                    if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
-                        try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
-                        this.phmWorkStartNs = 0L;
-                    }
+        // ---- Render up to one frame when in frame pacing mode ----
+        // NB: With queue limit 2, we won't starve the decoder. One extra frame smooths jitter.
+        Integer nextOutputBuffer = outputBufferQueue.poll();
+        if (nextOutputBuffer != null) {
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                    // Timestamped release aligned to vsync
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                } else {
+                    // Legacy immediate render
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                 }
-            } else {
-                // No buffer this vsync: close ADPF interval to avoid bogus long work durations
+
+                gpuKickPresentHook();
+
+                lastRenderedFrameTimeNanos = frameTimeNanos;
+                activeWindowVideoStats.totalFramesRendered++;
+            } catch (IllegalStateException e) {
+                try { handleDecoderException(e); } catch (Throwable ignored) {}
+                try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+                try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored2) {}
+            } finally {
+                // Close ADPF interval on success/error
                 if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
                     try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
                     this.phmWorkStartNs = 0L;
                 }
+            }
+        } else {
+            // No buffer this vsync: close ADPF interval to avoid bogus long work durations
+            if (this.perfHint != null && this.perfHint.isActive() && this.phmWorkStartNs != 0L) {
+                try { this.perfHint.tockAndReport(this.phmWorkStartNs); } catch (Throwable ignored) {}
+                this.phmWorkStartNs = 0L;
             }
         }
 

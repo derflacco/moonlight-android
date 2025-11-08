@@ -3863,57 +3863,74 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             desiredFrameRate = desiredRefreshRate;
         }
 
-        // Tell the OS about our frame rate to allow it to adapt the display refresh rate appropriately
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // We want to change frame rate even if it's not seamless, since prepareDisplayForRendering()
-            // will not set the display mode on S+ if it only differs by the refresh rate. It depends
-            // on us to trigger the frame rate switch here.
-            holder.getSurface().setFrameRate(desiredFrameRate,
-                    Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                    Surface.CHANGE_FRAME_RATE_ALWAYS);
-        }
-        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            holder.getSurface().setFrameRate(desiredFrameRate,
-                    Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-        }
+        // Determine pacing profile (GPU_RAW => direct present)
+        final boolean gpuRaw = (prefConfig != null &&
+                prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
-// Hint the SoC to keep sustained clocks ONLY when Direct Present (GPU_RAW) is active
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+        // Tell the OS about our frame rate so it can adapt refresh rate appropriately
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            // On S+ choose behavior by profile:
+            // - GPU_RAW: ALWAYS (we want the mode switch to happen)
+            // - Others: ONLY_IF_SEAMLESS (avoid visible mode changes/glitches)
+            final int behavior = gpuRaw
+                    ? android.view.Surface.CHANGE_FRAME_RATE_ALWAYS
+                    : android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS;
+
+            holder.getSurface().setFrameRate(
+                    desiredFrameRate,
+                    android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                    behavior
+            );
+        } else if (android.os.Build.VERSION.SDK_INT >= 30) {
+            // R: behavior param not available
+            holder.getSurface().setFrameRate(
+                    desiredFrameRate,
+                    android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+            );
+        } else {
+            // Legacy fallback (<30): prefer closest refresh
             try {
-                final boolean gpuRaw = (prefConfig != null &&
-                        prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-                getWindow().setSustainedPerformanceMode(gpuRaw);
+                android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.preferredRefreshRate = desiredFrameRate;
+                getWindow().setAttributes(lp);
             } catch (Throwable ignored) {}
         }
 
-// Apply latency policy BEFORE decoder/present loops start
+        // Hint sustained clocks ONLY when Direct Present (GPU_RAW) is active
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            try { getWindow().setSustainedPerformanceMode(gpuRaw); } catch (Throwable ignored) {}
+        }
+
+        // Apply latency policy BEFORE decoder/present loops start
         try { applyLatencyPolicy(decoderRenderer, prefConfig); } catch (Throwable ignored) {}
 
-        // High-Hz nudge: request the highest supported refresh ONLY for Direct Present (GPU_RAW).
-// This is a *request* (not a guarantee). It can improve DVFS on devices that allow it.
+        // High-Hz nudge: request the highest supported refresh ONLY for GPU_RAW.
+        // This can improve DVFS responsiveness. Avoid for other profiles.
         try {
-            final boolean gpuRaw = (prefConfig != null &&
-                    prefConfig.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-
             if (gpuRaw && holder != null && holder.getSurface() != null) {
                 final float requestHz = getMaxSupportedRefreshHz();
+                // Avoid redundant calls if we already asked for essentially the same Hz
+                final boolean differentHz = Math.abs(requestHz - desiredFrameRate) > 0.25f;
 
-                if (android.os.Build.VERSION.SDK_INT >= 31) {
-                    holder.getSurface().setFrameRate(
-                            requestHz,
-                            android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                            android.view.Surface.CHANGE_FRAME_RATE_ALWAYS
-                    );
-                } else if (android.os.Build.VERSION.SDK_INT >= 30) {
-                    holder.getSurface().setFrameRate(
-                            requestHz,
-                            android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
-                    );
-                } else {
-                    // Legacy fallback (API < 30): prefer closest refresh
-                    android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
-                    lp.preferredRefreshRate = requestHz;
-                    getWindow().setAttributes(lp);
+                if (differentHz) {
+                    if (android.os.Build.VERSION.SDK_INT >= 31) {
+                        holder.getSurface().setFrameRate(
+                                requestHz,
+                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                                android.view.Surface.CHANGE_FRAME_RATE_ALWAYS
+                        );
+                    } else if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        holder.getSurface().setFrameRate(
+                                requestHz,
+                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                        );
+                    } else {
+                        try {
+                            android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                            lp.preferredRefreshRate = requestHz;
+                            getWindow().setAttributes(lp);
+                        } catch (Throwable ignored) {}
+                    }
                 }
             }
         } catch (Throwable ignored) {}
