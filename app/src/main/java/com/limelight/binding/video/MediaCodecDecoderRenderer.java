@@ -100,6 +100,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             this.integClampNs = (long) Math.max(200_000L, this.vsyncPeriodNs * Math.abs(integClampFrac)); // ~25%
             this.integ = 0.0;
             this.lastCorrectionNs = 0L;
+
+        }
+        // Optional feedback from actual render time vs scheduled time.
+// Inject a tiny bias into the integral to remove slow drift.
+        void onFrameRendered(long scheduledRenderNs, long actualRenderNs) {
+            long err = actualRenderNs - scheduledRenderNs; // +late / -early
+            double fb = 0.02 * (double) err; // tiny gain
+            integ += fb;
+            if (integ > integClampNs) integ = integClampNs;
+            if (integ < -integClampNs) integ = -integClampNs;
         }
 
         // Wrap x into [-period/2 .. +period/2]
@@ -143,6 +153,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         long getLastCorrectionNs() { return lastCorrectionNs; }
         long getDesiredPhaseOffsetNs() { return desiredPhaseOffsetNs; }
     }
+    // Map buffer index -> PTS (for balanced queue path)
+    private final android.util.SparseLongArray ptsByIndex = new android.util.SparseLongArray(128);
+
+    // Map PTS -> scheduledPresentNs to feed PI loop on actual render callback
+    private final android.util.LongSparseArray<Long> scheduledByPtsUs = new android.util.LongSparseArray<>(256);
 
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
@@ -278,8 +293,10 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
 
 
+    // Stats mode
     private static final boolean USE_FRAME_RENDER_TIME = false;
-    private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
+    // When using render-time deltas, drop receive->enqueue from totalTimeMs
+    private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME;
 
     // Used on versions < 5.0
     private ByteBuffer[] legacyInputBuffers;
@@ -1029,16 +1046,30 @@ try {
             }
         }
 
-        if (USE_FRAME_RENDER_TIME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
-                    long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
-                    if (delta >= 0 && delta < 1000) {
-                        if (USE_FRAME_RENDER_TIME) {
-                            activeWindowVideoStats.totalTimeMs += delta;
-                        }
+                    // Optional stats
+                    long delta = (renderTimeNanos / 1_000_000L) - (presentationTimeUs / 1000L);
+                    if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
+                        activeWindowVideoStats.totalTimeMs += delta;
                     }
+
+                    // Feed PI loop with actual vs scheduled time (always on)
+                    try {
+                        Long scheduledNs = null;
+                        synchronized (scheduledByPtsUs) {
+                            Long v = scheduledByPtsUs.get(presentationTimeUs);
+                            if (v != null) {
+                                scheduledNs = v;
+                                scheduledByPtsUs.remove(presentationTimeUs);
+                            }
+                        }
+                        if (scheduledNs != null && phaseLock != null) {
+                            phaseLock.onFrameRendered(scheduledNs, renderTimeNanos);
+                        }
+                    } catch (Throwable ignored) { /* best-effort */ }
                 }
             }, null);
         }
@@ -1348,10 +1379,9 @@ try {
                     try { appOffsetNs = (Long) android.view.Display.class
                             .getMethod("getAppVsyncOffsetNanos")
                             .invoke(d); } catch (Throwable ignored) {}
-                    // Keep the last vsync timestamp for the PI loop
-                    lastVsyncNs = frameTimeNanos;
-
+// Apply app vsync offset first, then keep a coherent last vsync for the PI loop
                     frameTimeNanos -= appOffsetNs;
+                    lastVsyncNs = frameTimeNanos; // keep same reference frame for PLL
                 }
             }
         } catch (Throwable ignored) {}
@@ -1418,12 +1448,33 @@ try {
         if (nextOutputBuffer != null) {
             try {
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
-                    // Timestamped release aligned to vsync, corrected by PI dPLL
                     long tsNs = frameTimeNanos;
                     if (phaseLock != null && lastVsyncNs != 0L) {
                         tsNs = phaseLock.adjust(tsNs, lastVsyncNs);
                     }
+
+// Record scheduled time for this frame (by PTS) to feed PLL on actual render
+                    try {
+                        long ptsUs;
+                        synchronized (ptsByIndex) {
+                            ptsUs = ptsByIndex.get(nextOutputBuffer, -1);
+                            if (ptsUs != -1L) {
+                                ptsByIndex.delete(nextOutputBuffer);
+                            }
+                        }
+                        if (ptsUs != -1L) {
+                            synchronized (scheduledByPtsUs) {
+                                scheduledByPtsUs.put(ptsUs, tsNs);
+                                if (scheduledByPtsUs.size() > 256) {
+                                    scheduledByPtsUs.removeAt(0);
+                                }
+                            }
+                        }
+
+                    } catch (Throwable ignored) {}
+
                     videoDecoder.releaseOutputBuffer(nextOutputBuffer, tsNs);
+
                 } else {
                     // Legacy immediate render
                     videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
@@ -1907,6 +1958,13 @@ boolean isC2Decoder = false;
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
                             long lastPtsUs = presentationTimeUs;
+// Track PTS for this codec output index (balanced path will use it)
+                            try {
+                                synchronized (ptsByIndex) {
+                                    ptsByIndex.put(lastIndex, lastPtsUs);
+                                }
+                            } catch (Throwable ignored) {}
+
 
                             numFramesOut++;
 
@@ -1962,6 +2020,16 @@ boolean isC2Decoder = false;
 // Always use monotonic now; PTS is not guaranteed to be on the same clock domain
                                             final long nowNs = System.nanoTime();
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                                // Feed-back map also for immediate present path
+                                                try {
+                                                    synchronized (scheduledByPtsUs) {
+                                                        scheduledByPtsUs.put(lastPtsUs, nowNs);
+                                                        if (scheduledByPtsUs.size() > 256) {
+                                                            scheduledByPtsUs.removeAt(0);
+                                                        }
+                                                    }
+                                                } catch (Throwable ignored) {}
+
                                                 videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                                 gpuKickPresentHook();
                                             } else {
@@ -2000,6 +2068,15 @@ boolean isC2Decoder = false;
                                             recentDrops = Math.min(10, recentDrops + 1);
                                             continue;
                                         }
+// Feed-back map also for immediate present path
+                                        try {
+                                            synchronized (scheduledByPtsUs) {
+                                                scheduledByPtsUs.put(lastPtsUs, nowNs);
+                                                if (scheduledByPtsUs.size() > 256) {
+                                                    scheduledByPtsUs.removeAt(0);
+                                                }
+                                            }
+                                        } catch (Throwable ignored) {}
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                         gpuKickPresentHook();
@@ -2057,6 +2134,15 @@ boolean isC2Decoder = false;
                                             recentDrops = Math.min(10, recentDrops + 1);
                                             continue; // stats already recorded at dequeue for this PTS
                                         }
+// Feed-back map also for immediate present path
+                                        try {
+                                            synchronized (scheduledByPtsUs) {
+                                                scheduledByPtsUs.put(lastPtsUs, nowNs);
+                                                if (scheduledByPtsUs.size() > 256) {
+                                                    scheduledByPtsUs.removeAt(0);
+                                                }
+                                            }
+                                        } catch (Throwable ignored) {}
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                         gpuKickPresentHook();
