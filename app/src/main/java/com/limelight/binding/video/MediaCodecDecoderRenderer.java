@@ -1541,7 +1541,6 @@ boolean isC2Decoder = false;
                 } catch (Throwable ignored) {}
 
                 // Aggressive/adaptive state
-                final double EWMA_ALPHA = 0.25;
                 final double MIN_FACTOR = 1.00;
                 final double MAX_FACTOR = 1.20;
 
@@ -1552,10 +1551,16 @@ boolean isC2Decoder = false;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
 
-                double ewmaInterArrivalNs    = (1_000_000_000.0 / Math.max(1f, tfps));
-                double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
-                double ewmaJitterNs          = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
-
+// --- Instant Jitter Hybrid (IJH) state ---
+                final int IJH_WINDOW = 8;
+                final double IJH_INST_WEIGHT = 0.60;   // instant deviation weight
+                final double IJH_PCTL = 0.75;          // percentile calculated over the last N arrivals
+                final double expectedInterNs = (double) streamPeriodNs; // target cadence from stream FPS
+                double ijhJitterNs = managedMode ? (expectedInterNs * 0.12) : (expectedInterNs * 0.08);
+                final double[] ijhWindow = new double[IJH_WINDOW];
+                final double[] ijhScratch = new double[IJH_WINDOW];
+                int ijhCount = 0;
+                int ijhIndex = 0;
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
 // Reused by latest-only / low-latency drain to avoid per-loop allocations
                 final android.media.MediaCodec.BufferInfo latestInfo = new android.media.MediaCodec.BufferInfo();
@@ -1707,18 +1712,34 @@ boolean isC2Decoder = false;
                                 } catch (Throwable ignored) {}
 
                                 // EWMA decode->present
-                                if (__lastPtsUs >= 0) {
-                                    final long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                                    ewmaDecodeToPresentNs += 0.25 * (__d2pNs - ewmaDecodeToPresentNs);
-                                    // EWMA inter-arrival + jitter anche nel percorso LFR
-                                    if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
-                                        final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
-                                        ewmaInterArrivalNs += EWMA_ALPHA * (sampleNs - ewmaInterArrivalNs);
-                                        double dev = Math.abs(sampleNs - ewmaInterArrivalNs);
-                                        ewmaJitterNs += EWMA_ALPHA * (dev - ewmaJitterNs);
-                                    }
-                                }
+                                if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
+                                    final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
 
+                                    // IJH: instantaneous deviation from expected cadence
+                                    final double instDev = Math.abs(sampleNs - expectedInterNs);
+
+                                    // Update short window
+                                    ijhWindow[ijhIndex] = instDev;
+                                    if (ijhCount < IJH_WINDOW) ijhCount++;
+                                    ijhIndex = (ijhIndex + 1) % IJH_WINDOW;
+
+                                    // Compute percentile over the short window
+                                    double pctl;
+                                    if (ijhCount == 1) {
+                                        pctl = ijhWindow[0];
+                                    } else {
+                                        System.arraycopy(ijhWindow, 0, ijhScratch, 0, ijhCount);
+                                        java.util.Arrays.sort(ijhScratch, 0, ijhCount);
+                                        int pi = (int) Math.floor((ijhCount - 1) * IJH_PCTL);
+                                        pctl = ijhScratch[pi];
+                                    }
+
+                                    // Hybrid jitter: weighted instant + pctl, then clamp
+                                    double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
+                                    double lo = expectedInterNs * 0.02; // >= 2% of stream period
+                                    double hi = expectedInterNs * 0.50; // <= 50% of stream period
+                                    ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
+                                }
                                 continue;
                             }
                         } catch (Throwable ignored) {}
@@ -1769,11 +1790,32 @@ boolean isC2Decoder = false;
                             if (lastDecoderPtsUs != 0L) {
                                 long interUs = presentationTimeUs - lastDecoderPtsUs;
                                 if (interUs > 0) {
-                                    double sample = interUs * 1000.0;
-                                    ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
-                                    // EWMA jitter = EWMA della deviazione assoluta dall'inter-arrivo medio
-                                    double dev = Math.abs(sample - ewmaInterArrivalNs);
-                                    ewmaJitterNs += EWMA_ALPHA * (dev - ewmaJitterNs);
+                                    final double sampleNs = interUs * 1000.0;
+
+                                    // IJH: instantaneous deviation from expected cadence
+                                    final double instDev = Math.abs(sampleNs - expectedInterNs);
+
+                                    // Update short window
+                                    ijhWindow[ijhIndex] = instDev;
+                                    if (ijhCount < IJH_WINDOW) ijhCount++;
+                                    ijhIndex = (ijhIndex + 1) % IJH_WINDOW;
+
+                                    // Compute percentile over the short window
+                                    double pctl;
+                                    if (ijhCount == 1) {
+                                        pctl = ijhWindow[0];
+                                    } else {
+                                        System.arraycopy(ijhWindow, 0, ijhScratch, 0, ijhCount);
+                                        java.util.Arrays.sort(ijhScratch, 0, ijhCount);
+                                        int pi = (int) Math.floor((ijhCount - 1) * IJH_PCTL);
+                                        pctl = ijhScratch[pi];
+                                    }
+
+                                    // Hybrid jitter: weighted instant + pctl, then clamp
+                                    double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
+                                    double lo = expectedInterNs * 0.02; // >= 2% of stream period
+                                    double hi = expectedInterNs * 0.50; // <= 50% of stream period
+                                    ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
                                 }
                             }
                             lastDecoderPtsUs = presentationTimeUs;
@@ -1827,7 +1869,7 @@ boolean isC2Decoder = false;
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
 
-                                        double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
+                                        double pressure = Math.min(1.0, (ijhJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
                                         double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
                                         factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
 
@@ -1871,7 +1913,7 @@ boolean isC2Decoder = false;
                                                 - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
                                         mismatch = Math.min(2.0, mismatch);
 
-                                        double factorLatency = 1.02 + 0.13 * (0.5 * (ewmaJitterNs / vsyncPeriodNs)
+                                        double factorLatency = 1.02 + 0.13 * (0.5 * (ijhJitterNs / vsyncPeriodNs)
                                                 + 0.3 * backPressure
                                                 + 0.2 * mismatch);
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
