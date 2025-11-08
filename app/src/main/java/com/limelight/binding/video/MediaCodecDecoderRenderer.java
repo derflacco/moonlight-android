@@ -77,6 +77,73 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         int size() { return tail - head; }
         void clear() { head = tail = 0; }
     }
+    // Phase-locked PI controller to align scheduled present time to the vsync grid.
+// Works in nanoseconds; zero allocations in hot path.
+    private static final class PhaseLock {
+        private final long vsyncPeriodNs;
+        private final long desiredPhaseOffsetNs; // present just before vsync by this guard
+        private final double kp, ki;
+        private final long slewClampNs;   // clamp for per-frame correction (|u| <= clamp)
+        private final long integClampNs;  // clamp for integral term
+
+        private double integ;             // integral accumulator (ns)
+        private long lastCorrectionNs;
+
+        PhaseLock(long vsyncPeriodNs, long guardBeforeVsyncNs,
+                  double kp, double ki, double slewClampFrac, double integClampFrac) {
+            this.vsyncPeriodNs = Math.max(1L, vsyncPeriodNs);
+            long guard = Math.max(0, Math.min(guardBeforeVsyncNs, this.vsyncPeriodNs - 100_000L));
+            this.desiredPhaseOffsetNs = this.vsyncPeriodNs - guard;
+            this.kp = kp;
+            this.ki = ki;
+            this.slewClampNs = (long) Math.max(50_000L, this.vsyncPeriodNs * Math.abs(slewClampFrac));   // ~3%
+            this.integClampNs = (long) Math.max(200_000L, this.vsyncPeriodNs * Math.abs(integClampFrac)); // ~25%
+            this.integ = 0.0;
+            this.lastCorrectionNs = 0L;
+        }
+
+        // Wrap x into [-period/2 .. +period/2]
+        private long wrapPhase(long x, long period) {
+            long r = x % period;
+            if (r < 0) r += period;
+            if (r > (period >> 1)) r -= period;
+            return r;
+        }
+
+        // basePresentNs: your computed target time
+        // lastVsyncNs: last Choreographer frameTimeNanos
+        // Returns corrected present time.
+        long adjust(long basePresentNs, long lastVsyncNs) {
+            if (lastVsyncNs == 0L) return basePresentNs;
+
+            long phaseNs = basePresentNs - lastVsyncNs;
+            long e = wrapPhase(phaseNs - desiredPhaseOffsetNs, vsyncPeriodNs); // phase error
+
+            double p = kp * (double) e;
+            double iCandidate = integ + (ki * (double) e);
+            double uCandidate = p + iCandidate;
+
+            // Clamp output
+            double uClamped = Math.max(-slewClampNs, Math.min(slewClampNs, uCandidate));
+
+            // Anti-windup: only integrate when not saturating further
+            if (uClamped == uCandidate) {
+                integ = iCandidate;
+                if (integ > integClampNs) integ = integClampNs;
+                if (integ < -integClampNs) integ = -integClampNs;
+            } else {
+                // bleed toward clamped output to reduce bias
+                integ += 0.1 * (uClamped - uCandidate);
+            }
+
+            lastCorrectionNs = (long) uClamped;
+            return basePresentNs - lastCorrectionNs;
+        }
+
+        long getLastCorrectionNs() { return lastCorrectionNs; }
+        long getDesiredPhaseOffsetNs() { return desiredPhaseOffsetNs; }
+    }
+
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
@@ -301,6 +368,10 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private long lastTimestampUs;
     private int lastFrameNumber;
     private int refreshRate;
+    // --- dPLL state (vsync phase align) ---
+    private PhaseLock phaseLock;
+    private volatile long lastVsyncNs = 0L; // updated in doFrame()
+
     private PreferenceConfiguration prefs;
 
     private float minDecodeTime = Float.MAX_VALUE;
@@ -983,7 +1054,11 @@ try {
         this.videoFormat = format;
         this.refreshRate = redrawRate;
 
+// Init PI dPLL for vsync phase alignment
+        initPhaseLockIfNeeded();
+
         return initializeDecoder(false);
+
     }
     private Object glUpscaler; // usato via reflection
     private android.view.Surface decoderInputSurfaceForUpscale;
@@ -1273,6 +1348,9 @@ try {
                     try { appOffsetNs = (Long) android.view.Display.class
                             .getMethod("getAppVsyncOffsetNanos")
                             .invoke(d); } catch (Throwable ignored) {}
+                    // Keep the last vsync timestamp for the PI loop
+                    lastVsyncNs = frameTimeNanos;
+
                     frameTimeNanos -= appOffsetNs;
                 }
             }
@@ -1340,12 +1418,17 @@ try {
         if (nextOutputBuffer != null) {
             try {
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
-                    // Timestamped release aligned to vsync
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                    // Timestamped release aligned to vsync, corrected by PI dPLL
+                    long tsNs = frameTimeNanos;
+                    if (phaseLock != null && lastVsyncNs != 0L) {
+                        tsNs = phaseLock.adjust(tsNs, lastVsyncNs);
+                    }
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, tsNs);
                 } else {
                     // Legacy immediate render
                     videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                 }
+
 
                 gpuKickPresentHook();
 
@@ -1597,19 +1680,27 @@ boolean isC2Decoder = false;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
 
-// --- Instant Jitter Hybrid (IJH) state ---
-                final int IJH_WINDOW = 8;
-                final double IJH_INST_WEIGHT = 0.60;   // instant deviation weight
-                final double IJH_PCTL = 0.75;          // percentile calculated over the last N arrivals
-                final double expectedInterNs = (double) streamPeriodNs; // target cadence from stream FPS
-                double ijhJitterNs = managedMode ? (expectedInterNs * 0.12) : (expectedInterNs * 0.08);
-                final double[] ijhWindow = new double[IJH_WINDOW];
-                final double[] ijhScratch = new double[IJH_WINDOW];
-                int ijhCount = 0;
-                int ijhIndex = 0;
+// --- Robust Quantile Hybrid (RQH) state ---
+// Keep naming compatible with old IJH usage where possible
+                final double IJH_INST_WEIGHT = 0.60;  // instant deviation weight (0..1)
+                final double IJH_PCTL       = 0.80;   // target quantile of inter-arrival deviations
+                final double expectedInterNs = (double) streamPeriodNs; // cadence from stream FPS
+
+// Start with ~10% of period as initial jitter guess
+                double ijhJitterNs = (managedMode ? (expectedInterNs * 0.12) : (expectedInterNs * 0.08));
+
+// Online quantile estimator (no arrays, no per-loop sort)
+                final EWQuantile ijhQuant = new EWQuantile(
+                        IJH_PCTL,
+                        Math.max(expectedInterNs * 0.05, 1_000_000.0), // init ~5% period, >=1 ms
+                        0.18,   // alphaUp   (faster rise on bursts)
+                        0.06    // alphaDn   (slower decay to avoid flapping)
+                );
+
+// Reused BufferInfo objects
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
-// Reused by latest-only / low-latency drain to avoid per-loop allocations
                 final android.media.MediaCodec.BufferInfo latestInfo = new android.media.MediaCodec.BufferInfo();
+
                 boolean phmGpuRawLast = (prefs != null
                         && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
@@ -1761,30 +1852,21 @@ boolean isC2Decoder = false;
                                 if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
                                     final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
 
-                                    // IJH: instantaneous deviation from expected cadence
-                                    final double instDev = Math.abs(sampleNs - expectedInterNs);
+// RQH: instantaneous deviation + online quantile (no arrays, no sort)
+                                    final double instDev = Math.min(
+                                            Math.abs(sampleNs - expectedInterNs),
+                                            expectedInterNs * 0.75 // clamp extreme outliers
+                                    );
 
-                                    // Update short window
-                                    ijhWindow[ijhIndex] = instDev;
-                                    if (ijhCount < IJH_WINDOW) ijhCount++;
-                                    ijhIndex = (ijhIndex + 1) % IJH_WINDOW;
+// Update the online quantile for the desired percentile
+                                    final double pctl = ijhQuant.update(instDev);
 
-                                    // Compute percentile over the short window
-                                    double pctl;
-                                    if (ijhCount == 1) {
-                                        pctl = ijhWindow[0];
-                                    } else {
-                                        System.arraycopy(ijhWindow, 0, ijhScratch, 0, ijhCount);
-                                        java.util.Arrays.sort(ijhScratch, 0, ijhCount);
-                                        int pi = (int) Math.floor((ijhCount - 1) * IJH_PCTL);
-                                        pctl = ijhScratch[pi];
-                                    }
-
-                                    // Hybrid jitter: weighted instant + pctl, then clamp
+// Hybrid jitter: weighted instant + online quantile, then clamp
                                     double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
-                                    double lo = expectedInterNs * 0.02; // >= 2% of stream period
-                                    double hi = expectedInterNs * 0.50; // <= 50% of stream period
+                                    double lo = expectedInterNs * 0.02;  // >= 2% of period
+                                    double hi = expectedInterNs * 0.50;  // <= 50% of period
                                     ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
+
                                 }
                                 continue;
                             }
@@ -1838,29 +1920,19 @@ boolean isC2Decoder = false;
                                 if (interUs > 0) {
                                     final double sampleNs = interUs * 1000.0;
 
-                                    // IJH: instantaneous deviation from expected cadence
-                                    final double instDev = Math.abs(sampleNs - expectedInterNs);
+// RQH: instantaneous deviation + online quantile (no arrays, no sort)
+                                    final double instDev = Math.min(
+                                            Math.abs(sampleNs - expectedInterNs),
+                                            expectedInterNs * 0.75 // clamp extreme outliers
+                                    );
 
-                                    // Update short window
-                                    ijhWindow[ijhIndex] = instDev;
-                                    if (ijhCount < IJH_WINDOW) ijhCount++;
-                                    ijhIndex = (ijhIndex + 1) % IJH_WINDOW;
+// Update the online quantile for the desired percentile
+                                    final double pctl = ijhQuant.update(instDev);
 
-                                    // Compute percentile over the short window
-                                    double pctl;
-                                    if (ijhCount == 1) {
-                                        pctl = ijhWindow[0];
-                                    } else {
-                                        System.arraycopy(ijhWindow, 0, ijhScratch, 0, ijhCount);
-                                        java.util.Arrays.sort(ijhScratch, 0, ijhCount);
-                                        int pi = (int) Math.floor((ijhCount - 1) * IJH_PCTL);
-                                        pctl = ijhScratch[pi];
-                                    }
-
-                                    // Hybrid jitter: weighted instant + pctl, then clamp
+// Hybrid jitter: weighted instant + online quantile, then clamp
                                     double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
-                                    double lo = expectedInterNs * 0.02; // >= 2% of stream period
-                                    double hi = expectedInterNs * 0.50; // <= 50% of stream period
+                                    double lo = expectedInterNs * 0.02;  // >= 2% of period
+                                    double hi = expectedInterNs * 0.50;  // <= 50% of period
                                     ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
                                 }
                             }
@@ -3255,6 +3327,66 @@ boolean isC2Decoder = false;
                 gpuKickPbuffer.kickOnce();
             }
         } catch (Throwable ignored) {}
+    }
+    // Initialize PI dPLL from current refresh rate (fallback to display rate if needed)
+    private void initPhaseLockIfNeeded() {
+        try {
+            final float hz = (refreshRate > 0) ? (float) refreshRate : getDisplayRefreshRateSafe();
+            final long vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(30.0f, hz));
+
+            // Present slightly before vsync: ~3% of period (capped ~1.5 ms)
+            final long guardBeforeVsyncNs = Math.min((long) (vsyncPeriodNs * 0.03), 1_500_000L);
+
+            // Stable defaults: brisk phase correction, slow drift removal
+            final double kp = 0.25;
+            final double ki = 0.02;
+
+            // Output clamp ~3% of period; integral clamp ~25% of period
+            phaseLock = new PhaseLock(vsyncPeriodNs, guardBeforeVsyncNs, kp, ki, 0.03, 0.25);
+        } catch (Throwable ignored) {}
+    }
+    // Online exponentially-weighted quantile estimator (O(1) per update)
+// Tracks a target quantile 'p' with asymmetric learning rates.
+    private static final class EWQuantile {
+        private final double p;
+        private final double alphaUp;
+        private final double alphaDn;
+        private double q;
+
+        EWQuantile(double p, double init, double alphaUp, double alphaDn) {
+            this.p = Math.max(0.01, Math.min(0.99, p));
+            this.q = Math.max(0.0, init);
+            this.alphaUp = alphaUp;   // how fast we move up when x > q
+            this.alphaDn = alphaDn;   // how fast we move down when x < q
+        }
+
+        // Update with a new sample and return the current quantile estimate
+        double update(double x) {
+            final double err = x - q;
+            if (err >= 0) {
+                // Move up faster for upper quantiles (1 - p)
+                q += (alphaUp * (1.0 - p)) * err;
+            } else {
+                // Move down more conservatively for upper quantiles (p)
+                q += (alphaDn * p) * err;
+            }
+            return q;
+        }
+
+        double value() { return q; }
+    }
+
+    private float getDisplayRefreshRateSafe() {
+        try {
+            android.view.WindowManager wm =
+                    (android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE);
+            android.view.Display d = (wm != null) ? wm.getDefaultDisplay() : null;
+            float hz = (d != null) ? d.getRefreshRate() : 60f;
+            if (hz < 30f || hz > 1000f) hz = 60f;
+            return hz;
+        } catch (Throwable t) {
+            return 60f;
+        }
     }
 
 private boolean isMTKDecoderName(String name) {
