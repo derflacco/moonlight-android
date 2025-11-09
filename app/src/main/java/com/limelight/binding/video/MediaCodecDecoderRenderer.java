@@ -238,10 +238,17 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
 // Toggle at runtime if needed
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
 // PTS(us) -> enqueue time (ns), preallocated to avoid frequent resizes
-private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64);
+    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(256);
     private final Object enqueueNsLock = new Object();
 
 
+    // Map PTS -> output-dequeue time (ns) to measure post-decode latency accurately
+    private final LongSparseArray<Long> dequeueNsByPtsUs = new LongSparseArray<>(512);
+    private final Object dequeueNsLock = new Object();
+
+    // Map PTS -> per-frame decoder duration (ms). Saved at dequeue to avoid double counting.
+    private final LongSparseArray<Integer> decodeMsByPtsUs = new LongSparseArray<>(512);
+    private final Object decodeLock = new Object();
     // When preferLowerDelays = true (PURE LFR/ULL): force non-blocking (0 µs).
 // When preferLowerDelays = false (managed): small timeout per profile to stabilize pacing.
     private volatile int preferLowerDelaysTimeoutUs = 0; // default 0 for LFR; policy may override if needed
@@ -280,11 +287,19 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             }
         }
         if (enqNs != null) {
-            long decMs = (System.nanoTime() - enqNs) / 1_000_000L;
+            long nowNs = System.nanoTime();
+            long decMs = (nowNs - enqNs) / 1_000_000L;
             if (decMs >= 0 && decMs < 1000) {
                 activeWindowVideoStats.decoderTimeMs += decMs;
-                if (!USE_FRAME_RENDER_TIME) {
-                    activeWindowVideoStats.totalTimeMs += decMs;
+                // Save per-frame decoder duration; postpone adding to total to avoid double counting
+                synchronized (decodeLock) {
+                    decodeMsByPtsUs.put(presentationTimeUs, (int) decMs);
+                    if (decodeMsByPtsUs.size() > 512) decodeMsByPtsUs.removeAt(0);
+                }
+                // Record dequeue timestamp for this PTS to compute dequeue->render later
+                synchronized (dequeueNsLock) {
+                    dequeueNsByPtsUs.put(presentationTimeUs, nowNs);
+                    if (dequeueNsByPtsUs.size() > 512) dequeueNsByPtsUs.removeAt(0);
                 }
             }
         }
@@ -1051,9 +1066,53 @@ try {
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
                     // Optional stats
-                    long delta = (renderTimeNanos / 1_000_000L) - (presentationTimeUs / 1000L);
-                    if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
-                        activeWindowVideoStats.totalTimeMs += delta;
+                    // Compute device-side post-decode latency using dequeue timestamp when available.
+                    long postDecodeMs = -1L;
+                    Long deqNs = null;
+                    Long enqNs = null;
+                    Integer decMsSaved = null;
+                    try {
+                        synchronized (dequeueNsLock) {
+                            Long v = dequeueNsByPtsUs.get(presentationTimeUs);
+                            if (v != null) {
+                                deqNs = v;
+                                dequeueNsByPtsUs.delete(presentationTimeUs);
+                            }
+                        }
+                        synchronized (enqueueNsLock) {
+                            Long v2 = enqueueNsByPtsUs.get(presentationTimeUs);
+                            if (v2 != null) { enqNs = v2; }
+                        }
+                        synchronized (decodeLock) {
+                            Integer v3 = decodeMsByPtsUs.get(presentationTimeUs);
+                            if (v3 != null) {
+                                decMsSaved = v3;
+                                decodeMsByPtsUs.delete(presentationTimeUs);
+                            }
+                        }
+                    } catch (Throwable ignored) { /* best-effort */ }
+
+                    if (deqNs != null) {
+                        postDecodeMs = (renderTimeNanos - deqNs) / 1_000_000L; // dequeue -> render
+                        if (postDecodeMs >= 0 && postDecodeMs < 1000) {
+                            activeWindowVideoStats.totalTimeMs += postDecodeMs;
+                        }
+                        // Add decoder portion once here
+                        if (decMsSaved != null && decMsSaved >= 0 && decMsSaved < 1000) {
+                            activeWindowVideoStats.totalTimeMs += decMsSaved;
+                        } else if (enqNs != null) {
+                            long decGuess = (deqNs - enqNs) / 1_000_000L;
+                            if (decGuess >= 0 && decGuess < 1000) {
+                                activeWindowVideoStats.totalTimeMs += decGuess;
+                            }
+                        }
+                    } else if (enqNs != null) {
+                        // Fallback: enqueue -> render (already includes decode + post-decode)
+                        long combinedMs = (renderTimeNanos - enqNs) / 1_000_000L;
+                        if (combinedMs >= 0 && combinedMs < 1000) {
+                            activeWindowVideoStats.totalTimeMs += combinedMs;
+                        }
+                        // Do NOT add decMsSaved here (would double count)
                     }
 
                     // Feed PI loop with actual vs scheduled time (always on)
@@ -1123,6 +1182,8 @@ try {
 // Also drop decode-latency entries tied to the old codec instance
                 synchronized (enqueueNsLock) {
                     enqueueNsByPtsUs.clear();
+                    synchronized (dequeueNsLock) { dequeueNsByPtsUs.clear(); }
+                    synchronized (decodeLock) { decodeMsByPtsUs.clear(); }
                 }
 
                 // If we just need a flush, do so now with all threads quiesced.
@@ -1971,9 +2032,11 @@ boolean isC2Decoder = false;
 
                             numFramesOut++;
 
-                            // Measure decode latency AT DEQUEUE
-                            try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
-                            statsUpdated = true;
+                            // Measure decode latency AT DEQUEUE for real frames (skip CSD/EOS)
+                            if ((info.flags & (MediaCodec.BUFFER_FLAG_CODEC_CONFIG | MediaCodec.BUFFER_FLAG_END_OF_STREAM)) == 0) {
+                                try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
+                                statsUpdated = true;
+                            }
 
                             // update inter-arrival
                             if (lastDecoderPtsUs != 0L) {
@@ -2224,9 +2287,12 @@ boolean isC2Decoder = false;
                             }
 
                             // --- Fallback stats update ---
-                            // If we didn't update the stats in-branch and the frame wasn't dropped,
+// If we didn't update the stats in-branch and the frame wasn't dropped,
+// and it's a real frame (skip CSD/EOS), update now
                             if (!statsUpdated && !frameDropped) {
-                                updateDecodeLatencyStats(presentationTimeUs);
+                                if ((info.flags & (MediaCodec.BUFFER_FLAG_CODEC_CONFIG | MediaCodec.BUFFER_FLAG_END_OF_STREAM)) == 0) {
+                                    updateDecodeLatencyStats(presentationTimeUs);
+                                }
                             }
 
                         } else {
@@ -3478,10 +3544,10 @@ boolean isC2Decoder = false;
         }
     }
 
-private boolean isMTKDecoderName(String name) {
-    if (name == null) return false;
-    String n = name.toLowerCase();
-    return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
-}
+    private boolean isMTKDecoderName(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase();
+        return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
+    }
 
 }
