@@ -12,6 +12,8 @@ import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.view.Surface;
 
+import androidx.annotation.Keep;
+
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.LimeLog;
 
@@ -273,7 +275,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
     }
 
-
+    @Keep
     public Surface createDecoderInputSurface() {
         if (!isGlReady()) {
             initEglAndGl();
@@ -287,12 +289,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
-        configureOesStaticParams(); // set WRAP modes once
+        // OES requires CLAMP_TO_EDGE; set once
+        configureOesStaticParams();
 
         decoderSurfaceTex = new SurfaceTexture(oesTexId);
         try {
-            // Ensure producer buffers match source video size to avoid extra scaling inside SurfaceFlinger
-            decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
+            // Avoid extra scaling inside SurfaceFlinger
+            final int w = (srcW > 0) ? srcW : 1;
+            final int h = (srcH > 0) ? srcH : 1;
+            decoderSurfaceTex.setDefaultBufferSize(w, h);
         } catch (Throwable ignored) {}
 
         // Dedicated callback thread for SurfaceTexture
@@ -301,9 +306,32 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             stCbThread.start();
             stCbHandler = new android.os.Handler(stCbThread.getLooper());
         }
-
         decoderSurfaceTex.setOnFrameAvailableListener(this, stCbHandler);
+
+        // MediaCodec will render into this Surface (producer side)
         decoderInputSurface = new Surface(decoderSurfaceTex);
+
+        // Optional: sanity + unbind
+        try {
+            int err = GLES20.glGetError();
+            if (err != GLES20.GL_NO_ERROR) {
+                LimeLog.warning("GL error after OES setup: 0x" + Integer.toHexString(err));
+            }
+        } catch (Throwable ignored) {}
+        try { GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0); } catch (Throwable ignored) {}
+
+        // IMPORTANT: release current binding so the render thread can take ownership of this EGL context
+        try {
+            if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+            }
+        } catch (Throwable ignored) {}
+
+        // If the render thread uses a DIFFERENT EGLContext, do this instead on this thread:
+        // try { decoderSurfaceTex.detachFromGLContext(); } catch (Throwable ignored) {}
+        // ...and on the render thread (after its context is current):
+        // try { decoderSurfaceTex.attachToGLContext(oesTexId); } catch (Throwable ignored) {}
+
         return decoderInputSurface;
     }
 
