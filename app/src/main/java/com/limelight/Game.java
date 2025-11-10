@@ -695,6 +695,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         // Check if the user has enabled performance stats overlay
+        // Apply display HDR window color mode early (matches willStreamHdr decision)
+        try {
+            Game.updateHdrWindowMode(willStreamHdr);
+        } catch (Throwable ignored) {}
         if (prefConfig.enablePerfOverlay) {
             performanceOverlayView.setVisibility(View.VISIBLE);
             
