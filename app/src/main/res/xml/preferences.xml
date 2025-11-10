@@ -1051,11 +1051,12 @@
     android:title="@string/title_prefer_big_cores"
     android:summary="@string/summary_prefer_big_cores"
     app:iconSpaceReserved="false" />
-        <SwitchPreferenceCompat
+        <CheckBoxPreference
             android:key="pref_cpu_warmup_enable"
             android:title="@string/pref_cpu_warmup_enable_title"
             android:summary="@string/pref_cpu_warmup_enable_summary"
-            android:defaultValue="false" />
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
 
     </PreferenceCategory>
 

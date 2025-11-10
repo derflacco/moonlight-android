@@ -42,6 +42,7 @@ import android.view.Choreographer;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import com.limelight.perf.CpuWarmUp;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
@@ -124,7 +125,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
     public boolean isHdrActive() { return hdrActive; }
-
+    // CpuWarmUp integration
+    private CpuWarmUp cpuWarmUp;
+    private boolean cpuWarmUpStarted = false;
 
 
     private static final boolean USE_FRAME_RENDER_TIME = false;
@@ -450,7 +453,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         else {
             LimeLog.info("No AV1 decoder found");
         }
-
+        // Initialize CpuWarmUp
+        cpuWarmUp = new CpuWarmUp();
         // Set attributes that are queried in getCapabilities(). This must be done here
         // because getCapabilities() may be called before setup() in current versions of the common
         // library. The limitation of this is that we don't know whether we're using HEVC or AVC.
@@ -1557,6 +1561,17 @@ try {
 
     @Override
     public void start() {
+        // Start CPU warm-up if enabled
+        if (prefs != null && prefs.preferBigCores && cpuWarmUp != null && !cpuWarmUpStarted) {
+            try {
+                cpuWarmUp.start(activity, null, false);
+                cpuWarmUpStarted = true;
+                LimeLog.info("CpuWarmUp started for preferBigCores");
+            } catch (Throwable t) {
+                LimeLog.warning("CpuWarmUp start failed: " + t);
+            }
+        }
+
         startRendererThread();
         startChoreographerThread();
     }
@@ -1565,6 +1580,16 @@ try {
     public void prepareForStop() {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
+
+        // Stop CPU warm-up
+        if (cpuWarmUp != null && cpuWarmUpStarted) {
+            try {
+                cpuWarmUp.stop();
+                cpuWarmUpStarted = false;
+            } catch (Throwable t) {
+                LimeLog.warning("CpuWarmUp stop failed: " + t);
+            }
+        }
 
         // Halt the rendering thread
         if (rendererThread != null) {
@@ -1604,7 +1629,13 @@ try {
     public void stop() {
         // May be called already, but we'll call it now to be safe
         prepareForStop();
-
+        // Final CpuWarmUp stop check
+        if (cpuWarmUp != null && cpuWarmUpStarted) {
+            try {
+                cpuWarmUp.stop();
+                cpuWarmUpStarted = false;
+            } catch (Throwable ignored) {}
+        }
         // Wait for the Choreographer looper to shut down (if we have one)
         if (choreographerHandlerThread != null) {
             try {
@@ -1643,6 +1674,14 @@ try {
 
     @Override
     public void cleanup() {
+
+        // Stop CpuWarmUp
+        if (cpuWarmUp != null) {
+            try {
+                cpuWarmUp.stop();
+                cpuWarmUpStarted = false;
+            } catch (Throwable ignored) {}
+        }
 
         // Ensure decoder and any GL upscaler resources are released
         try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
