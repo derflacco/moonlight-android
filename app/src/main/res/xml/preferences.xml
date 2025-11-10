@@ -1079,11 +1079,12 @@
             android:summary="@string/summary_enable_perf_hints"
             app:iconSpaceReserved="false" />
 			<!-- CPU Warm-up (MEDIUM) -->
-<SwitchPreferenceCompat
+        <CheckBoxPreference
     android:key="pref_cpu_warmup_enable"
     android:title="@string/pref_cpu_warmup_enable_title"
     android:summary="@string/pref_cpu_warmup_enable_summary"
-    android:defaultValue="false" />
+    android:defaultValue="false"
+	app:iconSpaceReserved="false" />
 
 <SwitchPreferenceCompat
     android:key="pref_cpu_warmup_override"
