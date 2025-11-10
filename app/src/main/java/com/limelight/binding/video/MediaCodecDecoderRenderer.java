@@ -333,20 +333,6 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
     private Activity activity;
     private MediaCodec videoDecoder;
     private Thread rendererThread;
-    // ---------------------------------------------------------------------
-// CPU warm-up hack: keep CPU clocks slightly elevated on devices where
-// PerformanceHintManager is ineffective or unavailable (e.g., some SD865).
-// Very light background load + sleeps to avoid battery/cooling issues.
-// ---------------------------------------------------------------------
-    private Thread cpuWarmUpThread;
-    private volatile boolean cpuWarmUpRunning = false;
-
-    // Tuning knobs (be conservative by default)
-    private static final boolean ENABLE_CPU_WARMUP_HACK = true; // set false to disable globally
-    // ~1 ms light spin, then sleep ~12 ms -> ~70–80 Hz cadence, tiny duty cycle
-    private static final int WARMUP_SPIN_MICROS  = 1_000; // microseconds of active spin
-    private static final int WARMUP_SLEEP_MILLIS = 12;    // milliseconds to sleep afterwards
-
     private boolean needsSpsBitstreamFixup, isExynos4;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
     private boolean constrainedHighProfile;
@@ -2483,17 +2469,13 @@ boolean isC2Decoder = false;
     public void start() {
         startRendererThread();
         startChoreographerThread();
-        // Keep CPU clocks warm on devices lacking effective PerfHint support
-        // (no-op if PerfHint is active or the hack is disabled)
-        startCpuWarmUpHack();
     }
 
     // !!! May be called even if setup()/start() fails !!!
     public void prepareForStop() {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
-        // Stop CPU warm-up helper ASAP
-        stopCpuWarmUpHack();
+
         // Halt the rendering thread
         if (rendererThread != null) {
             rendererThread.interrupt();
@@ -3559,59 +3541,6 @@ boolean isC2Decoder = false;
             return hz;
         } catch (Throwable t) {
             return 60f;
-        }
-    }
-    // Start a tiny background load to persuade the governor to keep clocks up.
-// Skips if PerfHint session is active, or if globally disabled.
-    private void startCpuWarmUpHack() {
-        if (!ENABLE_CPU_WARMUP_HACK) return;
-        // If PerfHint is active, prefer that over the hack
-        if (this.perfHint != null) return;
-        if (cpuWarmUpThread != null) return;
-
-        cpuWarmUpRunning = true;
-        cpuWarmUpThread = new Thread(() -> {
-            // Keep the thread cheap and unobtrusive
-            try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); } catch (Throwable ignored) {}
-
-            // Best-effort: nudge this helper to big cores (no-throw)
-            try { com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true); } catch (Throwable ignored) {}
-
-            final String originalName = Thread.currentThread().getName();
-            try { Thread.currentThread().setName("CpuWarmUp"); } catch (Throwable ignored) {}
-
-            while (cpuWarmUpRunning && !Thread.currentThread().isInterrupted()) {
-                // Light spin for ~WARMUP_SPIN_MICROS
-                final long startNs = System.nanoTime();
-                final long spinNs  = WARMUP_SPIN_MICROS * 1_000L;
-                double sink = 0.0;
-                while ((System.nanoTime() - startNs) < spinNs) {
-                    sink += Math.sin(sink + 1.0);
-                }
-
-                // Short sleep to keep duty cycle (and power) low
-                try {
-                    Thread.sleep(WARMUP_SLEEP_MILLIS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-
-            try { Thread.currentThread().setName(originalName != null ? originalName : "CpuWarmUp-ended"); } catch (Throwable ignored) {}
-        }, "CpuWarmUp");
-
-        try { cpuWarmUpThread.setPriority(Thread.NORM_PRIORITY - 1); } catch (Throwable ignored) {}
-        try { cpuWarmUpThread.start(); } catch (Throwable ignored) {}
-    }
-
-    // Stop the warm-up helper thread
-    private void stopCpuWarmUpHack() {
-        cpuWarmUpRunning = false;
-        if (cpuWarmUpThread != null) {
-            try { cpuWarmUpThread.interrupt(); } catch (Throwable ignored) {}
-            try { cpuWarmUpThread.join(250); } catch (Throwable ignored) {}
-            cpuWarmUpThread = null;
         }
     }
 
