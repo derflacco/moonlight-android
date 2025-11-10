@@ -333,6 +333,9 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
     private Activity activity;
     private MediaCodec videoDecoder;
     private Thread rendererThread;
+    // CPU warm-up helper (MEDIUM, 8 workers)
+    private final com.limelight.perf.CpuWarmUp cpuWarmUp = new com.limelight.perf.CpuWarmUp();
+
     private boolean needsSpsBitstreamFixup, isExynos4;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
     private boolean constrainedHighProfile;
@@ -2469,12 +2472,17 @@ boolean isC2Decoder = false;
     public void start() {
         startRendererThread();
         startChoreographerThread();
+        // CPU warm-up (skips if PerfHint reports active unless override=true)
+        try { cpuWarmUp.start(this.perfHint, /*overridePerfHint*/ false); } catch (Throwable ignored) {}
+
     }
 
     // !!! May be called even if setup()/start() fails !!!
     public void prepareForStop() {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
+// Stop CpuWarmUp immediately
+        try { cpuWarmUp.stop(); } catch (Throwable ignored) {}
 
         // Halt the rendering thread
         if (rendererThread != null) {
