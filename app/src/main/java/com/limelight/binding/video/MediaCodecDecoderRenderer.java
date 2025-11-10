@@ -1738,6 +1738,13 @@ try {
                             } catch (Throwable ignored) {}
                             // optional: debug current state
                             MediaCodecDecoderRenderer.this.perfHint.dumpToLog("PHM-Renderer");
+                            try {
+                                if (prefs != null && prefs.cpuWarmUpEnable && !prefs.cpuWarmUpOverridePerfHint) {
+                                    // Once ADPF is active for this session, stop the warm-up to avoid fighting it.
+                                    cpuWarmUp.stop();
+                                }
+                            } catch (Throwable ignored) {}
+
                         }
                     } catch (Throwable ignored) {
                         // ADPF not available or failed -> no-op
@@ -2473,8 +2480,24 @@ boolean isC2Decoder = false;
         startRendererThread();
         startChoreographerThread();
         // CPU warm-up (skips if PerfHint reports active unless override=true)
-        try { cpuWarmUp.start(this.perfHint, /*overridePerfHint*/ false); } catch (Throwable ignored) {}
+        final android.content.Context ctx =
+                (this.context != null) ? this.context.getApplicationContext() : null;
 
+        try { cpuWarmUp.stop(); } catch (Throwable ignored) {}
+
+        try {
+            final boolean enable = (prefs != null && prefs.cpuWarmUpEnable);
+            if (!enable) {
+
+                return;
+            }
+
+            final boolean override = (prefs != null && prefs.cpuWarmUpOverridePerfHint);
+            final Object hintRef = override ? null : this.perfHint;
+
+            // Avvio warm-up (idempotente). Con ctx!=null hai i controlli termici.
+            cpuWarmUp.start(ctx, hintRef, override);
+        } catch (Throwable ignored) {}
     }
 
     // !!! May be called even if setup()/start() fails !!!
@@ -2520,8 +2543,6 @@ boolean isC2Decoder = false;
 
     @Override
     public void stop() {
-        try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
-        // May be called already, but we'll call it now to be safe
         prepareForStop();
 
         // Wait for the Choreographer looper to shut down (if we have one)
