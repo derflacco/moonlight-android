@@ -12,6 +12,9 @@ import com.limelight.profiles.ProfilesManager;
 public class PreferenceConfiguration {
     public int displayTarget = 0; // 0=default, 1..12 -> F1..F12
     public boolean enableGpuKick = false;
+    // CpuWarmUp (read from prefs)
+    public boolean cpuWarmUpEnable;
+    public boolean cpuWarmUpOverridePerfHint;
 
     public boolean snappyInput = true;
     // Video upscaling (FSR-like)
@@ -902,6 +905,9 @@ private static int getFramePacingValue(Context context) {
         config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);
         // Performance Hint Manager (Android 12+)
         config.enablePerfHints = prefs.getBoolean(ENABLE_PERF_HINTS_PREF_STRING, true);
+// CpuWarmUp prefs (UI)
+        config.cpuWarmUpEnable = prefs.getBoolean("pref_cpu_warmup_enable", false);
+        config.cpuWarmUpOverridePerfHint = prefs.getBoolean("pref_cpu_warmup_override", false);
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
@@ -1113,6 +1119,8 @@ private static int getFramePacingValue(Context context) {
         // Adaptive GPU Kick (tiny per-frame draw to keep GPU clocks)
         try { config.enableGpuKick = prefs.getBoolean(GPU_KICK_ENABLE_PREF_STRING, false); } catch (Throwable ignored) { config.enableGpuKick = false; }
         return config;
+
+
     }
 
 
