@@ -52,7 +52,11 @@
 -keep class com.limelight.binding.input.InputSender
 # Keep CpuAffinity (public wrappers called via reflection in places)
 -keep class com.limelight.utils.CpuAffinity { *; }
-
+# --- Moonlight: keep thread/affinity helpers & RX boost (used via reflection/JNI) ---
+-keep class com.limelight.utils.CpuAffinity { *; }
+#
+-keep class com.limelight.perf.CpuWarmUp { *; }
+#
 
 # FSR renderer (auto-hint)
 -keep class com.limelight.render.GlUpscaleRenderer { *; }
