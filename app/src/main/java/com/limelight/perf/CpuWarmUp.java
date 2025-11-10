@@ -24,6 +24,16 @@ public final class CpuWarmUp {
     private final java.util.List<Thread> workers = new java.util.ArrayList<>();
     private volatile boolean running = false;
 
+    // --- DEBUG (best-effort) ---
+    private static void logI(String m) {
+        try { com.limelight.LimeLog.info("CpuWarmUp: " + m); }
+        catch (Throwable t) { android.util.Log.i("CpuWarmUp", m); }
+    }
+    private static void logE(String m, Throwable e) {
+        try { com.limelight.LimeLog.info("CpuWarmUp ERR: " + m + " (" + e + ")"); }
+        catch (Throwable t) { android.util.Log.e("CpuWarmUp", m, e); }
+    }
+
     // Blackhole to prevent JIT from optimizing away FP work
     private static volatile double BH = 0.0;
 
@@ -49,8 +59,21 @@ public final class CpuWarmUp {
     private static final float T_HOT      = 45.0f;
     private static final float T_CRITICAL = 48.0f;
 
-    // High but not "display" priority
-    private static final int THREAD_PRIO = android.os.Process.THREAD_PRIORITY_FOREGROUND;
+    // ---- Affinity policy ----
+    private static final int AFFINITY_BIG_ONLY = 0;
+    private static final int AFFINITY_SPREAD   = 1;
+    private static final int AFFINITY_NONE     = 2;
+
+    // DEFAULT: spread across clusters
+    private static final int AFFINITY_MODE = AFFINITY_SPREAD;
+
+    // Thread priorities per-bucket (to help scheduler):
+    //  bucket 0 (big)   -> FOREGROUND
+    //  bucket 1 (mid)   -> DEFAULT
+    //  bucket 2 (little)-> BACKGROUND
+    private static final int PRIO_BIG    = android.os.Process.THREAD_PRIORITY_FOREGROUND;
+    private static final int PRIO_MID    = android.os.Process.THREAD_PRIORITY_DEFAULT;
+    private static final int PRIO_LITTLE = android.os.Process.THREAD_PRIORITY_BACKGROUND;
 
     // ---- thermal-aware dynamic knobs (per-instance, shared by workers) ----
     private volatile int  spinMicros       = BASE_SPIN_MICROS;   // reduced when hot
@@ -81,11 +104,15 @@ public final class CpuWarmUp {
      * @param overridePerfHint force run even if PerfHint is active
      */
     public synchronized void start(android.content.Context context, Object perfHint, boolean overridePerfHint) {
-        if (!ENABLE) return;
-        if (running) return;
+        if (!ENABLE) { logI("start(): ENABLE=false"); return; }
+        if (running) {
+            logI("start(): already running; workers=" + workers.size());
+            return;
+        }
 
         // Avoid fighting with an existing ADPF/perf hint
         if (!overridePerfHint && isPerfHintActive(perfHint)) {
+            logI("start(): gated by PerfHint active");
             return;
         }
 
@@ -94,17 +121,24 @@ public final class CpuWarmUp {
         running = true;
         workers.clear();
 
-        for (int i = 0; i < WORKERS; i++) {
+        final int n = WORKERS;
+        logI("start(): mode=" + modeName(AFFINITY_MODE) + " spawn=" + n);
+
+        for (int i = 0; i < n; i++) {
             final int id = i;
+            final int bucket = chooseBucketForWorker(id); // 0=big,1=mid,2=little
             Thread t = new Thread(() -> {
-                try { android.os.Process.setThreadPriority(THREAD_PRIO); } catch (Throwable ignored) {}
-                // Best-effort pin on big cores (no-op if lib missing)
-                try { com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true); } catch (Throwable ignored) {}
+                // Priority by bucket (helps scheduler pick cluster)
+                try { android.os.Process.setThreadPriority(priorityForBucket(bucket)); } catch (Throwable ignored) {}
+
+                // Affinity by bucket (best-effort via reflection; falls back automatically)
+                pinWorkerToBucket(bucket);
 
                 final String original = Thread.currentThread().getName();
-                try { Thread.currentThread().setName("CpuWarmUp-" + id); } catch (Throwable ignored) {}
+                try { Thread.currentThread().setName("CpuWarmUp-" + id + "-" + bucketName(bucket)); } catch (Throwable ignored) {}
 
                 long lastBurstMs = android.os.SystemClock.uptimeMillis();
+                logI("worker-" + id + " started -> bucket=" + bucketName(bucket));
 
                 while (running && !Thread.currentThread().isInterrupted()) {
                     // --- Improvement #1: only worker 0 samples thermals every THERMAL_SAMPLE_MS ---
@@ -112,7 +146,7 @@ public final class CpuWarmUp {
                         long nowMs = android.os.SystemClock.uptimeMillis();
                         long prev  = thermalGuard.get();
                         if (nowMs - prev >= THERMAL_SAMPLE_MS && thermalGuard.compareAndSet(prev, nowMs)) {
-                            lastThermalSampleMs = nowMs; // keep for telemetry
+                            lastThermalSampleMs = nowMs; // telemetry
                             applyThermalPolicy(sampleThermals(appContext));
                         }
                     }
@@ -129,14 +163,10 @@ public final class CpuWarmUp {
                     // Anti-JIT blackhole
                     BH = sink;
 
-                    try {
-                        Thread.sleep(sleepMillis);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
+                    try { Thread.sleep(sleepMillis); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
 
-                    // ---- periodic burst (skipped when hot) ----
+                    // bursts
                     if (!skipBursts) {
                         long now = android.os.SystemClock.uptimeMillis();
                         if ((now - lastBurstMs) >= BURST_PERIOD_MS) {
@@ -156,27 +186,29 @@ public final class CpuWarmUp {
                     }
                 }
 
-                // Restore original name (best-effort)
+                logI("worker-" + id + " exit (bucket=" + bucketName(bucket) + ")");
                 try { Thread.currentThread().setName(original != null ? original : "CpuWarmUp-ended"); } catch (Throwable ignored) {}
             }, "CpuWarmUp-" + i);
 
-            try { t.setDaemon(true); } catch (Throwable ignored) {} // do not block shutdown
-            try { t.start(); } catch (Throwable ignored) {}
+            try { t.setDaemon(true); } catch (Throwable ignored) {}
+            try { t.start(); } catch (Throwable e) { logE("worker-" + id + " start failed", e); }
             workers.add(t);
         }
     }
 
     /** Stop warm-up and join threads (best-effort). */
     public synchronized void stop() {
+        if (!running && workers.isEmpty()) return;
+        logI("stop(): workers=" + workers.size());
         running = false;
         for (Thread t : workers) {
             if (t != null) {
-                try { t.interrupt(); } catch (Throwable ignored) {}
+                try { t.interrupt(); } catch (Throwable e) { logE("interrupt failed", e); }
             }
         }
         for (Thread t : workers) {
             if (t != null) {
-                try { t.join(300); } catch (Throwable ignored) {}
+                try { t.join(300); } catch (Throwable e) { logE("join failed", e); }
             }
         }
         workers.clear();
@@ -187,11 +219,84 @@ public final class CpuWarmUp {
         skipBursts = false;
         lastThermalSampleMs = 0L;
         thermalGuard.set(0L);
+        logI("stop(): done");
     }
 
-    // -------- thermal sampling & policy --------
+    // ---------------- Affinity helpers ----------------
 
-    /** Container for a coarse thermal state. */
+    private static String modeName(int m) {
+        switch (m) {
+            case AFFINITY_BIG_ONLY: return "BIG_ONLY";
+            case AFFINITY_SPREAD:   return "SPREAD";
+            case AFFINITY_NONE:     return "NONE";
+        }
+        return "UNK";
+    }
+
+    private static String bucketName(int b) {
+        switch (b) {
+            case 0: return "big";
+            case 1: return "mid";
+            case 2: return "little";
+        }
+        return "any";
+    }
+
+    /** 0=big, 1=mid, 2=little (for SPREAD). */
+    private static int chooseBucketForWorker(int id) {
+        if (AFFINITY_MODE == AFFINITY_SPREAD) return id % 3;
+        if (AFFINITY_MODE == AFFINITY_BIG_ONLY) return 0;
+        return 0; // NONE -> treat as "any" (we won't pin)
+    }
+
+    private static int priorityForBucket(int b) {
+        switch (b) {
+            case 0: return PRIO_BIG;
+            case 1: return PRIO_MID;
+            case 2: return PRIO_LITTLE;
+        }
+        return PRIO_MID;
+    }
+
+    /** Try to pin current thread according to bucket. Falls back gracefully. */
+    private static void pinWorkerToBucket(int bucket) {
+        if (AFFINITY_MODE == AFFINITY_NONE) return;
+
+        // First: try explicit per-cluster helpers if available
+        switch (bucket) {
+            case 0: // big
+                if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                break;
+            case 1: // mid
+                // not all builds expose this; try mid -> big -> all
+                if (tryCallCpuAffinity("pinCurrentThreadToMidCoresIf", true)) return;
+                if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                break;
+            case 2: // little
+                if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return;
+                // fallback: lower prio without pinning tends to land on little
+                break;
+        }
+
+        // Fallbacks: try “all cores” (so scheduler can spread), else do nothing
+        if (tryCallCpuAffinity("pinCurrentThreadToAllCoresIf", true)) return;
+
+        // Last resort: do nothing (scheduler decides)
+    }
+
+    private static boolean tryCallCpuAffinity(String methodName, boolean arg) {
+        try {
+            Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
+            java.lang.reflect.Method m = cls.getMethod(methodName, boolean.class);
+            Object r = m.invoke(null, arg);
+            return true; // if we got here, call succeeded
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    // ---------------- Thermal sampling & policy ----------------
+
     private static final class ThermalSnapshot {
         final int thermalStatus;    // -1 = unknown; otherwise Thermal status [0..6] on API 29+
         final float batteryC;       // NaN if unknown
@@ -209,7 +314,7 @@ public final class CpuWarmUp {
 
             // 1) Try getSystemService(Class) via reflection using "android.os.ThermalManager"
             try {
-                Class<?> tmClass = Class.forName("android.os.ThermalManager"); // fails pre-29
+                Class<?> tmClass = Class.forName("android.os.ThermalManager");
                 java.lang.reflect.Method getByClass =
                         android.content.Context.class.getMethod("getSystemService", Class.class);
                 svc = getByClass.invoke(ctx, tmClass);
@@ -229,9 +334,7 @@ public final class CpuWarmUp {
                 try {
                     java.lang.reflect.Method m = svc.getClass().getMethod("getCurrentThermalStatus");
                     Object r = m.invoke(svc);
-                    if (r instanceof Integer) {
-                        status = (Integer) r;
-                    }
+                    if (r instanceof Integer) status = (Integer) r;
                 } catch (Throwable ignored) {}
             }
         }
@@ -243,9 +346,7 @@ public final class CpuWarmUp {
             android.content.Intent i = (ctx != null) ? ctx.registerReceiver(null, f) : null;
             if (i != null) {
                 int tTenths = i.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
-                if (tTenths != Integer.MIN_VALUE) {
-                    battC = tTenths / 10.0f;
-                }
+                if (tTenths != Integer.MIN_VALUE) battC = tTenths / 10.0f;
             }
         } catch (Throwable ignored) {}
 
@@ -263,15 +364,15 @@ public final class CpuWarmUp {
         if (snap.thermalStatus >= 0) {
             int s = snap.thermalStatus;
             if (s >= 4) {              // CRITICAL/EMERGENCY/SHUTDOWN
-                newSpinMicros = BASE_SPIN_MICROS / 4;         // 75% cut
+                newSpinMicros = BASE_SPIN_MICROS / 4;
                 newSleepMs    = Math.max(BASE_SLEEP_MILLIS, 100);
                 newSkipBursts = true;
             } else if (s >= 3) {       // SEVERE
-                newSpinMicros = BASE_SPIN_MICROS / 2;         // 50% cut
+                newSpinMicros = BASE_SPIN_MICROS / 2;
                 newSleepMs    = Math.max(BASE_SLEEP_MILLIS, 40);
                 newSkipBursts = true;
             } else if (s >= 2) {       // MODERATE
-                newSpinMicros = (int) (BASE_SPIN_MICROS * 0.75); // 25% cut
+                newSpinMicros = (int) (BASE_SPIN_MICROS * 0.75);
                 newSleepMs    = Math.max(BASE_SLEEP_MILLIS, 10);
                 newSkipBursts = false;
             }
@@ -310,33 +411,26 @@ public final class CpuWarmUp {
         for (String name : candidates) {
             try {
                 java.lang.reflect.Method m;
-                try {
-                    m = perfHint.getClass().getMethod(name);
-                } catch (NoSuchMethodException nsme) {
+                try { m = perfHint.getClass().getMethod(name); }
+                catch (NoSuchMethodException nsme) {
                     m = perfHint.getClass().getDeclaredMethod(name);
                     m.setAccessible(true);
                 }
                 Object r = m.invoke(perfHint);
-                if (r instanceof Boolean && (Boolean) r) {
-                    return true;
-                }
+                if (r instanceof Boolean && (Boolean) r) return true;
             } catch (Throwable ignored) {}
         }
-        // Fields like "active"/"enabled"
         final String[] fields = new String[] { "active", "enabled" };
         for (String fname : fields) {
             try {
                 java.lang.reflect.Field f;
-                try {
-                    f = perfHint.getClass().getField(fname);
-                } catch (NoSuchFieldException nsfe) {
+                try { f = perfHint.getClass().getField(fname); }
+                catch (NoSuchFieldException nsfe) {
                     f = perfHint.getClass().getDeclaredField(fname);
                     f.setAccessible(true);
                 }
                 Object r = f.get(perfHint);
-                if (r instanceof Boolean && (Boolean) r) {
-                    return true;
-                }
+                if (r instanceof Boolean && (Boolean) r) return true;
             } catch (Throwable ignored) {}
         }
         return false;
