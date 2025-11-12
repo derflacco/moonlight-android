@@ -1774,6 +1774,119 @@ boolean isC2Decoder = false;
                                         } catch (Throwable ignored) {}
                                     }
                                 }
+                                else if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
+                                    // AdaptX (EWMA-based): 3 simple profiles with fixed thresholds
+                                    // 0 = Smoothness, 1 = Balanced, 2 = Latency
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        final long nowNs = System.nanoTime();
+
+                                        // Base period for thresholds: prefer stream-aware periodNs, fall back to vsync
+                                        long basePeriodNs = periodNs;
+                                        if (basePeriodNs <= 0L) {
+                                            if (vsyncPeriodNs > 0L) {
+                                                basePeriodNs = vsyncPeriodNs;
+                                            } else {
+                                                // Fallback to ~60 Hz if everything else fails
+                                                basePeriodNs = 16_666_667L; // ~60 Hz
+                                            }
+                                        }
+
+                                        // End-to-end frame age (from host PTS to now), clamped to [0, +inf)
+                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        if (frameAgeNs < 0L) {
+                                            frameAgeNs = 0L;
+                                        }
+
+                                        // Current AdaptX mode from prefs: 0 = Smoothness, 1 = Balanced, 2 = Latency
+                                        final int adaptxMode = (prefs != null)
+                                                ? prefs.adaptxMode
+                                                : PreferenceConfiguration.ADAPTX_MODE_BALANCED;
+                                        final boolean modeSmooth =
+                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
+                                        final boolean modeLatency =
+                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY);
+
+                                        // --- Per-mode tuning: fixed factors, no complex heuristics ---
+                                        // dropFactor: how "late" a frame may be vs the base period before we drop.
+                                        final double dropFactor;
+                                        final double backlogWindowMul;
+                                        final long   cooldownDiv;
+                                        final int    requiredLateStreak;
+
+                                        if (modeSmooth) {
+                                            // Smoothness: very tolerant, only drop clearly stale frames
+                                            dropFactor         = 1.30;  // ~30% over target period
+                                            backlogWindowMul   = 1.5;   // consider backlog only if presents are frequent
+                                            cooldownDiv        = 3L;    // slower drop cadence
+                                            requiredLateStreak = 3;     // need multiple late frames in a row
+                                        } else if (modeLatency) {
+                                            // Latency: aggressive, drop quickly when frames are late
+                                            dropFactor         = 1.04;  // ~4% over target period
+                                            backlogWindowMul   = 0.8;   // small backlog window
+                                            cooldownDiv        = 2L;    // moderately fast drop cadence
+                                            requiredLateStreak = 1;     // drop on first late frame
+                                        } else {
+                                            // Balanced: middle ground between Smoothness and Latency
+                                            dropFactor         = 1.12;  // ~12% over target period
+                                            backlogWindowMul   = 1.2;
+                                            cooldownDiv        = 2L;
+                                            requiredLateStreak = 2;
+                                        }
+
+                                        final long dropThresholdNs = (long) (basePeriodNs * dropFactor);
+
+                                        // Time since last present in this renderer thread
+                                        final long sinceLastPresent = (lastPresentNs == 0L)
+                                                ? 0L
+                                                : Math.max(0L, nowNs - lastPresentNs);
+
+                                        // Cooldown to avoid spamming drops
+                                        final boolean dropCooldownOk =
+                                                (nowNs - lastDropNs) >= (basePeriodNs / cooldownDiv);
+
+                                        // Late if the frame is older than our per-mode threshold
+                                        final boolean isLate = frameAgeNs > dropThresholdNs;
+                                        if (isLate) {
+                                            lateStreak++;
+                                        } else {
+                                            lateStreak = 0;
+                                        }
+
+                                        // Backlog: we recently presented a frame (queue is not starved)
+                                        final boolean backlog =
+                                                sinceLastPresent < (long) (backlogWindowMul * (double) basePeriodNs);
+
+                                        // Decide whether to drop this frame
+                                        final boolean shouldDrop =
+                                                isLate &&
+                                                        backlog &&
+                                                        dropCooldownOk &&
+                                                        (lateStreak >= requiredLateStreak);
+
+                                        if (shouldDrop) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                            frameDropped = true;
+                                            lastDropNs = nowNs;
+                                            recentDrops = Math.min(10, recentDrops + 1);
+                                            continue; // stats already recorded at dequeue for this PTS
+                                        }
+
+                                        // Present path:
+                                        // - Smoothness / Balanced: vsync-independent but paced via dropThreshold
+                                        // - Latency            : same present timing, but more aggressive dropping above
+                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        gpuKickPresentHook();
+
+                                        lastPresentNs = nowNs;
+                                        recentDrops = Math.max(0, recentDrops - 1);
+                                    } else {
+                                        // Legacy path: no fine-grained timestamps available
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                        gpuKickPresentHook();
+                                    }
+                                }
+
+
                                 else if (pNow != null && (pNow.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS
                                         || pNow.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
