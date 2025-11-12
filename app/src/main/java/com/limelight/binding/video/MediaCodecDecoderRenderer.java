@@ -1450,6 +1450,14 @@ try {
             }
         } catch (Throwable ignored) {}
 
+        // If AdaptX is active, we only use Choreographer to feed lastVsyncNs and recovery.
+        // Skip dequeue/present from this callback; AdaptX presents from the renderer loop.
+        if (prefs != null && prefs.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_ADAPTX) {
+            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+            Choreographer.getInstance().postFrameCallback(this);
+            return;
+        }
+ 
         // ---- Compute display period and gating threshold based on pacing profile ----
         final int rr = (refreshRate > 0) ? refreshRate : 60;
         final long periodNs = 1_000_000_000L / Math.max(1, rr);
@@ -1581,7 +1589,8 @@ try {
     }
 
     private void startChoreographerThread() {
-        if (prefs == null || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        if (prefs == null || (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED
+                && prefs.framePacing != PreferenceConfiguration.FRAME_PACING_ADAPTX)) {
             // Not using Choreographer in this pacing mode
             return;
         }
@@ -2126,6 +2135,61 @@ boolean isC2Decoder = false;
                                         }
                                     }
                                 }
+                                else if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
+                                    // AdaptX: auto-adaptive pacing (vsync-aligned with dynamic guard)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        final long nowNs = System.nanoTime();
+                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+
+                                        // Pressione da jitter + drop recenti (usa il tuo ijhJitterNs)
+                                        double pressure = Math.min(1.0, (ijhJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
+
+                                        // Soglia drop tra Latency e Smoothness (auto)
+                                        double factor = 1.05 + 0.10 * pressure;   // ~1.05x..1.15x
+                                        factor = Math.max(MIN_FACTOR, Math.min(1.15, factor));
+                                        long dropThresholdNs = (long) (periodNs * factor);
+
+                                        // Heuristica drop (debounce + cooldown)
+                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
+                                        final boolean isLate = frameAgeNs > dropThresholdNs;
+
+                                        if (isLate && dropCooldownOk && sinceLastPresent < (long) (periodNs * 0.50)) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                            frameDropped = true;
+                                            lastDropNs = nowNs;
+                                            recentDrops = Math.min(10, recentDrops + 1);
+                                            continue;
+                                        }
+
+                                        // Target present: allineati al vsync con un piccolo guard (dPLL)
+                                        if (phaseLock == null) { initPhaseLockIfNeeded(); }  // usa già refreshRate -> vsyncPeriod (dPLL)
+                                        long guardNs = Math.min((long) (vsyncPeriodNs * (preferLowerDelays ? 0.018 : 0.030)), 1_500_000L);
+                                        long baseTs = nowNs + guardNs;
+                                        if (phaseLock != null && lastVsyncNs != 0L) {
+                                            baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
+                                        }
+                                        long tsNs = Math.max(nowNs + 150_000L, baseTs); // mai nel passato
+
+                                        // Registra il tempo schedulato per il feedback (OnFrameRendered) e presenta
+                                        try {
+                                            synchronized (scheduledByPtsUs) {
+                                                scheduledByPtsUs.put(lastPtsUs, tsNs);
+                                                if (scheduledByPtsUs.size() > 256) scheduledByPtsUs.removeAt(0);
+                                            }
+                                        } catch (Throwable ignored) {}
+
+                                        videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                        gpuKickPresentHook();
+
+                                        lastPresentNs = tsNs;
+                                        recentDrops = Math.max(0, recentDrops - 1);
+                                    } else {
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                        gpuKickPresentHook();
+                                    }
+                                }
+
                                 else if (pNow != null && (pNow.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS
                                         || pNow.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {

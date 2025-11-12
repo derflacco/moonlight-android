@@ -247,6 +247,7 @@ public class PreferenceConfiguration {
     public static final int FRAME_PACING_CAP_FPS = 2;
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
     public static final int FRAME_PACING_GPU_RAW = 4;
+	public static final int FRAME_PACING_ADAPTX = 5; // Auto-adaptive pacing
 
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
@@ -702,6 +703,8 @@ private static int getFramePacingValue(Context context) {
         else if (str.equals("gpu-raw")) {
             return FRAME_PACING_GPU_RAW;
         }
+		else if (str.equals("adaptx)")) {
+		 return FRAME_PACING_ADAPTX; }
         else {
             // Should never get here
             return FRAME_PACING_MIN_LATENCY;
