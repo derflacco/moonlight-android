@@ -1457,13 +1457,22 @@ try {
             Choreographer.getInstance().postFrameCallback(this);
             return;
         }
- 
-        // ---- Compute display period and gating threshold based on pacing profile ----
-        final int rr = (refreshRate > 0) ? refreshRate : 60;
-        final long periodNs = 1_000_000_000L / Math.max(1, rr);
 
+        // ---- Balanced-only: Choreographer does actual present; other profiles render from their own loop ----
         int pacing = (prefs != null) ? prefs.framePacing
                 : com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED;
+
+        if (pacing != com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            // Non-Balanced profiles (GPU_RAW, Cap FPS, Max Smoothness, AdaptX renderer, etc.)
+            // rely on the renderer thread for present. Here we only keep codec recovery alive.
+            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+            Choreographer.getInstance().postFrameCallback(this);
+            return;
+        }
+
+        // ---- Compute display period and gating threshold for Balanced profile ----
+        final int rr = (refreshRate > 0) ? refreshRate : 60;
+        final long periodNs = 1_000_000_000L / Math.max(1, rr);
 
         // Gate percentage per profile:
         // - GPU_RAW: render exactly once per period (tight = 100%)
