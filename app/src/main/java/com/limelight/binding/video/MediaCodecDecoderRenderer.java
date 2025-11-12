@@ -1970,29 +1970,30 @@ boolean isC2Decoder = false;
                                     }
 
                                     numFramesOut++;
-                                    lastDecoderPtsUs = __lastPtsUs;
                                 } catch (Throwable ignored) {}
 
-                                // EWMA decode->present
+                                // RQH inter-arrival jitter (latest-only)
                                 if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
                                     final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
 
-// RQH: instantaneous deviation + online quantile (no arrays, no sort)
+                                    // RQH: instantaneous deviation + online quantile (no arrays, no sort)
                                     final double instDev = Math.min(
                                             Math.abs(sampleNs - expectedInterNs),
                                             expectedInterNs * 0.75 // clamp extreme outliers
                                     );
 
-// Update the online quantile for the desired percentile
+                                    // Update the online quantile for the desired percentile
                                     final double pctl = ijhQuant.update(instDev);
 
-// Hybrid jitter: weighted instant + online quantile, then clamp
-                                    double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
-                                    double lo = expectedInterNs * 0.02;  // >= 2% of period
-                                    double hi = expectedInterNs * 0.50;  // <= 50% of period
+                                    // Hybrid jitter: weighted instant + online quantile, then clamp
+                                    final double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
+                                    final double lo = expectedInterNs * 0.02;  // >= 2% of period
+                                    final double hi = expectedInterNs * 0.50;  // <= 50% of period
                                     ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
 
                                 }
+                                // Update PTS after computing jitter to avoid losing the sample
+                                lastDecoderPtsUs = __lastPtsUs;
                                 continue;
                             }
                         } catch (Throwable ignored) {}
