@@ -1950,15 +1950,10 @@ boolean isC2Decoder = false;
                                 try { updateDecodeLatencyStats(ptsUs); } catch (Throwable ignored) {}
 
                                 if (__last >= 0) {
-                                    // Drop older buffer without rendering
-                                    if (__last >= 0) {
-                                        // Drop older buffer without rendering (count as recent drop for adaptive thresholds)
-                                        try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                        recentDrops = Math.min(10, recentDrops + 1);
-                                    }
-
+                                    // Drop older buffer without rendering (count as recent drop for adaptive thresholds)
+                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                    recentDrops = Math.min(10, recentDrops + 1);
                                 }
-
                                 __last = __idx;
                                 __lastPtsUs = ptsUs;
                                 __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
