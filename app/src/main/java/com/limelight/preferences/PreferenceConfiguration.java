@@ -914,10 +914,16 @@ private static int getFramePacingValue(Context context) {
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
-        if (warpFactorStr.equals("warp")) {
-            config.framePacingWarpFactor = 2;
-        } else if (warpFactorStr.equals("warp2")) {
-            config.framePacingWarpFactor = 4;
+        switch (warpFactorStr) {
+            case "warp":
+                config.framePacingWarpFactor = 2;
+                break;
+            case "warp2":
+                config.framePacingWarpFactor = 4;
+                break;
+            case "gpu_raw":
+                config.framePacingWarpFactor = 4;
+                break;
         }
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
