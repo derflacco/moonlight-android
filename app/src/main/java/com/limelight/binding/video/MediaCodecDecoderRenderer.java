@@ -1960,17 +1960,16 @@ boolean isC2Decoder = false;
                             }
 
                             if (__last >= 0) {
-                                final long __nowNs = System.nanoTime();
-
                                 // Present the newest buffer ASAP (timestamped)
                                 if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                    final long __nowNs = System.nanoTime();
                                     videoDecoder.releaseOutputBuffer(__last, __nowNs);
-                                    gpuKickPresentHook();
                                 } else {
                                     videoDecoder.releaseOutputBuffer(__last, true);
-                                    gpuKickPresentHook();
                                 }
+                                gpuKickPresentHook();
 
+                                // Stats update - before jitter calculation to keep timing consistent
                                 try {
                                     activeWindowVideoStats.totalFramesRendered++;
                                     if (MediaCodecDecoderRenderer.this.perfHint != null
@@ -1985,25 +1984,29 @@ boolean isC2Decoder = false;
                                     numFramesOut++;
                                 } catch (Throwable ignored) {}
 
-                                // RQH inter-arrival jitter (latest-only)
+                                // RQH inter-arrival jitter (latest-only) - OPTIMIZED VERSION
                                 if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
                                     final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
+
+                                    // Pre-compute constants to avoid repeated multiplications
+                                    final double expectedInterClamp   = expectedInterNs * 0.75;
+                                    final double minJitterThreshold   = expectedInterNs * 0.02;
+                                    final double maxJitterThreshold   = expectedInterNs * 0.50;
 
                                     // RQH: instantaneous deviation + online quantile (no arrays, no sort)
                                     final double instDev = Math.min(
                                             Math.abs(sampleNs - expectedInterNs),
-                                            expectedInterNs * 0.75 // clamp extreme outliers
+                                            expectedInterClamp // clamp extreme outliers
                                     );
 
                                     // Update the online quantile for the desired percentile
                                     final double pctl = ijhQuant.update(instDev);
 
                                     // Hybrid jitter: weighted instant + online quantile, then clamp
-                                    final double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
-                                    final double lo = expectedInterNs * 0.02;  // >= 2% of period
-                                    final double hi = expectedInterNs * 0.50;  // <= 50% of period
-                                    ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
-
+                                    final double hybrid =
+                                            (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
+                                    ijhJitterNs = Math.max(minJitterThreshold,
+                                            Math.min(maxJitterThreshold, hybrid));
                                 }
                                 // Update PTS after computing jitter to avoid losing the sample
                                 lastDecoderPtsUs = __lastPtsUs;
