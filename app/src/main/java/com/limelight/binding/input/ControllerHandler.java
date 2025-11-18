@@ -58,7 +58,9 @@ import java.util.List;
 import java.util.Map;
 
 public class ControllerHandler implements InputManager.InputDeviceListener, UsbDriverListener {
-
+    // Mouse emulation speed scale to compensate higher update rate (10 ms vs 50 ms).
+// 10 / 50 = 0.2 -> same overall speed, smoother steps.
+    private static final float MOUSE_EMULATION_SPEED_SCALE = 0.2f;
     private static final int MAXIMUM_BUMPER_UP_DELAY_MS = 100;
 
     private static final int START_DOWN_TIME_MOUSE_MODE_MS = 750;
@@ -74,6 +76,22 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private static final short MAX_GAMEPADS = 16; // Limited by bits in activeGamepadMask
 
     private static final int BATTERY_RECHECK_INTERVAL_MS = 120 * 1000;
+    // Apply speed scaling while preserving direction and avoiding zeros on tiny movements.
+    private int applyMouseSpeedScale(int delta) {
+        if (delta == 0) {
+            return 0;
+        }
+
+        float scaled = delta * MOUSE_EMULATION_SPEED_SCALE;
+        int result = Math.round(scaled);
+
+        // Ensure we don't lose small movements entirely
+        if (result == 0) {
+            return (delta > 0) ? 1 : -1;
+        }
+
+        return result;
+    }
 
     private static final Map<Integer, Integer> ANDROID_TO_LI_BUTTON_MAP = Map.ofEntries(
             Map.entry(KeyEvent.KEYCODE_BUTTON_A, ControllerPacket.A_FLAG),
@@ -2058,15 +2076,20 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             short dx;
             short dy;
 
-            // Use a fixed amount of mouse movement while the X button is pressed
             if (mouseEmulationXDown) {
-                // Convert the vector value to -1/0/+1 and scale by the pixel multiplier
-                dx = (short) (Integer.signum((int) vector.getX()) * mouseEmulationPixelMultiplier);
-                dy = (short) (Integer.signum((int) -vector.getY()) * mouseEmulationPixelMultiplier);
+                // Fixed-pixel mode while X is held: start from +/-pixelMultiplier
+                int rawDx = Integer.signum((int) vector.getX()) * mouseEmulationPixelMultiplier;
+                int rawDy = Integer.signum((int) -vector.getY()) * mouseEmulationPixelMultiplier;
+
+                dx = (short) applyMouseSpeedScale(rawDx);
+                dy = (short) applyMouseSpeedScale(rawDy);
             } else {
-                // If X button is not pressed, base the movement on how far the stick is from center
-                dx = (short) vector.getX();
-                dy = (short) -vector.getY();
+                // Analog mode: based on stick distance from center
+                int rawDx = (int) vector.getX();
+                int rawDy = (int) -vector.getY();
+
+                dx = (short) applyMouseSpeedScale(rawDx);
+                dy = (short) applyMouseSpeedScale(rawDy);
             }
 
             if (inputSender != null) {
@@ -3164,7 +3187,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         public int mouseEmulationPixelMultiplier = 1;
 
         public int mouseEmulationLastInputMap;
-        public final int mouseEmulationReportPeriod = 50;
+        public final int mouseEmulationReportPeriod = 10;
 
         public final Runnable mouseEmulationRunnable = new Runnable() {
             @Override
