@@ -2105,14 +2105,26 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
     private void sendEmulatedMouseScroll(short x, short y) {
         Vector2d vector = convertRawStickAxisToPixelMovement(x, y);
         if (vector.getMagnitude() >= 1) {
-            final short vY = (short) vector.getY();
-            final short vX = (short) vector.getX();
+            // Start from the raw scroll deltas derived from the stick
+            int rawVY = (int) vector.getY();
+            int rawVX = (int) vector.getX();
+
+            // Apply the same speed scaling used for cursor movement
+            short vY = (short) applyMouseSpeedScale(rawVY);
+            short vX = (short) applyMouseSpeedScale(rawVX);
+
+            if (vY == 0 && vX == 0) {
+                // Nothing meaningful to send after scaling
+                return;
+            }
 
             if (inputSender != null) {
+                final short fVY = vY;
+                final short fVX = vX;
                 // Route high-res scroll events through InputSender as well
                 inputSender.post(() -> {
-                    conn.sendMouseHighResScroll(vY);
-                    conn.sendMouseHighResHScroll(vX);
+                    conn.sendMouseHighResScroll(fVY);
+                    conn.sendMouseHighResHScroll(fVX);
                 });
             } else {
                 conn.sendMouseHighResScroll(vY);
