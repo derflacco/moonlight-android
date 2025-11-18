@@ -1250,9 +1250,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         short rightStickX = 0;
         short rightStickY = 0;
 
-        // In order to properly handle controllers that are split into multiple devices,
-        // we must aggregate all controllers with the same controller number into a single
-        // device before we send it.
+        // Aggregate all controllers with the same controller number into a single device
         for (int i = 0; i < inputDeviceContexts.size(); i++) {
             GenericControllerContext context = inputDeviceContexts.valueAt(i);
             if (context.assignedControllerNumber &&
@@ -1292,110 +1290,148 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         }
 
         if (originalContext.mouseEmulationActive) {
-            int changedMask = inputMap ^  originalContext.mouseEmulationLastInputMap;
+            int changedMask = inputMap ^ originalContext.mouseEmulationLastInputMap;
 
             boolean aDown = (inputMap & ControllerPacket.A_FLAG) != 0;
             boolean bDown = (inputMap & ControllerPacket.B_FLAG) != 0;
-
             boolean xDown = (inputMap & ControllerPacket.X_FLAG) != 0;
             boolean yDown = (inputMap & ControllerPacket.Y_FLAG) != 0;
 
             originalContext.mouseEmulationLastInputMap = inputMap;
 
-            // Set the flag for the fixed pixel mouse movement while X_FLAG button is pressed
-            if((changedMask & ControllerPacket.X_FLAG) != 0)
-            {
-                // Set true when pressed
-                if( xDown ) {
+            // X button toggles fixed-pixel mouse mode while held
+            if ((changedMask & ControllerPacket.X_FLAG) != 0) {
+                if (xDown) {
                     originalContext.mouseEmulationXDown = true;
-                }
-                // Set false when released
-                else
-                {
+                } else {
                     originalContext.mouseEmulationXDown = false;
                 }
             }
 
-            if((changedMask & ControllerPacket.Y_FLAG) != 0)
-            {
-                if( yDown )
-                {
+            // Y button doubles the pixel multiplier on each press (up to 255, then wraps to 1)
+            if ((changedMask & ControllerPacket.Y_FLAG) != 0) {
+                if (yDown) {
                     // Double the pixel multiplier every button press
                     originalContext.mouseEmulationPixelMultiplier *= 2;
-                    if( originalContext.mouseEmulationPixelMultiplier > 255 )
-                    {
+                    if (originalContext.mouseEmulationPixelMultiplier > 255) {
                         // Reset the multiplier back to 1 if it gets too big
                         originalContext.mouseEmulationPixelMultiplier = 1;
                     }
-                }
-                else {
-                    // Do nothing as this is when the button is released; Holding the button will not continuously increase the pixel multiplier
+                } else {
+                    // No-op on release; we only change the multiplier on press
                 }
             }
+
+            // Map A/B to left/right mouse buttons
             if ((changedMask & ControllerPacket.A_FLAG) != 0) {
                 if (aDown) {
-                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT)); } else { conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT); }
-                }
-                else {
-                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT)); } else { conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT); }
+                    if (inputSender != null) {
+                        inputSender.post(() ->
+                                conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT));
+                    } else {
+                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
+                    }
+                } else {
+                    if (inputSender != null) {
+                        inputSender.post(() ->
+                                conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT));
+                    } else {
+                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
+                    }
                 }
             }
             if ((changedMask & ControllerPacket.B_FLAG) != 0) {
                 if (bDown) {
-                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT)); } else { conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT); }
-                }
-
-// === SNAPPY INPUT: delta-threshold gating ===
-if (inputSender != null) {
-    final int ci = Math.max(0, Math.min(MAX_CONTROLLERS - 1, controllerNumber));
-    boolean mapChanged = (inputMap != lastSentInputMap[ci]);
-    boolean axesChanged =
-            Math.abs(leftStickX - lastSentLeftStickX[ci]) >= AXIS_DELTA_MIN ||
-            Math.abs(leftStickY - lastSentLeftStickY[ci]) >= AXIS_DELTA_MIN ||
-            Math.abs(rightStickX - lastSentRightStickX[ci]) >= AXIS_DELTA_MIN ||
-            Math.abs(rightStickY - lastSentRightStickY[ci]) >= AXIS_DELTA_MIN ||
-            Math.abs((leftTrigger & 0xFF) - (lastSentLeftTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN ||
-            Math.abs((rightTrigger & 0xFF) - (lastSentRightTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN;
-    if (!mapChanged && !axesChanged) {
-        return;
-    }
-    lastSentInputMap[ci] = inputMap;
-    lastSentLeftStickX[ci] = leftStickX;
-    lastSentLeftStickY[ci] = leftStickY;
-    lastSentRightStickX[ci] = rightStickX;
-    lastSentRightStickY[ci] = rightStickY;
-    lastSentLeftTrigger[ci] = leftTrigger;
-    lastSentRightTrigger[ci] = rightTrigger;
-}
-                else {
-                    if (inputSender != null) { inputSender.post(() -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT)); } else { conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT); }
+                    if (inputSender != null) {
+                        inputSender.post(() ->
+                                conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT));
+                    } else {
+                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
+                    }
+                } else {
+                    if (inputSender != null) {
+                        inputSender.post(() ->
+                                conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT));
+                    } else {
+                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
+                    }
                 }
             }
+
+            // D-pad mapped to scroll while in mouse emulation
             if ((changedMask & ControllerPacket.UP_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.UP_FLAG) != 0) {
-                    conn.sendMouseScroll((byte) 1);
-                }
-            }
-            if ((changedMask & ControllerPacket.DOWN_FLAG) != 0) {
-                if ((inputMap & ControllerPacket.DOWN_FLAG) != 0) {
-                    conn.sendMouseScroll((byte) -1);
-                }
-            }
-            if ((changedMask & ControllerPacket.RIGHT_FLAG) != 0) {
-                if ((inputMap & ControllerPacket.RIGHT_FLAG) != 0) {
-                    conn.sendMouseHScroll((byte) 1);
-                }
-            }
-            if ((changedMask & ControllerPacket.LEFT_FLAG) != 0) {
-                if ((inputMap & ControllerPacket.LEFT_FLAG) != 0) {
-                    conn.sendMouseHScroll((byte) -1);
+                    if (inputSender != null) {
+                        inputSender.post(() -> conn.sendMouseScroll((byte) 1));
+                    } else {
+                        conn.sendMouseScroll((byte) 1);
+                    }
                 }
             }
 
+            if ((changedMask & ControllerPacket.DOWN_FLAG) != 0) {
+                if ((inputMap & ControllerPacket.DOWN_FLAG) != 0) {
+                    if (inputSender != null) {
+                        inputSender.post(() -> conn.sendMouseScroll((byte) -1));
+                    } else {
+                        conn.sendMouseScroll((byte) -1);
+                    }
+                }
+            }
+
+            if ((changedMask & ControllerPacket.RIGHT_FLAG) != 0) {
+                if ((inputMap & ControllerPacket.RIGHT_FLAG) != 0) {
+                    if (inputSender != null) {
+                        inputSender.post(() -> conn.sendMouseHScroll((byte) 1));
+                    } else {
+                        conn.sendMouseHScroll((byte) 1);
+                    }
+                }
+            }
+
+            if ((changedMask & ControllerPacket.LEFT_FLAG) != 0) {
+                if ((inputMap & ControllerPacket.LEFT_FLAG) != 0) {
+                    if (inputSender != null) {
+                        inputSender.post(() -> conn.sendMouseHScroll((byte) -1));
+                    } else {
+                        conn.sendMouseHScroll((byte) -1);
+                    }
+                }
+            }
+
+            // While mouse emulation is active, always send a neutral controller state
             conn.sendControllerInput(controllerNumber, getActiveControllerMask(),
-                    (short)0, (byte)0, (byte)0, (short)0, (short)0, (short)0, (short)0);
+                    (short) 0, (byte) 0, (byte) 0,
+                    (short) 0, (short) 0,
+                    (short) 0, (short) 0);
         }
         else {
+            // === SNAPPY INPUT: delta-threshold gating (controller mode only) ===
+            if (inputSender != null) {
+                final int ci = Math.max(0, Math.min(MAX_CONTROLLERS - 1, controllerNumber));
+                boolean mapChanged = (inputMap != lastSentInputMap[ci]);
+                boolean axesChanged =
+                        Math.abs(leftStickX - lastSentLeftStickX[ci]) >= AXIS_DELTA_MIN ||
+                                Math.abs(leftStickY - lastSentLeftStickY[ci]) >= AXIS_DELTA_MIN ||
+                                Math.abs(rightStickX - lastSentRightStickX[ci]) >= AXIS_DELTA_MIN ||
+                                Math.abs(rightStickY - lastSentRightStickY[ci]) >= AXIS_DELTA_MIN ||
+                                Math.abs((leftTrigger & 0xFF) - (lastSentLeftTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN ||
+                                Math.abs((rightTrigger & 0xFF) - (lastSentRightTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN;
+
+                if (!mapChanged && !axesChanged) {
+                    // No significant change: skip sending a new packet
+                    return;
+                }
+
+                lastSentInputMap[ci] = inputMap;
+                lastSentLeftStickX[ci] = leftStickX;
+                lastSentLeftStickY[ci] = leftStickY;
+                lastSentRightStickX[ci] = rightStickX;
+                lastSentRightStickY[ci] = rightStickY;
+                lastSentLeftTrigger[ci] = leftTrigger;
+                lastSentRightTrigger[ci] = rightTrigger;
+            }
+
             conn.sendControllerInput(controllerNumber, getActiveControllerMask(),
                     inputMap,
                     leftTrigger, rightTrigger,
@@ -2013,28 +2049,52 @@ if (inputSender != null) {
         return vector;
     }
 
-    private void sendEmulatedMouseMove(short x, short y, boolean mouseEmulationXDown, int mouseEmulationPixelMultiplier) {
+    private void sendEmulatedMouseMove(short x, short y,
+                                       boolean mouseEmulationXDown,
+                                       int mouseEmulationPixelMultiplier) {
         Vector2d vector = convertRawStickAxisToPixelMovement(x, y);
         if (vector.getMagnitude() >= 1) {
 
-            // Used a fixed amount of mouse movement while the X button is pressed
-            if(mouseEmulationXDown == true )
-            {
-                // convert the vector number to -1 if negative and +1 if positive and then send the mouse movement in pixels
-                conn.sendMouseMove((short)(Integer.signum((int)vector.getX()) * mouseEmulationPixelMultiplier) , (short)(Integer.signum((int)-vector.getY()) * mouseEmulationPixelMultiplier) );
+            short dx;
+            short dy;
+
+            // Use a fixed amount of mouse movement while the X button is pressed
+            if (mouseEmulationXDown) {
+                // Convert the vector value to -1/0/+1 and scale by the pixel multiplier
+                dx = (short) (Integer.signum((int) vector.getX()) * mouseEmulationPixelMultiplier);
+                dy = (short) (Integer.signum((int) -vector.getY()) * mouseEmulationPixelMultiplier);
+            } else {
+                // If X button is not pressed, base the movement on how far the stick is from center
+                dx = (short) vector.getX();
+                dy = (short) -vector.getY();
             }
-            else {
-                // If X button is not pressed, base the movement on how much the stick is moved from the center
-                conn.sendMouseMove((short) vector.getX(), (short) -vector.getY());
+
+            if (inputSender != null) {
+                final short fDx = dx;
+                final short fDy = dy;
+                // Route mouse moves through InputSender to keep input single-threaded
+                inputSender.post(() -> conn.sendMouseMove(fDx, fDy));
+            } else {
+                conn.sendMouseMove(dx, dy);
             }
         }
     }
-
     private void sendEmulatedMouseScroll(short x, short y) {
         Vector2d vector = convertRawStickAxisToPixelMovement(x, y);
         if (vector.getMagnitude() >= 1) {
-            conn.sendMouseHighResScroll((short)vector.getY());
-            conn.sendMouseHighResHScroll((short)vector.getX());
+            final short vY = (short) vector.getY();
+            final short vX = (short) vector.getX();
+
+            if (inputSender != null) {
+                // Route high-res scroll events through InputSender as well
+                inputSender.post(() -> {
+                    conn.sendMouseHighResScroll(vY);
+                    conn.sendMouseHighResHScroll(vX);
+                });
+            } else {
+                conn.sendMouseHighResScroll(vY);
+                conn.sendMouseHighResHScroll(vX);
+            }
         }
     }
 
