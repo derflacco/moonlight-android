@@ -61,6 +61,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     // Mouse emulation speed scale to compensate higher update rate (10 ms vs 50 ms).
 // 10 / 50 = 0.2 -> same overall speed, smoother steps.
     private static final float MOUSE_EMULATION_SPEED_SCALE = 0.2f;
+    // Mouse emulation: fast scroll multiplier when LT is held
+    private static final int MOUSE_SCROLL_FAST_MULTIPLIER = 3;
     private static final int MAXIMUM_BUMPER_UP_DELAY_MS = 100;
 
     private static final int START_DOWN_TIME_MOUSE_MODE_MS = 750;
@@ -1377,12 +1379,19 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             }
 
             // D-pad mapped to scroll while in mouse emulation
+            // Fast scroll when LT is held in mouse emulation
+            boolean fastScroll = ((leftTrigger & 0xFF) > 0);
+            final byte scrollStep = (byte) (fastScroll ? MOUSE_SCROLL_FAST_MULTIPLIER : 1);
+            final byte negScrollStep = (byte) -scrollStep;
+
+            // D-pad mapped to scroll while in mouse emulation
             if ((changedMask & ControllerPacket.UP_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.UP_FLAG) != 0) {
                     if (inputSender != null) {
-                        inputSender.post(() -> conn.sendMouseScroll((byte) 1));
+                        final byte step = scrollStep;
+                        inputSender.post(() -> conn.sendMouseScroll(step));
                     } else {
-                        conn.sendMouseScroll((byte) 1);
+                        conn.sendMouseScroll(scrollStep);
                     }
                 }
             }
@@ -1390,9 +1399,10 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             if ((changedMask & ControllerPacket.DOWN_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.DOWN_FLAG) != 0) {
                     if (inputSender != null) {
-                        inputSender.post(() -> conn.sendMouseScroll((byte) -1));
+                        final byte step = negScrollStep;
+                        inputSender.post(() -> conn.sendMouseScroll(step));
                     } else {
-                        conn.sendMouseScroll((byte) -1);
+                        conn.sendMouseScroll(negScrollStep);
                     }
                 }
             }
@@ -1400,9 +1410,10 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             if ((changedMask & ControllerPacket.RIGHT_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.RIGHT_FLAG) != 0) {
                     if (inputSender != null) {
-                        inputSender.post(() -> conn.sendMouseHScroll((byte) 1));
+                        final byte step = scrollStep;
+                        inputSender.post(() -> conn.sendMouseHScroll(step));
                     } else {
-                        conn.sendMouseHScroll((byte) 1);
+                        conn.sendMouseHScroll(scrollStep);
                     }
                 }
             }
@@ -1410,9 +1421,10 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             if ((changedMask & ControllerPacket.LEFT_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.LEFT_FLAG) != 0) {
                     if (inputSender != null) {
-                        inputSender.post(() -> conn.sendMouseHScroll((byte) -1));
+                        final byte step = negScrollStep;
+                        inputSender.post(() -> conn.sendMouseHScroll(step));
                     } else {
-                        conn.sendMouseHScroll((byte) -1);
+                        conn.sendMouseHScroll(negScrollStep);
                     }
                 }
             }
@@ -2102,14 +2114,18 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             }
         }
     }
-    private void sendEmulatedMouseScroll(short x, short y) {
+    private void sendEmulatedMouseScroll(short x, short y, boolean fastScroll) {
         Vector2d vector = convertRawStickAxisToPixelMovement(x, y);
         if (vector.getMagnitude() >= 1) {
-            // Start from the raw scroll deltas derived from the stick
             int rawVY = (int) vector.getY();
             int rawVX = (int) vector.getX();
 
-            // Apply the same speed scaling used for cursor movement
+            // LT held -> amplify scroll deltas before speed scaling
+            if (fastScroll) {
+                rawVY *= MOUSE_SCROLL_FAST_MULTIPLIER;
+                rawVX *= MOUSE_SCROLL_FAST_MULTIPLIER;
+            }
+
             short vY = (short) applyMouseSpeedScale(rawVY);
             short vX = (short) applyMouseSpeedScale(rawVX);
 
@@ -3208,20 +3224,27 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                     return;
                 }
 
-                // Send mouse events from analog sticks
-                if (prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.RIGHT) {
+                // LT held -> enable fast scroll mode
+                final boolean fastScroll = ((leftTrigger & 0xFF) > 0);
 
-                    // Changed absolute value
-                    sendEmulatedMouseMove(leftStickX, leftStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                    sendEmulatedMouseScroll(rightStickX, rightStickY);
+                if (prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.RIGHT) {
+                    // Left stick = move, right stick = scroll
+                    sendEmulatedMouseMove(leftStickX, leftStickY,
+                            mouseEmulationXDown, mouseEmulationPixelMultiplier);
+                    sendEmulatedMouseScroll(rightStickX, rightStickY, fastScroll);
                 }
                 else if (prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.LEFT) {
-                    sendEmulatedMouseMove(rightStickX, rightStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                    sendEmulatedMouseScroll(leftStickX, leftStickY);
+                    // Right stick = move, left stick = scroll
+                    sendEmulatedMouseMove(rightStickX, rightStickY,
+                            mouseEmulationXDown, mouseEmulationPixelMultiplier);
+                    sendEmulatedMouseScroll(leftStickX, leftStickY, fastScroll);
                 }
                 else {
-                    sendEmulatedMouseMove(leftStickX, leftStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                    sendEmulatedMouseMove(rightStickX, rightStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
+                    // Both sticks used for movement (no analog scroll)
+                    sendEmulatedMouseMove(leftStickX, leftStickY,
+                            mouseEmulationXDown, mouseEmulationPixelMultiplier);
+                    sendEmulatedMouseMove(rightStickX, rightStickY,
+                            mouseEmulationXDown, mouseEmulationPixelMultiplier);
                 }
 
                 // Requeue the callback
