@@ -1836,8 +1836,8 @@ boolean isC2Decoder = false;
                 final EWQuantile ijhQuant = new EWQuantile(
                         IJH_PCTL,
                         Math.max(expectedInterNs * 0.05, 1_000_000.0), // init ~5% period, >=1 ms
-                        0.18,   // alphaUp   (faster rise on bursts)
-                        0.06    // alphaDn   (slower decay to avoid flapping)
+                        0.24,   // alphaUp   (faster rise on bursts)
+                        0.04    // alphaDn   (slower decay to avoid flapping)
                 );
 
 // Reused BufferInfo objects
