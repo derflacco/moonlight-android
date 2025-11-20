@@ -223,6 +223,37 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return pfx.append(text).toString(); // shift solo prima riga
     }
     // --- end helpers ---
+    // --- Frame deadline gating helpers (early drop) ---
+    private static long advancePredictedVsync(long predictedNs, long nowNs, long periodNs) {
+        if (periodNs <= 0) return nowNs;
+        if (predictedNs <= 0) {
+            return nowNs + periodNs;
+        }
+        long delta = nowNs - predictedNs;
+        if (delta >= 0) {
+            long steps = (delta / periodNs) + 1;
+            predictedNs += steps * periodNs;
+        }
+        return predictedNs;
+    }
+
+    private static long computeDeadlineMarginNs(
+            long periodNs, double jitterNs, boolean usingDirectPresent, boolean preferLowerDelays) {
+
+        // Base safety margin: tighter for GPU_RAW/Direct Present, looser for GL/compositor paths
+        final long base = usingDirectPresent ? 250_000L : 400_000L; // 0.25 ms vs 0.40 ms
+        final double scale = preferLowerDelays ? 0.8 : 1.2;
+
+        long margin = base + (long) (Math.max(0.0, jitterNs) * scale);
+
+        final long minMargin = 150_000L; // keep same floor used by present scheduling
+        final long maxMargin = periodNs / 3; // don't eat more than ~33% of a frame period
+
+        if (margin < minMargin) margin = minMargin;
+        if (margin > maxMargin) margin = maxMargin;
+
+        return margin;
+    }
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
@@ -1822,6 +1853,9 @@ boolean isC2Decoder = false;
                 int    lateStreak        = 0;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
+                // --- Frame deadline gating (early drop) ---
+                final int deadlineMissHystFrac = 8; // clear miss if later than period/8
+                long predictedVsyncNs = 0L;
 
 // --- Robust Quantile Hybrid (RQH) state ---
 // Keep naming compatible with old IJH usage where possible
@@ -2147,7 +2181,27 @@ boolean isC2Decoder = false;
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        // --- Deadline gating: if we already missed the next vsync window, drop early ---
+                                        predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, nowNs, periodNs);
 
+                                        final long marginNs = computeDeadlineMarginNs(
+                                                periodNs,
+                                                ijhJitterNs,
+                                                usingDirectPresent,
+                                                preferLowerDelays
+                                        );
+                                        final long deadlineNs = predictedVsyncNs - marginNs;
+                                        final long missByNs = nowNs - deadlineNs;
+                                        final boolean missDeadline = missByNs > 0;
+                                        final boolean clearMiss = missByNs > (periodNs / deadlineMissHystFrac);
+
+                                        if (missDeadline && (lateStreak > 0 || clearMiss)) {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                            frameDropped = true;
+                                            lastDropNs = nowNs;
+                                            recentDrops = Math.min(10, recentDrops + 1);
+                                            continue;
+                                        }
                                         // Pressione da jitter + drop recenti (usa il tuo ijhJitterNs)
                                         double pressure = Math.min(1.0, (ijhJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
 
@@ -2189,7 +2243,7 @@ boolean isC2Decoder = false;
                                         videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                         gpuKickPresentHook();
 
-                                        lastPresentNs = tsNs;
+                                        predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, tsNs, periodNs);
                                         recentDrops = Math.max(0, recentDrops - 1);
                                     } else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
