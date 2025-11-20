@@ -2181,6 +2181,7 @@ boolean isC2Decoder = false;
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
                                         final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+
                                         // --- Deadline gating: if we already missed the next vsync window, drop early ---
                                         predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, nowNs, periodNs);
 
@@ -2202,16 +2203,17 @@ boolean isC2Decoder = false;
                                             recentDrops = Math.min(10, recentDrops + 1);
                                             continue;
                                         }
-                                        // Pressione da jitter + drop recenti (usa il tuo ijhJitterNs)
-                                        double pressure = Math.min(1.0, (ijhJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
 
-                                        // Soglia drop tra Latency e Smoothness (auto)
+                                        // Pressure from jitter + recent drops (using your ijhJitterNs)
+                                        double pressure = Math.min(1.0, (ijhJitterNs / (double) periodNs) + (recentDrops * 0.1));
+
+                                        // Drop threshold between Latency and Smoothness (auto)
                                         double factor = 1.05 + 0.10 * pressure;   // ~1.05x..1.15x
-                                        factor = Math.max(MIN_FACTOR, Math.min(1.15, factor));
+                                        factor = Math.max(1.05, Math.min(1.15, factor));
                                         long dropThresholdNs = (long) (periodNs * factor);
 
-                                        // Heuristica drop (debounce + cooldown)
-                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
+                                        // Drop heuristic (debounce + cooldown)
+                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : Math.max(0L, nowNs - lastPresentNs);
                                         final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
 
@@ -2223,16 +2225,16 @@ boolean isC2Decoder = false;
                                             continue;
                                         }
 
-                                        // Target present: allineati al vsync con un piccolo guard (dPLL)
-                                        if (phaseLock == null) { initPhaseLockIfNeeded(); }  // usa già refreshRate -> vsyncPeriod (dPLL)
-                                        long guardNs = Math.min((long) (vsyncPeriodNs * (preferLowerDelays ? 0.018 : 0.030)), 1_500_000L);
+                                        // Target present: align to vsync with small guard (dPLL)
+                                        if (phaseLock == null) { initPhaseLockIfNeeded(); }  // uses refreshRate -> vsyncPeriod (dPLL)
+                                        long guardNs = Math.min((long) (periodNs * (preferLowerDelays ? 0.018 : 0.030)), 1_500_000L);
                                         long baseTs = nowNs + guardNs;
                                         if (phaseLock != null && lastVsyncNs != 0L) {
                                             baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
                                         }
-                                        long tsNs = Math.max(nowNs + 150_000L, baseTs); // mai nel passato
+                                        long tsNs = Math.max(nowNs + 150_000L, baseTs); // never in the past
 
-                                        // Registra il tempo schedulato per il feedback (OnFrameRendered) e presenta
+                                        // Register scheduled time for feedback (OnFrameRendered) and present
                                         try {
                                             synchronized (scheduledByPtsUs) {
                                                 scheduledByPtsUs.put(lastPtsUs, tsNs);
@@ -2244,6 +2246,7 @@ boolean isC2Decoder = false;
                                         gpuKickPresentHook();
 
                                         predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, tsNs, periodNs);
+                                        lastPresentNs = tsNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
                                     } else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
