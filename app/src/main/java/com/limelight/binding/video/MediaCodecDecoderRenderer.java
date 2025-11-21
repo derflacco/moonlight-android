@@ -77,6 +77,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         int size() { return tail - head; }
         void clear() { head = tail = 0; }
     }
+    // Shared BufferInfo instances to avoid allocations in hot paths
+    private final android.media.MediaCodec.BufferInfo dequeueBufferInfo =
+            new android.media.MediaCodec.BufferInfo();  // main dequeue path
+    private final android.media.MediaCodec.BufferInfo ullBufferInfo =
+            new android.media.MediaCodec.BufferInfo();  // ULL/LFR drain path
+
     // Phase-locked PI controller to align scheduled present time to the vsync grid.
 // Works in nanoseconds; zero allocations in hot path.
     private static final class PhaseLock {
@@ -1874,9 +1880,9 @@ boolean isC2Decoder = false;
                         0.04    // alphaDn   (slower decay to avoid flapping)
                 );
 
-// Reused BufferInfo objects
-                final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
-                final android.media.MediaCodec.BufferInfo latestInfo = new android.media.MediaCodec.BufferInfo();
+                // Reused BufferInfo objects (pre-allocated at renderer scope)
+                final android.media.MediaCodec.BufferInfo info = MediaCodecDecoderRenderer.this.dequeueBufferInfo;
+                final android.media.MediaCodec.BufferInfo latestInfo = MediaCodecDecoderRenderer.this.ullBufferInfo;
 
                 boolean phmGpuRawLast = (prefs != null
                         && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
