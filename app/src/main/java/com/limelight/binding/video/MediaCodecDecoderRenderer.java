@@ -2180,8 +2180,10 @@ boolean isC2Decoder = false;
                                     // AdaptX: auto-adaptive pacing (vsync-aligned with dynamic guard)
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
+                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        if (frameAgeNs < 0L) {
+                                            frameAgeNs = 0L;
+                                        }
                                         // --- Deadline gating: if we already missed the next vsync window, drop early ---
                                         predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, nowNs, periodNs);
 
@@ -2258,7 +2260,10 @@ boolean isC2Decoder = false;
                                         || pNow.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        if (frameAgeNs < 0L) {
+                                            frameAgeNs = 0L;
+                                        }
 
                                         double pressure = Math.min(1.0, (ijhJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
                                         double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
@@ -2304,8 +2309,10 @@ boolean isC2Decoder = false;
                                     // Latency mode
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
+                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        if (frameAgeNs < 0L) {
+                                            frameAgeNs = 0L;
+                                        }
                                         // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
                                         double backPressure = Math.min(1.0, (double) tryAgainStreak / 6.0);
                                         double streamHz = Math.max(1.0, (double) tfps);
