@@ -2219,6 +2219,11 @@ boolean isC2Decoder = false;
                                         final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
 
+                                        if (isLate) {
+                                            lateStreak++;
+                                        } else if (lateStreak > 0) {
+                                            lateStreak = 0;
+                                        }
                                         if (isLate && dropCooldownOk && sinceLastPresent < (long) (periodNs * 0.50)) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, false);
                                             frameDropped = true;
