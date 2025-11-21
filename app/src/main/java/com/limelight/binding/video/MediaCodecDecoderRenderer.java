@@ -1969,84 +1969,93 @@ boolean isC2Decoder = false;
 
                     // PURE LFR / ULL path
                     if (preferLowerDelays) {
-                        try {
-                            // Reuse a single BufferInfo to avoid per-loop allocations
-                            final android.media.MediaCodec.BufferInfo __tmpInfo = latestInfo;
-                            int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            int __last = -1;
-                            long __lastPtsUs = -1L;
+                        final PreferenceConfiguration pCur = MediaCodecDecoderRenderer.this.prefs;
+                        final int fpMode = (pCur != null)
+                                ? pCur.framePacing
+                                : PreferenceConfiguration.FRAME_PACING_BALANCED;
 
-                            // Drain non-blocking; keep only the newest buffer
-                            while (__idx >= 0) {
-                                final long ptsUs = __tmpInfo.presentationTimeUs;
+                        // Only use pure LFR path when we're NOT in AdaptX
+                        if (fpMode != PreferenceConfiguration.FRAME_PACING_ADAPTX) {
+                            try {
+                                // Reuse a single BufferInfo to avoid per-loop allocations
+                                final android.media.MediaCodec.BufferInfo __tmpInfo = latestInfo;
+                                int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                int __last = -1;
+                                long __lastPtsUs = -1L;
 
-                                // Measure pure decode time at dequeue (for ALL frames, shown or discarded)
-                                try { updateDecodeLatencyStats(ptsUs); } catch (Throwable ignored) {}
+                                // Drain non-blocking; keep only the newest buffer
+                                while (__idx >= 0) {
+                                    final long ptsUs = __tmpInfo.presentationTimeUs;
+
+                                    // Measure pure decode time at dequeue (for ALL frames, shown or discarded)
+                                    try { updateDecodeLatencyStats(ptsUs); } catch (Throwable ignored) {}
+
+                                    if (__last >= 0) {
+                                        // Drop older buffer without rendering (count as recent drop for adaptive thresholds)
+                                        try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                        recentDrops = Math.min(10, recentDrops + 1);
+                                    }
+                                    __last = __idx;
+                                    __lastPtsUs = ptsUs;
+                                    __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                }
 
                                 if (__last >= 0) {
-                                    // Drop older buffer without rendering (count as recent drop for adaptive thresholds)
-                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                    recentDrops = Math.min(10, recentDrops + 1);
-                                }
-                                __last = __idx;
-                                __lastPtsUs = ptsUs;
-                                __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            }
-
-                            if (__last >= 0) {
-                                // Present the newest buffer ASAP (timestamped)
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                    final long __nowNs = System.nanoTime();
-                                    videoDecoder.releaseOutputBuffer(__last, __nowNs);
-                                } else {
-                                    videoDecoder.releaseOutputBuffer(__last, true);
-                                }
-                                gpuKickPresentHook();
-
-                                // Stats update - before jitter calculation to keep timing consistent
-                                try {
-                                    activeWindowVideoStats.totalFramesRendered++;
-                                    if (MediaCodecDecoderRenderer.this.perfHint != null
-                                            && MediaCodecDecoderRenderer.this.perfHint.isActive()
-                                            && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                                        try {
-                                            MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs);
-                                        } catch (Throwable ignored) {}
-                                        MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+                                    // Present the newest buffer ASAP (timestamped)
+                                    if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                        final long __nowNs = System.nanoTime();
+                                        videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                                    } else {
+                                        videoDecoder.releaseOutputBuffer(__last, true);
                                     }
+                                    gpuKickPresentHook();
 
-                                    numFramesOut++;
-                                } catch (Throwable ignored) {}
+                                    // Stats update - before jitter calculation to keep timing consistent
+                                    try {
+                                        activeWindowVideoStats.totalFramesRendered++;
+                                        if (MediaCodecDecoderRenderer.this.perfHint != null
+                                                && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                                                && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                            try {
+                                                MediaCodecDecoderRenderer.this.perfHint.tockAndReport(
+                                                        MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                                            } catch (Throwable ignored) {}
+                                            MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+                                        }
 
-                                // RQH inter-arrival jitter (latest-only) - OPTIMIZED VERSION
-                                if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
-                                    final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
+                                        numFramesOut++;
+                                    } catch (Throwable ignored) {}
 
-                                    // Pre-compute constants to avoid repeated multiplications
-                                    final double expectedInterClamp   = expectedInterNs * 0.75;
-                                    final double minJitterThreshold   = expectedInterNs * 0.02;
-                                    final double maxJitterThreshold   = expectedInterNs * 0.50;
+                                    // RQH inter-arrival jitter (latest-only) - OPTIMIZED VERSION
+                                    if (lastDecoderPtsUs > 0 && __lastPtsUs > lastDecoderPtsUs) {
+                                        final double sampleNs = (__lastPtsUs - lastDecoderPtsUs) * 1000.0;
 
-                                    // RQH: instantaneous deviation + online quantile (no arrays, no sort)
-                                    final double instDev = Math.min(
-                                            Math.abs(sampleNs - expectedInterNs),
-                                            expectedInterClamp // clamp extreme outliers
-                                    );
+                                        // Pre-compute constants to avoid repeated multiplications
+                                        final double expectedInterClamp   = expectedInterNs * 0.75;
+                                        final double minJitterThreshold   = expectedInterNs * 0.02;
+                                        final double maxJitterThreshold   = expectedInterNs * 0.50;
 
-                                    // Update the online quantile for the desired percentile
-                                    final double pctl = ijhQuant.update(instDev);
+                                        // RQH: instantaneous deviation + online quantile (no arrays, no sort)
+                                        final double instDev = Math.min(
+                                                Math.abs(sampleNs - expectedInterNs),
+                                                expectedInterClamp // clamp extreme outliers
+                                        );
 
-                                    // Hybrid jitter: weighted instant + online quantile, then clamp
-                                    final double hybrid =
-                                            (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
-                                    ijhJitterNs = Math.max(minJitterThreshold,
-                                            Math.min(maxJitterThreshold, hybrid));
+                                        // Update the online quantile for the desired percentile
+                                        final double pctl = ijhQuant.update(instDev);
+
+                                        // Hybrid jitter: weighted instant + online quantile, then clamp
+                                        final double hybrid =
+                                                (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
+                                        ijhJitterNs = Math.max(minJitterThreshold,
+                                                Math.min(maxJitterThreshold, hybrid));
+                                    }
+                                    // Update PTS after computing jitter to avoid losing the sample
+                                    lastDecoderPtsUs = __lastPtsUs;
+                                    continue;
                                 }
-                                // Update PTS after computing jitter to avoid losing the sample
-                                lastDecoderPtsUs = __lastPtsUs;
-                                continue;
-                            }
-                        } catch (Throwable ignored) {}
+                            } catch (Throwable ignored) {}
+                        }
                     }
                     /* /LATEST_ONLY_LOW_LATENCY */
 
