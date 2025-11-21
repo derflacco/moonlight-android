@@ -173,7 +173,135 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         long getDesiredPhaseOffsetNs() { return desiredPhaseOffsetNs; }
     }
     // Map buffer index -> PTS (for balanced queue path)
-    private final android.util.SparseLongArray ptsByIndex = new android.util.SparseLongArray(128);
+    // Output buffer index -> PTS mapping for Balanced path.
+    // Primitive array for better cache locality; protected by ptsByIndexLock.
+    private static final long PTS_BY_INDEX_EMPTY = Long.MIN_VALUE;
+    private long[] ptsByIndexArr = new long[64];
+    private final Object ptsByIndexLock = new Object();
+
+    {
+        Arrays.fill(ptsByIndexArr, PTS_BY_INDEX_EMPTY);
+    }
+    private static final class PtsLongRing {
+        private final long[] ptsUs;
+        private final long[] values;
+        private final int capMask;
+
+        private volatile int head = 0; // consumer index
+        @SuppressWarnings("unused")
+        private long p0, p1, p2, p3, p4, p5, p6;
+
+        private volatile int tail = 0; // producer index
+        @SuppressWarnings("unused")
+        private long q0, q1, q2, q3, q4, q5, q6;
+
+        PtsLongRing(int requestedCapacity) {
+            int cap = 1;
+            while (cap < requestedCapacity) cap <<= 1; // power-of-two
+            ptsUs = new long[cap];
+            values = new long[cap];
+            capMask = cap - 1;
+            Arrays.fill(ptsUs, Long.MIN_VALUE);
+        }
+
+        void put(long pts, long value) {
+            final int t = tail;
+            ptsUs[t & capMask] = pts;
+            values[t & capMask] = value;
+            tail = t + 1;
+
+            // Drop oldest on overflow (keep window small and cache-resident).
+            final int h = head;
+            if ((tail - h) > ptsUs.length) {
+                head = tail - ptsUs.length;
+            }
+        }
+
+        // Returns value, or Long.MIN_VALUE if not found.
+        long takeIfPresent(long pts) {
+            final int h = head;
+            final int t = tail;
+            for (int i = t - 1; i >= h; i--) {
+                final int idx = i & capMask;
+                if (ptsUs[idx] == pts) {
+                    final long v = values[idx];
+                    ptsUs[idx] = Long.MIN_VALUE; // consumed
+                    if (i == h) {
+                        int nh = h + 1;
+                        while (nh < t && ptsUs[nh & capMask] == Long.MIN_VALUE) nh++;
+                        head = nh;
+                    }
+                    return v;
+                }
+            }
+            return Long.MIN_VALUE;
+        }
+
+        void clear() {
+            head = tail = 0;
+            Arrays.fill(ptsUs, Long.MIN_VALUE);
+        }
+    }
+
+    private static final class PtsIntRing {
+        private final long[] ptsUs;
+        private final int[] values;
+        private final int capMask;
+
+        private volatile int head = 0; // consumer index
+        @SuppressWarnings("unused")
+        private long p0, p1, p2, p3, p4, p5, p6;
+
+        private volatile int tail = 0; // producer index
+        @SuppressWarnings("unused")
+        private long q0, q1, q2, q3, q4, q5, q6;
+
+        PtsIntRing(int requestedCapacity) {
+            int cap = 1;
+            while (cap < requestedCapacity) cap <<= 1; // power-of-two
+            ptsUs = new long[cap];
+            values = new int[cap];
+            capMask = cap - 1;
+            Arrays.fill(ptsUs, Long.MIN_VALUE);
+        }
+
+        void put(long pts, int value) {
+            final int t = tail;
+            ptsUs[t & capMask] = pts;
+            values[t & capMask] = value;
+            tail = t + 1;
+
+            final int h = head;
+            if ((tail - h) > ptsUs.length) {
+                head = tail - ptsUs.length;
+            }
+        }
+
+        // Returns value, or Integer.MIN_VALUE if not found.
+        int takeIfPresent(long pts) {
+            final int h = head;
+            final int t = tail;
+            for (int i = t - 1; i >= h; i--) {
+                final int idx = i & capMask;
+                if (ptsUs[idx] == pts) {
+                    final int v = values[idx];
+                    ptsUs[idx] = Long.MIN_VALUE;
+                    if (i == h) {
+                        int nh = h + 1;
+                        while (nh < t && ptsUs[nh & capMask] == Long.MIN_VALUE) nh++;
+                        head = nh;
+                    }
+                    return v;
+                }
+            }
+            return Integer.MIN_VALUE;
+        }
+
+        void clear() {
+            head = tail = 0;
+            Arrays.fill(ptsUs, Long.MIN_VALUE);
+        }
+    }
 
     // Map PTS -> scheduledPresentNs to feed PI loop on actual render callback.
     // Primitive ring mapping PTS -> scheduled present time for PhaseLock feedback.
@@ -346,19 +474,15 @@ private volatile boolean forceTightThresholds = false;
 /** Toggle tight frame pacing thresholds globally. */
 public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
 // Toggle at runtime if needed
-    // Decode latency tracking: map PTS(us) -> enqueue time (ns)
-// PTS(us) -> enqueue time (ns), preallocated to avoid frequent resizes
-    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(256);
-    private final Object enqueueNsLock = new Object();
+// PTS(us) -> enqueue time (ns)
+private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
 
+    // PTS(us) -> output-dequeue time (ns)
+    private final PtsLongRing dequeueNsByPtsUs = new PtsLongRing(512);
 
-    // Map PTS -> output-dequeue time (ns) to measure post-decode latency accurately
-    private final LongSparseArray<Long> dequeueNsByPtsUs = new LongSparseArray<>(512);
-    private final Object dequeueNsLock = new Object();
+    // PTS(us) -> per-frame decoder duration (ms)
+    private final PtsIntRing decodeMsByPtsUs = new PtsIntRing(512);
 
-    // Map PTS -> per-frame decoder duration (ms). Saved at dequeue to avoid double counting.
-    private final LongSparseArray<Integer> decodeMsByPtsUs = new LongSparseArray<>(512);
-    private final Object decodeLock = new Object();
     // When preferLowerDelays = true (PURE LFR/ULL): force non-blocking (0 µs).
 // When preferLowerDelays = false (managed): small timeout per profile to stabilize pacing.
     private volatile int preferLowerDelaysTimeoutUs = 0; // default 0 for LFR; policy may override if needed
@@ -389,31 +513,22 @@ public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; 
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
-        Long enqNs;
-        synchronized (enqueueNsLock) {
-            enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
-            if (enqNs != null) {
-                enqueueNsByPtsUs.delete(presentationTimeUs);
-            }
-        }
-        if (enqNs != null) {
+        long enqNs = enqueueNsByPtsUs.takeIfPresent(presentationTimeUs);
+        if (enqNs != Long.MIN_VALUE) {
             long nowNs = System.nanoTime();
             long decMs = (nowNs - enqNs) / 1_000_000L;
             if (decMs >= 0 && decMs < 1000) {
                 activeWindowVideoStats.decoderTimeMs += decMs;
+
                 // Save per-frame decoder duration; postpone adding to total to avoid double counting
-                synchronized (decodeLock) {
-                    decodeMsByPtsUs.put(presentationTimeUs, (int) decMs);
-                    if (decodeMsByPtsUs.size() > 512) decodeMsByPtsUs.removeAt(0);
-                }
+                decodeMsByPtsUs.put(presentationTimeUs, (int) decMs);
+
                 // Record dequeue timestamp for this PTS to compute dequeue->render later
-                synchronized (dequeueNsLock) {
-                    dequeueNsByPtsUs.put(presentationTimeUs, nowNs);
-                    if (dequeueNsByPtsUs.size() > 512) dequeueNsByPtsUs.removeAt(0);
-                }
+                dequeueNsByPtsUs.put(presentationTimeUs, nowNs);
             }
         }
     }
+
 
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
 
@@ -1181,45 +1296,31 @@ try {
                     // Optional stats
                     // Compute device-side post-decode latency using dequeue timestamp when available.
                     long postDecodeMs = -1L;
-                    Long deqNs = null;
-                    Long enqNs = null;
-                    Integer decMsSaved = null;
+                    long deqNs = Long.MIN_VALUE;
+                    long enqNs = Long.MIN_VALUE;
+                    int decMsSaved = Integer.MIN_VALUE;
+
                     try {
-                        synchronized (dequeueNsLock) {
-                            Long v = dequeueNsByPtsUs.get(presentationTimeUs);
-                            if (v != null) {
-                                deqNs = v;
-                                dequeueNsByPtsUs.delete(presentationTimeUs);
-                            }
-                        }
-                        synchronized (enqueueNsLock) {
-                            Long v2 = enqueueNsByPtsUs.get(presentationTimeUs);
-                            if (v2 != null) { enqNs = v2; }
-                        }
-                        synchronized (decodeLock) {
-                            Integer v3 = decodeMsByPtsUs.get(presentationTimeUs);
-                            if (v3 != null) {
-                                decMsSaved = v3;
-                                decodeMsByPtsUs.delete(presentationTimeUs);
-                            }
-                        }
+                        deqNs = dequeueNsByPtsUs.takeIfPresent(presentationTimeUs);
+                        enqNs = enqueueNsByPtsUs.takeIfPresent(presentationTimeUs);
+                        decMsSaved = decodeMsByPtsUs.takeIfPresent(presentationTimeUs);
                     } catch (Throwable ignored) { /* best-effort */ }
 
-                    if (deqNs != null) {
+                    if (deqNs != Long.MIN_VALUE) {
                         postDecodeMs = (renderTimeNanos - deqNs) / 1_000_000L; // dequeue -> render
                         if (postDecodeMs >= 0 && postDecodeMs < 1000) {
                             activeWindowVideoStats.totalTimeMs += postDecodeMs;
                         }
                         // Add decoder portion once here
-                        if (decMsSaved != null && decMsSaved >= 0 && decMsSaved < 1000) {
+                        if (decMsSaved != Integer.MIN_VALUE && decMsSaved >= 0 && decMsSaved < 1000) {
                             activeWindowVideoStats.totalTimeMs += decMsSaved;
-                        } else if (enqNs != null) {
+                        } else if (enqNs != Long.MIN_VALUE) {
                             long decGuess = (deqNs - enqNs) / 1_000_000L;
                             if (decGuess >= 0 && decGuess < 1000) {
                                 activeWindowVideoStats.totalTimeMs += decGuess;
                             }
                         }
-                    } else if (enqNs != null) {
+                    } else if (enqNs != Long.MIN_VALUE) {
                         // Fallback: enqueue -> render (already includes decode + post-decode)
                         long combinedMs = (renderTimeNanos - enqNs) / 1_000_000L;
                         if (combinedMs >= 0 && combinedMs < 1000) {
@@ -1227,7 +1328,6 @@ try {
                         }
                         // Do NOT add decMsSaved here (would double count)
                     }
-
                     // Feed PI loop with actual vs scheduled time (always on)
                     try {
                         long scheduledNs = scheduledByPtsUs.takeIfPresent(presentationTimeUs);
@@ -1286,11 +1386,10 @@ try {
                 nextInputBufferIndex = -1;
                 outputBufferQueue.clear();
 // Also drop decode-latency entries tied to the old codec instance
-                synchronized (enqueueNsLock) {
-                    enqueueNsByPtsUs.clear();
-                    synchronized (dequeueNsLock) { dequeueNsByPtsUs.clear(); }
-                    synchronized (decodeLock) { decodeMsByPtsUs.clear(); }
-                }
+                enqueueNsByPtsUs.clear();
+                dequeueNsByPtsUs.clear();
+                decodeMsByPtsUs.clear();
+
 
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
@@ -1642,11 +1741,14 @@ try {
 
 // Record scheduled time for this frame (by PTS) to feed PLL on actual render
                     try {
-                        long ptsUs;
-                        synchronized (ptsByIndex) {
-                            ptsUs = ptsByIndex.get(nextOutputBuffer, -1);
-                            if (ptsUs != -1L) {
-                                ptsByIndex.delete(nextOutputBuffer);
+                        long ptsUs = -1L;
+                        synchronized (ptsByIndexLock) {
+                            if (nextOutputBuffer >= 0 && nextOutputBuffer < ptsByIndexArr.length) {
+                                long v = ptsByIndexArr[nextOutputBuffer];
+                                if (v != PTS_BY_INDEX_EMPTY) {
+                                    ptsUs = v;
+                                    ptsByIndexArr[nextOutputBuffer] = PTS_BY_INDEX_EMPTY;
+                                }
                             }
                         }
                         if (ptsUs != -1L) {
@@ -2137,11 +2239,18 @@ boolean isC2Decoder = false;
                             long lastPtsUs = presentationTimeUs;
 // Track PTS for this codec output index (balanced path will use it)
                             try {
-                                synchronized (ptsByIndex) {
-                                    ptsByIndex.put(lastIndex, lastPtsUs);
+                                synchronized (ptsByIndexLock) {
+                                    if (lastIndex >= ptsByIndexArr.length) {
+                                        int newCap = ptsByIndexArr.length;
+                                        while (newCap <= lastIndex) newCap <<= 1;
+                                        long[] newArr = new long[newCap];
+                                        Arrays.fill(newArr, PTS_BY_INDEX_EMPTY);
+                                        System.arraycopy(ptsByIndexArr, 0, newArr, 0, ptsByIndexArr.length);
+                                        ptsByIndexArr = newArr;
+                                    }
+                                    ptsByIndexArr[lastIndex] = lastPtsUs;
                                 }
                             } catch (Throwable ignored) {}
-
 
                             numFramesOut++;
 
@@ -2812,9 +2921,8 @@ boolean isC2Decoder = false;
                     timestampUs, codecFlags);
 
             // Track enqueue time for this PTS
-            synchronized (enqueueNsLock) {
-                enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
-            }
+            enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
+
 
             // We need a new buffer now
             nextInputBufferIndex = -1;
