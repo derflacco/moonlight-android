@@ -51,8 +51,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final class SpscRing {
         private final int[] buf;
         private final int capMask;
-        private volatile int head = 0; // consumer index
-        private volatile int tail = 0; // producer index
+        // Consumer index (read by producer)
+        private volatile int head = 0;
+        @SuppressWarnings("unused")
+        private long p0, p1, p2, p3, p4, p5, p6;
+
+        // Producer index (read by consumer)
+        private volatile int tail = 0;
+        @SuppressWarnings("unused")
+        private long q0, q1, q2, q3, q4, q5, q6;
 
         SpscRing(int requestedCapacity) {
             int cap = 1;
@@ -60,20 +67,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             this.buf = new int[cap];
             this.capMask = cap - 1;
         }
+
         boolean offer(int v) {
             final int t = tail + 1;
             // Full if producer would lap consumer
-            if ((t - head) > buf.length) return false;
+            final int h = head; // single volatile read
+            if ((t - h) > buf.length) return false;
             buf[tail & capMask] = v;
             tail = t;
             return true;
         }
-        Integer poll() {
-            if (head == tail) return null;
-            final int v = buf[head & capMask];
-            head++;
+
+        // Returns -1 if empty (buffer indices are always >= 0)
+        int poll() {
+            final int h = head;
+            if (h == tail) return -1;
+            final int v = buf[h & capMask];
+            head = h + 1;
             return v;
         }
+
         int size() { return tail - head; }
         void clear() { head = tail = 0; }
     }
@@ -162,8 +175,68 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Map buffer index -> PTS (for balanced queue path)
     private final android.util.SparseLongArray ptsByIndex = new android.util.SparseLongArray(128);
 
-    // Map PTS -> scheduledPresentNs to feed PI loop on actual render callback
-    private final android.util.LongSparseArray<Long> scheduledByPtsUs = new android.util.LongSparseArray<>(256);
+    // Map PTS -> scheduledPresentNs to feed PI loop on actual render callback.
+    // Primitive ring mapping PTS -> scheduled present time for PhaseLock feedback.
+    // Best-effort, lock-free SPSC usage (producer = present thread, consumer = codec frame-render callback).
+    private static final class PtsScheduleRing {
+        private final long[] ptsUs;
+        private final long[] schedNs;
+        private final int capMask;
+
+        private volatile int head = 0; // consumer index
+        @SuppressWarnings("unused")
+        private long p0, p1, p2, p3, p4, p5, p6;
+
+        private volatile int tail = 0; // producer index
+        @SuppressWarnings("unused")
+        private long q0, q1, q2, q3, q4, q5, q6;
+
+        PtsScheduleRing(int requestedCapacity) {
+            int cap = 1;
+            while (cap < requestedCapacity) cap <<= 1; // power-of-two
+            ptsUs = new long[cap];
+            schedNs = new long[cap];
+            capMask = cap - 1;
+            Arrays.fill(ptsUs, Long.MIN_VALUE);
+        }
+
+        void put(long pts, long sched) {
+            final int t = tail;
+            ptsUs[t & capMask] = pts;
+            schedNs[t & capMask] = sched;
+            tail = t + 1;
+
+            // Drop oldest on overflow (we only keep a small window for feedback).
+            final int h = head;
+            if ((tail - h) > ptsUs.length) {
+                head = tail - ptsUs.length;
+            }
+        }
+
+        // Returns scheduled time, or Long.MIN_VALUE if not found.
+        long takeIfPresent(long pts) {
+            final int h = head;
+            final int t = tail;
+            // Scan newest -> oldest (window is small and cache-resident).
+            for (int i = t - 1; i >= h; i--) {
+                final int idx = i & capMask;
+                if (ptsUs[idx] == pts) {
+                    final long v = schedNs[idx];
+                    ptsUs[idx] = Long.MIN_VALUE; // mark as consumed
+                    if (i == h) {
+                        // Advance head past empty slots to keep the range tight.
+                        int nh = h + 1;
+                        while (nh < t && ptsUs[nh & capMask] == Long.MIN_VALUE) nh++;
+                        head = nh;
+                    }
+                    return v;
+                }
+            }
+            return Long.MIN_VALUE;
+        }
+    }
+
+    private final PtsScheduleRing scheduledByPtsUs = new PtsScheduleRing(256);
 
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
@@ -1157,15 +1230,8 @@ try {
 
                     // Feed PI loop with actual vs scheduled time (always on)
                     try {
-                        Long scheduledNs = null;
-                        synchronized (scheduledByPtsUs) {
-                            Long v = scheduledByPtsUs.get(presentationTimeUs);
-                            if (v != null) {
-                                scheduledNs = v;
-                                scheduledByPtsUs.remove(presentationTimeUs);
-                            }
-                        }
-                        if (scheduledNs != null && phaseLock != null) {
+                        long scheduledNs = scheduledByPtsUs.takeIfPresent(presentationTimeUs);
+                        if (scheduledNs != Long.MIN_VALUE && phaseLock != null) {
                             phaseLock.onFrameRendered(scheduledNs, renderTimeNanos);
                         }
                     } catch (Throwable ignored) { /* best-effort */ }
@@ -1565,8 +1631,8 @@ try {
 
         // ---- Render up to one frame when in frame pacing mode ----
         // NB: With queue limit 2, we won't starve the decoder. One extra frame smooths jitter.
-        Integer nextOutputBuffer = outputBufferQueue.poll();
-        if (nextOutputBuffer != null) {
+        int nextOutputBuffer = outputBufferQueue.poll();
+        if (nextOutputBuffer != -1) {
             try {
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
                     long tsNs = frameTimeNanos;
@@ -1584,12 +1650,7 @@ try {
                             }
                         }
                         if (ptsUs != -1L) {
-                            synchronized (scheduledByPtsUs) {
-                                scheduledByPtsUs.put(ptsUs, tsNs);
-                                if (scheduledByPtsUs.size() > 256) {
-                                    scheduledByPtsUs.removeAt(0);
-                                }
-                            }
+                            scheduledByPtsUs.put(ptsUs, tsNs);
                         }
 
                     } catch (Throwable ignored) {}
@@ -2140,12 +2201,7 @@ boolean isC2Decoder = false;
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                                 // Feed-back map also for immediate present path
                                                 try {
-                                                    synchronized (scheduledByPtsUs) {
-                                                        scheduledByPtsUs.put(lastPtsUs, nowNs);
-                                                        if (scheduledByPtsUs.size() > 256) {
-                                                            scheduledByPtsUs.removeAt(0);
-                                                        }
-                                                    }
+                                                    scheduledByPtsUs.put(lastPtsUs, nowNs);
                                                 } catch (Throwable ignored) {}
 
                                                 videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
@@ -2234,10 +2290,7 @@ boolean isC2Decoder = false;
 
                                         // Register scheduled time for feedback (OnFrameRendered) and present
                                         try {
-                                            synchronized (scheduledByPtsUs) {
-                                                scheduledByPtsUs.put(lastPtsUs, tsNs);
-                                                if (scheduledByPtsUs.size() > 256) scheduledByPtsUs.removeAt(0);
-                                            }
+                                            scheduledByPtsUs.put(lastPtsUs, tsNs);
                                         } catch (Throwable ignored) {}
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
@@ -2276,12 +2329,7 @@ boolean isC2Decoder = false;
                                         }
 // Feed-back map also for immediate present path
                                         try {
-                                            synchronized (scheduledByPtsUs) {
-                                                scheduledByPtsUs.put(lastPtsUs, nowNs);
-                                                if (scheduledByPtsUs.size() > 256) {
-                                                    scheduledByPtsUs.removeAt(0);
-                                                }
-                                            }
+                                            scheduledByPtsUs.put(lastPtsUs, nowNs);
                                         } catch (Throwable ignored) {}
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
@@ -2344,13 +2392,9 @@ boolean isC2Decoder = false;
                                         }
 // Feed-back map also for immediate present path
                                         try {
-                                            synchronized (scheduledByPtsUs) {
-                                                scheduledByPtsUs.put(lastPtsUs, nowNs);
-                                                if (scheduledByPtsUs.size() > 256) {
-                                                    scheduledByPtsUs.removeAt(0);
-                                                }
-                                            }
+                                            scheduledByPtsUs.put(lastPtsUs, nowNs);
                                         } catch (Throwable ignored) {}
+
 
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                         gpuKickPresentHook();
@@ -2415,15 +2459,17 @@ boolean isC2Decoder = false;
 
                                 // Enforce per-profile queue depth
                                 while (outputBufferQueue.size() >= qLimit) {
-                                    Integer old = outputBufferQueue.poll();
-                                    if (old != null) {
+                                    int old = outputBufferQueue.poll();
+                                    if (old != -1) {
                                         try { videoDecoder.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
                                     } else break;
                                 }
-// Non bloccare: se l'offer fallisce per race, droppa il più vecchio e riprova una volta
+                                // Non bloccare: se l'offer fallisce per race, droppa il più vecchio e riprova una volta
                                 if (!outputBufferQueue.offer(lastIndex)) {
-                                    Integer old = outputBufferQueue.poll();
-                                    if (old != null) { try { videoDecoder.releaseOutputBuffer(old, false); } catch (Throwable ignored) {} }
+                                    int old = outputBufferQueue.poll();
+                                    if (old != -1) {
+                                        try { videoDecoder.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
+                                    }
                                     outputBufferQueue.offer(lastIndex);
                                 }
                             }
