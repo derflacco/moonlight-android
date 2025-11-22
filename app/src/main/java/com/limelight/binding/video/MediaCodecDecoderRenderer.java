@@ -568,6 +568,10 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         MediaFormat inputFormat;
         MediaFormat outputFormat;
         MediaFormat configuredFormat;
+        // Initial stream geometry / orientation (configure-only)
+        int initialWidth;
+        int initialHeight;
+        boolean invertResolution;
 
         // SPS hacks (rare)
         boolean needsBaselineSpsHack;
@@ -592,9 +596,6 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     private Thread rendererThread;
     // CPU warm-up helper (MEDIUM, 8 workers)
     private final com.limelight.perf.CpuWarmUp cpuWarmUp = new com.limelight.perf.CpuWarmUp();
-
-    private int initialWidth, initialHeight;
-    private boolean invertResolution;
     private int videoFormat;
     private Surface renderTarget;
     private volatile boolean stopping;
@@ -690,7 +691,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     @TargetApi(Build.VERSION_CODES.LOLLIPOP)
     private boolean decoderCanMeetPerformancePoint(MediaCodecInfo.VideoCapabilities caps, PreferenceConfiguration prefs) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaCodecInfo.VideoCapabilities.PerformancePoint targetPerfPoint = new MediaCodecInfo.VideoCapabilities.PerformancePoint(initialWidth, initialHeight, Math.round(prefs.fps));
+            MediaCodecInfo.VideoCapabilities.PerformancePoint targetPerfPoint = new MediaCodecInfo.VideoCapabilities.PerformancePoint(coldCfg.initialWidth, coldCfg.initialHeight, Math.round(prefs.fps));
             List<MediaCodecInfo.VideoCapabilities.PerformancePoint> perfPoints = caps.getSupportedPerformancePoints();
             if (perfPoints != null) {
                 for (MediaCodecInfo.VideoCapabilities.PerformancePoint perfPoint : perfPoints) {
@@ -711,7 +712,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
             try {
                 // We'll ask the decoder what it can do for us at this resolution and see if our
                 // requested frame rate falls below or inside the range of achievable frame rates.
-                Range<Double> fpsRange = caps.getAchievableFrameRatesFor(initialWidth, initialHeight);
+                Range<Double> fpsRange = caps.getAchievableFrameRatesFor(coldCfg.initialWidth, coldCfg.initialHeight);
                 if (fpsRange != null) {
                     return prefs.fps <= fpsRange.getUpper();
                 }
@@ -726,7 +727,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         // As a last resort, we will use areSizeAndRateSupported() which is explicitly NOT a
         // performance metric, but it can work at least for the purpose of determining if
         // the codec is going to die when given a stream with the specified settings.
-        return caps.areSizeAndRateSupported(initialWidth, initialHeight, prefs.fps);
+        return caps.areSizeAndRateSupported(coldCfg.initialWidth, coldCfg.initialHeight, prefs.fps);
     }
 
     private boolean decoderCanMeetPerformancePointWithHevcAndNotAvc(MediaCodecInfo hevcDecoderInfo, MediaCodecInfo avcDecoderInfo, PreferenceConfiguration prefs) {
@@ -793,7 +794,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
                     LimeLog.info("Forcing HEVC enabled for HDR streaming");
                 }
                 // > 4K streaming also requires HEVC, so force it on there too.
-                else if (initialWidth > 4096 || initialHeight > 4096) {
+                else if (coldCfg.initialWidth > 4096 || coldCfg.initialHeight > 4096) {
                     LimeLog.info("Forcing HEVC enabled for over 4K streaming");
                 }
                 // Use HEVC if the H.264 decoder is unable to meet the performance point
@@ -870,7 +871,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
         this.perfListener = perfListener;
-        this.invertResolution = invertResolution;
+        this.coldCfg.invertResolution = invertResolution;
 
         this.activeWindowVideoStats = new VideoStats();
         this.lastWindowVideoStats = new VideoStats();
@@ -907,7 +908,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         int hevcOptimalSlicesPerFrame = 0;
         if (avcDecoder != null) {
             coldCfg.directSubmit = MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName());
-            coldCfg.refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), initialHeight);
+            coldCfg.refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), coldCfg.initialHeight);
             avcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(avcDecoder.getName());
 
             if (coldCfg.directSubmit) {
@@ -1028,7 +1029,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     }
 
     private MediaFormat createBaseMediaFormat(String mimeType) {
-        MediaFormat videoFormat = MediaFormat.createVideoFormat(mimeType, initialWidth, initialHeight);
+        MediaFormat videoFormat = MediaFormat.createVideoFormat(mimeType, coldCfg.initialWidth, coldCfg.initialHeight);
 
         // Avoid setting KEY_FRAME_RATE on Lollipop and earlier to reduce compatibility risk
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1037,8 +1038,8 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
 
         // Populate keys for adaptive playback
         if (coldCfg.adaptivePlayback) {
-            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, initialWidth);
-            videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
+            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, coldCfg.initialWidth);
+            videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, coldCfg.initialHeight);
         }
 
         // Android 7.0 adds color options to the MediaFormat
@@ -1106,7 +1107,7 @@ return videoFormat;
         if (prefs != null && prefs.videoUpscaleEnable) {
             try {
                 if (glUpscaler == null) {
-                    glUpscaler = __fsrMaybeCreate((Object) glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
+                    glUpscaler = __fsrMaybeCreate((Object) glUpscaler, renderTarget, coldCfg.initialWidth, coldCfg.initialHeight, prefs);
                     decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
                     // Provide presentation-size hint from Context if available
                     try {
@@ -1233,7 +1234,7 @@ try {
                 return -1;
             }
 
-            if (initialWidth > 4096 || initialHeight > 4096) {
+            if (coldCfg.initialWidth > 4096 || coldCfg.initialHeight > 4096) {
                 LimeLog.severe("> 4K streaming only supported on HEVC");
                 return -1;
             }
@@ -1368,8 +1369,8 @@ try {
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
         this.targetFps = (redrawRate > 0 ? (float) redrawRate : 60f);
-        this.initialWidth = invertResolution ? height : width;
-        this.initialHeight = invertResolution ? width : height;
+        this.coldCfg.initialWidth = coldCfg.invertResolution ? height : width;
+        this.coldCfg.initialHeight = coldCfg.invertResolution ? width : height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
 
@@ -3188,7 +3189,7 @@ boolean isC2Decoder = false;
                 else {
                     if (Stereo3DRenderer.isActive) {
                         sb.append(context.getString(R.string.perf_overlay_streamdetails,
-                                initialWidth + "x" + initialHeight, fps.totalFps));
+                                coldCfg.initialWidth + "x" + coldCfg.initialHeight, fps.totalFps));
                         sb.append('\n');
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
@@ -3203,7 +3204,7 @@ boolean isC2Decoder = false;
                     } else {
                         // If GPU renders the frames, the render FPS is the actual drawn and visible fps for the user
                         sb.append(context.getString(R.string.perf_overlay_streamdetails,
-                                initialWidth + "x" + initialHeight, fps.totalFps));
+                                coldCfg.initialWidth + "x" + coldCfg.initialHeight, fps.totalFps));
                     }
                     sb.append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
@@ -3313,17 +3314,17 @@ boolean isC2Decoder = false;
                 // for known resolution combinations. Reference frame invalidation may need
                 // these, so leave them be for those decoders.
                 if (!coldCfg.refFrameInvalidationActive) {
-                    if (initialWidth <= 720 && initialHeight <= 480 && refreshRate <= 60) {
+                    if (coldCfg.initialWidth <= 720 && coldCfg.initialHeight <= 480 && refreshRate <= 60) {
                         // Max 5 buffered frames at 720x480x60
                         LimeLog.info("Patching level_idc to 31");
                         sps.levelIdc = 31;
                     }
-                    else if (initialWidth <= 1280 && initialHeight <= 720 && refreshRate <= 60) {
+                    else if (coldCfg.initialWidth <= 1280 && coldCfg.initialHeight <= 720 && refreshRate <= 60) {
                         // Max 5 buffered frames at 1280x720x60
                         LimeLog.info("Patching level_idc to 32");
                         sps.levelIdc = 32;
                     }
-                    else if (initialWidth <= 1920 && initialHeight <= 1080 && refreshRate <= 60) {
+                    else if (coldCfg.initialWidth <= 1920 && coldCfg.initialHeight <= 1080 && refreshRate <= 60) {
                         // Max 4 buffered frames at 1920x1080x64
                         LimeLog.info("Patching level_idc to 42");
                         sps.levelIdc = 42;
@@ -3718,7 +3719,7 @@ boolean isC2Decoder = false;
                 str += "AVC supported width range: "+avcWidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
-                        Range<Double> avcFpsRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
+                        Range<Double> avcFpsRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
                         str += "AVC achievable FPS range: "+avcFpsRange+DELIMITER;
                     } catch (IllegalArgumentException e) {
                         str += "AVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
@@ -3730,7 +3731,7 @@ boolean isC2Decoder = false;
                 str += "HEVC supported width range: "+hevcWidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
-                        Range<Double> hevcFpsRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
+                        Range<Double> hevcFpsRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
                         str += "HEVC achievable FPS range: " + hevcFpsRange + DELIMITER;
                     } catch (IllegalArgumentException e) {
                         str += "HEVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
@@ -3742,7 +3743,7 @@ boolean isC2Decoder = false;
                 str += "AV1 supported width range: "+av1WidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
-                        Range<Double> av1FpsRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
+                        Range<Double> av1FpsRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
                         str += "AV1 achievable FPS range: " + av1FpsRange + DELIMITER;
                     } catch (IllegalArgumentException e) {
                         str += "AV1 achievable FPS range: UNSUPPORTED!"+DELIMITER;
@@ -3774,7 +3775,7 @@ boolean isC2Decoder = false;
             str += "RFI active: "+renderer.coldCfg.refFrameInvalidationActive+DELIMITER;
             str += "Using modern SPS patching: "+(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)+DELIMITER;
             str += "Fused IDR frames: "+renderer.coldCfg.fusedIdrFrame+DELIMITER;
-            str += "Video dimensions: "+renderer.initialWidth+"x"+renderer.initialHeight+DELIMITER;
+            str += "Video dimensions: "+renderer.coldCfg.initialWidth+"x"+renderer.coldCfg.initialHeight+DELIMITER;
             str += "FPS target: "+renderer.refreshRate+DELIMITER;
             str += "Bitrate: "+renderer.prefs.bitrate+" Kbps"+DELIMITER;
             str += "CSD stats: "+renderer.numVpsIn+", "+renderer.numSpsIn+", "+renderer.numPpsIn+DELIMITER;
