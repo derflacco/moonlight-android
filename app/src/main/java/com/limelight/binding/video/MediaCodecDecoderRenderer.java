@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.jcodec.codecs.h264.H264Utils;
 import org.jcodec.codecs.h264.io.model.SeqParameterSet;
@@ -123,7 +124,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         // Optional feedback from actual render time vs scheduled time.
 // Inject a tiny bias into the integral to remove slow drift.
-        void onFrameRendered(long scheduledRenderNs, long actualRenderNs) {
+        synchronized void onFrameRendered(long scheduledRenderNs, long actualRenderNs) {
             long err = actualRenderNs - scheduledRenderNs; // +late / -early
             double fb = 0.02 * (double) err; // tiny gain
             integ += fb;
@@ -142,7 +143,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // basePresentNs: your computed target time
         // lastVsyncNs: last Choreographer frameTimeNanos
         // Returns corrected present time.
-        long adjust(long basePresentNs, long lastVsyncNs) {
+        synchronized long adjust(long basePresentNs, long lastVsyncNs) {
             if (lastVsyncNs == 0L) return basePresentNs;
 
             long phaseNs = basePresentNs - lastVsyncNs;
@@ -464,7 +465,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
-    private boolean preferLowerDelays = false;
+    private volatile boolean preferLowerDelays = false;
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
     public boolean isHdrActive() { return hdrActive; }
@@ -597,7 +598,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     private Surface renderTarget;
     private volatile boolean stopping;
     private CrashListener crashListener;
-    private boolean reportedCrash;
+    private final AtomicBoolean reportedCrash = new AtomicBoolean(false);
     private int consecutiveCrashCount;
     private String glRenderer;
     private boolean foreground = true;
@@ -1509,8 +1510,7 @@ try {
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalStateException e) {
                         // If we failed to recover after all of these attempts, just crash
-                        if (!reportedCrash) {
-                            reportedCrash = true;
+                        if (reportedCrash.compareAndSet(false, true)) {
                             crashListener.notifyCrash(e);
                         }
                         throw new RendererException(this, e);
@@ -2774,8 +2774,7 @@ boolean isC2Decoder = false;
             // so generate a decoder hung exception
             if (deltaMs >= 5000 && coldCfg.initialException == null) {
                 DecoderHungException decoderHungException = new DecoderHungException(deltaMs);
-                if (!reportedCrash) {
-                    reportedCrash = true;
+                if (reportedCrash.compareAndSet(false, true)) {
                     crashListener.notifyCrash(decoderHungException);
                 }
                 throw new RendererException(this, decoderHungException);
@@ -3568,8 +3567,7 @@ boolean isC2Decoder = false;
         if (decodeUnitLength > nextInputBuffer.limit() - nextInputBuffer.position()) {
             IllegalArgumentException exception = new IllegalArgumentException(
                     "Decode unit length "+decodeUnitLength+" too large for input buffer "+nextInputBuffer.limit());
-            if (!reportedCrash) {
-                reportedCrash = true;
+            if (reportedCrash.compareAndSet(false, true)) {
                 crashListener.notifyCrash(exception);
             }
             throw new RendererException(this, exception);
