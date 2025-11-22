@@ -537,17 +537,26 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     private static final boolean USE_FRAME_RENDER_TIME = false;
     // When using render-time deltas, drop receive->enqueue from totalTimeMs
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME;
-
-    // Used on versions < 5.0
+    // ------------------------------------------------------------
+    // Cold codec configuration/state (rarely touched in hot path)
+    // ------------------------------------------------------------
     private static final class ColdCodecConfig {
+        // Used on versions < 5.0
         ByteBuffer[] legacyInputBuffers;
 
+        // Selected decoders (used only during init/recovery)
+        MediaCodecInfo avcDecoder;
+        MediaCodecInfo hevcDecoder;
+        MediaCodecInfo av1Decoder;
+
+        // CSD/HDR buffers (init-only)
         final ArrayList<byte[]> vpsBuffers = new ArrayList<>();
         final ArrayList<byte[]> spsBuffers = new ArrayList<>();
         final ArrayList<byte[]> ppsBuffers = new ArrayList<>();
         boolean submittedCsd;
         byte[] currentHdrMetadata;
 
+        // Codec capability flags (init-only)
         boolean needsSpsBitstreamFixup, isExynos4;
         boolean adaptivePlayback, directSubmit, fusedIdrFrame;
         boolean constrainedHighProfile;
@@ -555,8 +564,18 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         byte optimalSlicesPerFrame;
         boolean refFrameInvalidationActive;
 
+        // Formats (init/reconfigure)
+        MediaFormat inputFormat;
+        MediaFormat outputFormat;
+        MediaFormat configuredFormat;
+
+        // SPS hacks (rare)
         boolean needsBaselineSpsHack;
         SeqParameterSet savedSps;
+
+        // Deferred exception reporting (rare)
+        RendererException initialException;
+        long initialExceptionTimestamp;
     }
 
     private final ColdCodecConfig coldCfg = new ColdCodecConfig();
@@ -1608,21 +1627,14 @@ try {
             // first exception. If we are still receiving exceptions 3 seconds later, we will
             // throw the original exception again.
             //
-            if (initialException != null) {
-                // This isn't the first time we've had an exception processing video
-                if (SystemClock.uptimeMillis() - initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
-                    // It's been over 3 seconds and we're still getting exceptions. Throw the original now.
-                    if (!reportedCrash) {
-                        reportedCrash = true;
-                        crashListener.notifyCrash(initialException);
-                    }
-                    throw initialException;
+            if (coldCfg.initialException != null) {
+                if (SystemClock.uptimeMillis() - coldCfg.initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
+                    crashListener.notifyCrash(coldCfg.initialException);
+                    throw coldCfg.initialException;
                 }
-            }
-            else {
-                // This is the first exception we've hit
-                initialException = new RendererException(this, e);
-                initialExceptionTimestamp = SystemClock.uptimeMillis();
+            } else {
+                coldCfg.initialException = new RendererException(this, e);
+                coldCfg.initialExceptionTimestamp = SystemClock.uptimeMillis();
             }
         }
 
