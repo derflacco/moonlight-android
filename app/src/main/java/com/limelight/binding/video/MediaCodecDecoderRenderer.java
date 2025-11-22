@@ -584,9 +584,6 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
 
     private final ColdCodecConfig coldCfg = new ColdCodecConfig();
 
-    private MediaCodecInfo avcDecoder;
-    private MediaCodecInfo hevcDecoder;
-    private MediaCodecInfo av1Decoder;
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
 
@@ -798,7 +795,8 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
                     LimeLog.info("Forcing HEVC enabled for over 4K streaming");
                 }
                 // Use HEVC if the H.264 decoder is unable to meet the performance point
-                else if (avcDecoder != null && decoderCanMeetPerformancePointWithHevcAndNotAvc(hevcDecoderInfo, avcDecoder, prefs)) {
+                else if (coldCfg.avcDecoder != null &&
+                        decoderCanMeetPerformancePointWithHevcAndNotAvc(hevcDecoderInfo, coldCfg.avcDecoder, prefs)) {
                     LimeLog.info("Using non-whitelisted HEVC decoder to meet performance point");
                 }
                 else {
@@ -826,11 +824,13 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
                     LimeLog.info("Forcing AV1 enabled despite non-whitelisted decoder");
                 }
                 // Use AV1 if the HEVC decoder is unable to meet the performance point
-                else if (hevcDecoder != null && decoderCanMeetPerformancePointWithAv1AndNotHevc(decoderInfo, hevcDecoder, prefs)) {
+                else if (coldCfg.hevcDecoder != null &&
+                        decoderCanMeetPerformancePointWithAv1AndNotHevc(decoderInfo, coldCfg.hevcDecoder, prefs)) {
                     LimeLog.info("Using non-whitelisted AV1 decoder to meet performance point");
                 }
                 // Use AV1 if the H.264 decoder is unable to meet the performance point and we have no HEVC decoder
-                else if (hevcDecoder == null && decoderCanMeetPerformancePointWithAv1AndNotAvc(decoderInfo, avcDecoder, prefs)) {
+                else if (coldCfg.hevcDecoder == null &&
+                        decoderCanMeetPerformancePointWithAv1AndNotAvc(decoderInfo, coldCfg.avcDecoder, prefs)) {
                     LimeLog.info("Using non-whitelisted AV1 decoder to meet performance point");
                 }
                 else {
@@ -877,25 +877,25 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         this.lastWindowVideoStats = new VideoStats();
         this.globalVideoStats = new VideoStats();
 
-        avcDecoder = findAvcDecoder();
-        if (avcDecoder != null) {
-            LimeLog.info("Selected AVC decoder: "+avcDecoder.getName());
+        coldCfg.avcDecoder = findAvcDecoder();
+        if (coldCfg.avcDecoder != null) {
+            LimeLog.info("Selected AVC decoder: "+coldCfg.avcDecoder.getName());
         }
         else {
             LimeLog.warning("No AVC decoder found");
         }
 
-        hevcDecoder = findHevcDecoder(prefs, meteredData, requestedHdr);
-        if (hevcDecoder != null) {
-            LimeLog.info("Selected HEVC decoder: "+hevcDecoder.getName());
+        coldCfg.hevcDecoder = findHevcDecoder(prefs, meteredData, requestedHdr);
+        if (coldCfg.hevcDecoder != null) {
+            LimeLog.info("Selected HEVC decoder: "+coldCfg.hevcDecoder.getName());
         }
         else {
             LimeLog.info("No HEVC decoder found");
         }
 
-        av1Decoder = findAv1Decoder(prefs);
-        if (av1Decoder != null) {
-            LimeLog.info("Selected AV1 decoder: "+av1Decoder.getName());
+        coldCfg.av1Decoder = findAv1Decoder(prefs);
+        if (coldCfg.av1Decoder != null) {
+            LimeLog.info("Selected AV1 decoder: "+coldCfg.av1Decoder.getName());
         }
         else {
             LimeLog.info("No AV1 decoder found");
@@ -906,36 +906,41 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         // library. The limitation of this is that we don't know whether we're using HEVC or AVC.
         int avcOptimalSlicesPerFrame = 0;
         int hevcOptimalSlicesPerFrame = 0;
-        if (avcDecoder != null) {
-            coldCfg.directSubmit = MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName());
-            coldCfg.refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), coldCfg.initialHeight);
-            avcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(avcDecoder.getName());
+
+        if (coldCfg.avcDecoder != null) {
+            coldCfg.directSubmit =
+                    MediaCodecHelper.decoderCanDirectSubmit(coldCfg.avcDecoder.getName());
+            coldCfg.refFrameInvalidationAvc =
+                    MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(
+                            coldCfg.avcDecoder.getName(), coldCfg.initialHeight);
+            avcOptimalSlicesPerFrame =
+                    MediaCodecHelper.getDecoderOptimalSlicesPerFrame(coldCfg.avcDecoder.getName());
 
             if (coldCfg.directSubmit) {
-                LimeLog.info("Decoder "+avcDecoder.getName()+" will use direct submit");
+                LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" will use direct submit");
             }
             if (coldCfg.refFrameInvalidationAvc) {
-                LimeLog.info("Decoder "+avcDecoder.getName()+" will use reference frame invalidation for AVC");
+                LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" will use reference frame invalidation for AVC");
             }
-            LimeLog.info("Decoder "+avcDecoder.getName()+" wants "+avcOptimalSlicesPerFrame+" slices per frame");
+            LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" wants "+avcOptimalSlicesPerFrame+" slices per frame");
         }
 
-        if (hevcDecoder != null) {
-            coldCfg.refFrameInvalidationHevc = MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
-            hevcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(hevcDecoder.getName());
+        if (coldCfg.hevcDecoder != null) {
+            coldCfg.refFrameInvalidationHevc =
+                    MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(coldCfg.hevcDecoder); hevcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(coldCfg.hevcDecoder.getName());
 
             if (coldCfg.refFrameInvalidationHevc) {
-                LimeLog.info("Decoder "+hevcDecoder.getName()+" will use reference frame invalidation for HEVC");
+                LimeLog.info("Decoder "+coldCfg.hevcDecoder.getName()+" will use reference frame invalidation for HEVC");
             }
 
-            LimeLog.info("Decoder "+hevcDecoder.getName()+" wants "+hevcOptimalSlicesPerFrame+" slices per frame");
+            LimeLog.info("Decoder "+coldCfg.hevcDecoder.getName()+" wants "+hevcOptimalSlicesPerFrame+" slices per frame");
         }
 
-        if (av1Decoder != null) {
-            coldCfg.refFrameInvalidationAv1 = MediaCodecHelper.decoderSupportsRefFrameInvalidationAv1(av1Decoder);
+        if (coldCfg.av1Decoder != null) {
+            coldCfg.refFrameInvalidationAv1 =MediaCodecHelper.decoderSupportsRefFrameInvalidationAv1(coldCfg.av1Decoder);
 
             if (coldCfg.refFrameInvalidationAv1) {
-                LimeLog.info("Decoder "+av1Decoder.getName()+" will use reference frame invalidation for AV1");
+                LimeLog.info("Decoder "+coldCfg.av1Decoder.getName()+" will use reference frame invalidation for AV1");
             }
         }
 
@@ -950,21 +955,22 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     }
 
     public boolean isHevcSupported() {
-        return hevcDecoder != null;
+        return coldCfg.hevcDecoder != null;
     }
 
     public boolean isAvcSupported() {
-        return avcDecoder != null;
+        return coldCfg.avcDecoder != null;
     }
 
     public boolean isHevcMain10Hdr10Supported() {
-        if (hevcDecoder == null) {
+        if (coldCfg.hevcDecoder == null) {
             return false;
         }
 
-        for (MediaCodecInfo.CodecProfileLevel profileLevel : hevcDecoder.getCapabilitiesForType("video/hevc").profileLevels) {
+        for (MediaCodecInfo.CodecProfileLevel profileLevel :
+                coldCfg.hevcDecoder.getCapabilitiesForType("video/hevc").profileLevels) {
             if (profileLevel.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10) {
-                LimeLog.info("HEVC decoder "+hevcDecoder.getName()+" supports HEVC Main10 HDR10");
+                LimeLog.info("HEVC decoder "+coldCfg.hevcDecoder.getName()+" supports HEVC Main10 HDR10");
                 return true;
             }
         }
@@ -973,17 +979,18 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     }
 
     public boolean isAv1Supported() {
-        return av1Decoder != null;
+        return coldCfg.av1Decoder != null;
     }
 
     public boolean isAv1Main10Supported() {
-        if (av1Decoder == null) {
+        if (coldCfg.av1Decoder == null) {
             return false;
         }
 
-        for (MediaCodecInfo.CodecProfileLevel profileLevel : av1Decoder.getCapabilitiesForType("video/av01").profileLevels) {
+        for (MediaCodecInfo.CodecProfileLevel profileLevel :
+                coldCfg.av1Decoder.getCapabilitiesForType("video/av01").profileLevels) {
             if (profileLevel.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10) {
-                LimeLog.info("AV1 decoder "+av1Decoder.getName()+" supports AV1 Main 10 HDR10");
+                LimeLog.info("AV1 decoder "+coldCfg.av1Decoder.getName()+" supports AV1 Main 10 HDR10");
                 return true;
             }
         }
@@ -999,7 +1006,7 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
         // an HEVC decoder, we will use Rec 709 (even for H.264) since we can't choose a
         // colorspace by codec (and it's probably safe to say a SoC with HEVC decoding is
         // plenty modern enough to handle H.264 VUI colorspace info).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O || hevcDecoder != null || av1Decoder != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O || coldCfg.hevcDecoder != null || coldCfg.av1Decoder != null) {
             return MoonBridge.COLORSPACE_REC_709;
         }
         else {
@@ -1155,7 +1162,7 @@ try {
 }
 
 
-        configuredFormat = format;
+        coldCfg.configuredFormat = format;
 
         // After reconfiguration, we must resubmit CSD buffers
         coldCfg.submittedCsd = false;
@@ -1165,8 +1172,8 @@ try {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             // This will contain the actual accepted input format attributes
-            inputFormat = videoDecoder.getInputFormat();
-            LimeLog.info("Input format: "+inputFormat);
+            coldCfg.inputFormat = videoDecoder.getInputFormat();
+            LimeLog.info("Input format: "+coldCfg.inputFormat);
         }
 
         videoDecoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
@@ -1227,9 +1234,10 @@ try {
 
         if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
             mimeType = "video/avc";
-            selectedDecoderInfo = avcDecoder;
+            selectedDecoderInfo = coldCfg.avcDecoder;
 
-            if (avcDecoder == null) {
+            if (coldCfg.avcDecoder == null) {
+
                 LimeLog.severe("No available AVC decoder!");
                 return -1;
             }
@@ -1261,20 +1269,20 @@ try {
         }
         else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
             mimeType = "video/hevc";
-            selectedDecoderInfo = hevcDecoder;
+            selectedDecoderInfo = coldCfg.hevcDecoder;
 
-            if (hevcDecoder == null) {
+            if (coldCfg.hevcDecoder == null) {
                 LimeLog.severe("No available HEVC decoder!");
                 return -2;
             }
 
-            coldCfg. refFrameInvalidationActive = coldCfg.refFrameInvalidationHevc;
+            coldCfg.refFrameInvalidationActive = coldCfg.refFrameInvalidationHevc;
         }
         else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
             mimeType = "video/av01";
-            selectedDecoderInfo = av1Decoder;
+            selectedDecoderInfo = coldCfg.av1Decoder;
 
-            if (av1Decoder == null) {
+            if (coldCfg.av1Decoder == null) {
                 LimeLog.severe("No available AV1 decoder!");
                 return -2;
             }
@@ -1441,7 +1449,8 @@ try {
                     LimeLog.warning("Trying to restart decoder after CodecException");
                     try {
                         videoDecoder.stop();
-                        configureAndStartDecoder(configuredFormat);
+                        configureAndStartDecoder(coldCfg.configuredFormat);
+
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
@@ -1464,7 +1473,7 @@ try {
                     LimeLog.warning("Trying to reset decoder after CodecException");
                     try {
                         videoDecoder.reset();
-                        configureAndStartDecoder(configuredFormat);
+                        configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
@@ -2628,9 +2637,9 @@ boolean isC2Decoder = false;
 
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
                                     LimeLog.info("Output format changed");
-                                    outputFormat = videoDecoder.getOutputFormat();
+                                    coldCfg.outputFormat = videoDecoder.getOutputFormat();
                                     try {
-                                        android.media.MediaFormat fmt = outputFormat;
+                                        android.media.MediaFormat fmt = coldCfg.outputFormat;
                                         int std = -1, tr = -1, rng = -1;
                                         try { std = fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
                                         try { tr  = fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
@@ -2655,7 +2664,7 @@ boolean isC2Decoder = false;
                                         }
                                       }
                                     } catch (Throwable ignored) {}
-                                    LimeLog.info("New output format: " + outputFormat);
+                                    LimeLog.info("New output format: " + coldCfg.outputFormat);
                                     break;
                                 default:
                                     break;
@@ -2763,7 +2772,7 @@ boolean isC2Decoder = false;
         if (nextInputBuffer == null) {
             // We've been hung for 5 seconds and no other exception was reported,
             // so generate a decoder hung exception
-            if (deltaMs >= 5000 && initialException == null) {
+            if (deltaMs >= 5000 && coldCfg.initialException == null) {
                 DecoderHungException decoderHungException = new DecoderHungException(deltaMs);
                 if (!reportedCrash) {
                     reportedCrash = true;
@@ -3043,14 +3052,15 @@ boolean isC2Decoder = false;
                 String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
-                    decoder = (avcDecoder != null) ? avcDecoder.getName() : "(avc-null)";
+                    decoder = (coldCfg.avcDecoder != null) ? coldCfg.avcDecoder.getName() : "(avc-null)";
                 } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
-                    decoder = (hevcDecoder != null) ? hevcDecoder.getName() : "(hevc-null)";
+                    decoder = (coldCfg.hevcDecoder != null) ? coldCfg.hevcDecoder.getName() : "(hevc-null)";
                 } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
-                    decoder = (av1Decoder != null) ? av1Decoder.getName() : "(av1-null)";
+                    decoder = (coldCfg.av1Decoder != null) ? coldCfg.av1Decoder.getName() : "(av1-null)";
                 } else {
                     decoder = "(unknown)";
                 }
+
 
                 float decodeTimeMs = 0f;
                 if (lastTwo.totalFramesReceived > 0) {
@@ -3353,8 +3363,8 @@ boolean isC2Decoder = false;
                 // See getPreferredColorSpace() for further information.
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O &&
                         sps.vuiParams != null &&
-                        hevcDecoder == null &&
-                        av1Decoder == null) {
+                        coldCfg.hevcDecoder == null &&
+                        coldCfg.av1Decoder == null) {
                     sps.vuiParams.videoSignalTypePresentFlag = false;
                     sps.vuiParams.colourDescriptionPresentFlag = false;
                     sps.vuiParams.chromaLocInfoPresentFlag = false;
@@ -3697,10 +3707,10 @@ boolean isC2Decoder = false;
             else if (renderer.numPpsIn > 0 && renderer.numFramesIn == 0) {
                 str = "PreIFrameError";
             }
-            else if (renderer.numFramesIn > 0 && renderer.outputFormat == null) {
+            else if (renderer.numFramesIn > 0 && renderer.coldCfg.outputFormat == null) {
                 str = "PreOutputConfigError";
             }
-            else if (renderer.outputFormat != null && renderer.numFramesOut == 0) {
+            else if (renderer.coldCfg.outputFormat != null && renderer.numFramesOut == 0) {
                 str = "PreOutputError";
             }
             else if (renderer.numFramesOut <= renderer.refreshRate * 30) {
@@ -3711,48 +3721,48 @@ boolean isC2Decoder = false;
             }
 
             str += "Format: "+String.format("%x", renderer.videoFormat)+DELIMITER;
-            str += "AVC Decoder: "+((renderer.avcDecoder != null) ? renderer.avcDecoder.getName():"(none)")+DELIMITER;
-            str += "HEVC Decoder: "+((renderer.hevcDecoder != null) ? renderer.hevcDecoder.getName():"(none)")+DELIMITER;
-            str += "AV1 Decoder: "+((renderer.av1Decoder != null) ? renderer.av1Decoder.getName():"(none)")+DELIMITER;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.avcDecoder != null) {
-                Range<Integer> avcWidthRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getSupportedWidths();
+            str += "AVC Decoder: "+((renderer.coldCfg.avcDecoder != null) ? renderer.coldCfg.avcDecoder.getName():"(none)")+DELIMITER;
+            str += "HEVC Decoder: "+((renderer.coldCfg.hevcDecoder != null) ? renderer.coldCfg.hevcDecoder.getName():"(none)")+DELIMITER;
+            str += "AV1 Decoder: "+((renderer.coldCfg.av1Decoder != null) ? renderer.coldCfg.av1Decoder.getName():"(none)")+DELIMITER;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.coldCfg.avcDecoder != null) {
+                Range<Integer> avcWidthRange = renderer.coldCfg.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getSupportedWidths();
                 str += "AVC supported width range: "+avcWidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
-                        Range<Double> avcFpsRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
+                        Range<Double> avcFpsRange = renderer.coldCfg.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
                         str += "AVC achievable FPS range: "+avcFpsRange+DELIMITER;
                     } catch (IllegalArgumentException e) {
                         str += "AVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
                     }
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.hevcDecoder != null) {
-                Range<Integer> hevcWidthRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getSupportedWidths();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.coldCfg.hevcDecoder != null) {
+                Range<Integer> hevcWidthRange = renderer.coldCfg.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getSupportedWidths();
                 str += "HEVC supported width range: "+hevcWidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
-                        Range<Double> hevcFpsRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
+                        Range<Double> hevcFpsRange = renderer.coldCfg.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
                         str += "HEVC achievable FPS range: " + hevcFpsRange + DELIMITER;
                     } catch (IllegalArgumentException e) {
                         str += "HEVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
                     }
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.av1Decoder != null) {
-                Range<Integer> av1WidthRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getSupportedWidths();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.coldCfg.av1Decoder != null) {
+                Range<Integer> av1WidthRange = renderer.coldCfg.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getSupportedWidths();
                 str += "AV1 supported width range: "+av1WidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     try {
-                        Range<Double> av1FpsRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
+                        Range<Double> av1FpsRange = renderer.coldCfg.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getAchievableFrameRatesFor(renderer.coldCfg.initialWidth, renderer.coldCfg.initialHeight);
                         str += "AV1 achievable FPS range: " + av1FpsRange + DELIMITER;
                     } catch (IllegalArgumentException e) {
                         str += "AV1 achievable FPS range: UNSUPPORTED!"+DELIMITER;
                     }
                 }
             }
-            str += "Configured format: "+renderer.configuredFormat+DELIMITER;
-            str += "Input format: "+renderer.inputFormat+DELIMITER;
-            str += "Output format: "+renderer.outputFormat+DELIMITER;
+            str += "Configured format: "+renderer.coldCfg.configuredFormat+DELIMITER;
+            str += "Input format: "+renderer.coldCfg.inputFormat+DELIMITER;
+            str += "Output format: "+renderer.coldCfg.outputFormat+DELIMITER;
             str += "Adaptive playback: "+renderer.coldCfg.adaptivePlayback+DELIMITER;
             str += "GL Renderer: "+renderer.glRenderer+DELIMITER;
             //str += "Build fingerprint: "+Build.FINGERPRINT+DELIMITER;
