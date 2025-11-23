@@ -60,6 +60,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final float SHARPNESS_DEADZONE = 0.05f; // <=5% = OFF
     private static final float SHARPNESS_GAMMA = 0.85f;
     private static final float SHARPNESS_EXP_FACTOR = 3.5f;
+    // Gamma lift when FSR is active. 1.0 = no change, >1 brightens midtones.
+    // Tune this if you want more/less brightness while FSR is on.
+    private static final float FSR_GAMMA_COMPENSATION = 1.10f;
 
     // ====== ES version ======
     private boolean isEs3 = false;
@@ -168,8 +171,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Uniform locations
     private int blit_uTex = -1, blit_uTexMat = -1;
     private int easu_uTex = -1, easu_uInvSrcSize = -1, easu_uTexMat = -1;
-    private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1;
-    private int progRcasOes = 0, rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uTexMat = -1;
+    private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1, rcas_uGamma = -1;
+    private int progRcasOes = 0,
+            rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uGamma = -1, rcasOes_uTexMat = -1;
+
 
     // Quad buffers (no VAO in ES2)
     private int vboPos = 0, vboUv = 0;
@@ -724,6 +729,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
             GLES20.glUniform1f(rcasOes_uSharp, clamp01(sharp));
+            if (rcasOes_uGamma >= 0) {
+                GLES20.glUniform1f(rcasOes_uGamma, getFsrGammaComp());
+            }
             if (texMatrixDirty || rcasOesMatDirty) {
                 GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
                 rcasOesMatDirty = false;
@@ -778,6 +786,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1i(rcas_uTex, 0);
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
+        if (rcas_uGamma >= 0) {
+            GLES20.glUniform1f(rcas_uGamma, getFsrGammaComp());
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         setTex2DFilter(false); // restore
         if (__fsr.enabled) { __fsr.tocRcas(); }
@@ -835,8 +846,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniform1i(rcas_uTex, 0);
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
+        if (rcas_uGamma >= 0) {
+            GLES20.glUniform1f(rcas_uGamma, getFsrGammaComp());
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
         if (__fsr.enabled) { __fsr.tocRcas(); }
 
         setTex2DFilter(false);
@@ -1094,7 +1107,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     rcasOes_uTex    = GLES20.glGetUniformLocation(progRcasOes, "uTexOES");
                     rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
                     rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
+                    rcasOes_uGamma  = GLES20.glGetUniformLocation(progRcasOes, "uGamma");
                     rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
+
                 } catch (Throwable t) {
                     progRcasOes = 0; // keep 2D fallback
                 }
@@ -1144,6 +1159,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
             rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
             rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
+            rcas_uGamma   = GLES20.glGetUniformLocation(progRcas, "uGamma");
         }
 
         // ensure first-use matrix upload
@@ -1231,6 +1247,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
+    // Returns gamma compensation factor to apply in final RCAS pass.
+    // Only active when FSR is enabled and mode is not "none".
+    private float getFsrGammaComp() {
+        if (prefs == null || !prefs.videoUpscaleEnable) return 1.0f;
+        final String m = prefs.videoUpscaleMode;
+        if (m == null || "none".equals(m)) return 1.0f;
+        return FSR_GAMMA_COMPENSATION;
+    }
+
 
     // Map UI sharpness (0..1) -> internal RCAS strength.
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
@@ -1360,7 +1385,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "#endif\n" +
                     "precision highp float;\n" + // highp to reduce banding
-                    // If vertex precomputes uv/steps, expose them here
                     "#ifdef USE_OES\n" +
                     "#ifdef RCAS_OES_VS\n" +
                     "in vec2 vUv0;\n" +
@@ -1378,6 +1402,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "#endif\n" +
                     "uniform vec2  uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
+                    "uniform float uGamma;\n" +
                     "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
                     "#ifdef USE_OES\n" +
                     "void main(){\n" +
@@ -1419,6 +1444,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
                     "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
                     "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
+                    "  // Gamma compensation to fix low gamma / dark midtones when FSR is active\n" +
+                    "  outc = pow(outc, vec3(1.0 / max(uGamma, 0.001)));\n" +
                     "  fragColor = vec4(outc, 1.0);\n" +
                     "}";
 
@@ -1476,6 +1503,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform sampler2D uUpscaled;\n" +
                     "uniform vec2  uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
+                    "uniform float uGamma;\n" +
                     "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
                     "void main(){\n" +
                     "  vec2 texel = uInvDstSize;\n" +
@@ -1498,6 +1526,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
                     "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
                     "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
+                    "  // Gamma compensation to fix low gamma / dark midtones when FSR is active\n" +
+                    "  outc = pow(outc, vec3(1.0 / max(uGamma, 0.001)));\n" +
                     "  gl_FragColor = vec4(outc, 1.0);\n" +
                     "}";
 
