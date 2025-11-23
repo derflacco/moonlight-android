@@ -4471,8 +4471,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             final boolean lfrEffective = isLfrEffective(fp, prefConfig.adaptxMode, userLfr);
 
             decoderRenderer.setPreferLowerDelays(lfrEffective);
-            // LFR path uses 0 µs by default; managed path uses per-profile timeouts inside the renderer
-            decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
+
+// Only force 0 µs dequeue timeout when LFR is actually effective.
+// Otherwise let the renderer use per-profile managed timeouts.
+            if (lfrEffective) {
+                decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
+            }
 
             decoderRenderer.setForceTightThresholds(prefConfig.forceTightThresholds);
 
