@@ -4507,8 +4507,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         final boolean isMaxSmooth =
                 (fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
 
-        // Bypass LFR on Balanced/CapFPS, allow it on Max Smoothness
-        return userLfr && !isBalanced && !isCapFps;
+        // Bypass LFR on Balanced/CapFPS/Max Smoothness
+        return userLfr && !isBalanced && !isCapFps && !isMaxSmooth;
     }
 
 
