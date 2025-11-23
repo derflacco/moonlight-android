@@ -1698,27 +1698,30 @@ try {
             return;
         }
 
-        // ---- Compute display period and gating threshold for Balanced profile ----
+// ---- Compute display period and gating threshold for Balanced profile ----
         final int rr = (refreshRate > 0) ? refreshRate : 60;
         final long periodNs = 1_000_000_000L / Math.max(1, rr);
 
-        // Gate percentage per profile:
-        // - GPU_RAW: render exactly once per period (tight = 100%)
-        // - Balanced: ~80% (smooth, avoids double render in the same slot)
-        // - Cap FPS: ~85% (a bit more conservative)
-        // - Max Smoothness: ~90% (longer gate, favors stability over reactivity)
-        // - Warp, Warp 2, Lowest Latency: render exactly once per period (tight = 100%)
+// REVISED Gate percentage per profile - RELAXED THRESHOLDS FOR STUTTER REDUCTION:
+// - GPU_RAW: 95% (was 100%) - allows frame submission in wider vsync window
+// - Balanced: 85% (was 80%) - more tolerant to timing variations
+// - Cap FPS: 90% (was 85%) - conservative approach for frame rate limiting
+// - Max Smoothness: 95% (was 90%) - maximum stability with minimal drops
+// - Warp variants: 95% (was 100%) - balanced approach for low-latency modes
+//
+// Rationale: Wider gating windows reduce the likelihood of missed presentation
+// opportunities, trading minimal latency increase for significant stutter reduction
         double gatePct;
         if (preferLowerDelays || pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-            gatePct = 1.00; // tight
+            gatePct = 0.95; // relaxed from 1.00 - reduces stuttering in GPU_RAW mode
         } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            gatePct = 0.80;
+            gatePct = 0.85; // relaxed from 0.80 - improves fluidity in Balanced mode
         } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-            gatePct = 0.85;
+            gatePct = 0.90; // relaxed from 0.85 - better stability when capping FPS
         } else if (pacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-            gatePct = 0.90;
+            gatePct = 0.95; // relaxed from 0.90 - prioritizes smoothness above all
         } else { // others: Warp, Warp2, Lower Latency
-            gatePct = 1.00;
+            gatePct = 0.95; // relaxed from 1.00 - balanced approach for low-latency variants
         }
         final long gateNs = (long) (periodNs * gatePct);
 
@@ -2162,7 +2165,7 @@ boolean isC2Decoder = false;
                         }
                     }
 
-                    // PURE LFR / ULL path
+// PURE LFR / ULL path - ENHANCED: Consecutive drop limiting to prevent stuttering
                     if (preferLowerDelays) {
                         final PreferenceConfiguration pCur = MediaCodecDecoderRenderer.this.prefs;
                         final int fpMode = (pCur != null)
@@ -2177,6 +2180,8 @@ boolean isC2Decoder = false;
                                 int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
                                 int __last = -1;
                                 long __lastPtsUs = -1L;
+                                int consecutiveDrops = 0;
+                                final int MAX_CONSECUTIVE_DROPS = 2; // NEW: Safety limit to prevent stutter chains
 
                                 // Drain non-blocking; keep only the newest buffer
                                 while (__idx >= 0) {
@@ -2186,15 +2191,31 @@ boolean isC2Decoder = false;
                                     try { updateDecodeLatencyStats(ptsUs); } catch (Throwable ignored) {}
 
                                     if (__last >= 0) {
-                                        // Drop older buffer without rendering (count as recent drop for adaptive thresholds)
-                                        try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                        recentDrops = Math.min(10, recentDrops + 1);
+                                        // NEW: Consecutive drop limiting - prevents stutter from excessive frame skipping
+                                        if (consecutiveDrops < MAX_CONSECUTIVE_DROPS) {
+                                            // Normal LFR behavior: drop older buffer to maintain lowest latency
+                                            try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                            recentDrops = Math.min(10, recentDrops + 1);
+                                            consecutiveDrops++;
+                                        } else {
+                                            // Safety trigger: forced rendering to break stutter chains
+                                            // This ensures at least one frame is presented every few VSYNCs
+                                            try {
+                                                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                                    videoDecoder.releaseOutputBuffer(__last, System.nanoTime());
+                                                } else {
+                                                    videoDecoder.releaseOutputBuffer(__last, true);
+                                                }
+                                                gpuKickPresentHook();
+                                                activeWindowVideoStats.totalFramesRendered++;
+                                            } catch (Throwable ignored) {}
+                                            consecutiveDrops = 0; // reset safety counter
+                                        }
                                     }
                                     __last = __idx;
                                     __lastPtsUs = ptsUs;
                                     __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
                                 }
-
                                 if (__last >= 0) {
                                     // Present the newest buffer ASAP (timestamped)
                                     if (android.os.Build.VERSION.SDK_INT >= 21) {
@@ -2438,9 +2459,11 @@ boolean isC2Decoder = false;
                                             continue;
                                         }
 
-                                        // Target present: align to vsync with small guard (dPLL)
+// Target present: align to vsync with optimized guard time (dPLL)
                                         if (phaseLock == null) { initPhaseLockIfNeeded(); }  // uses refreshRate -> vsyncPeriod (dPLL)
-                                        long guardNs = Math.min((long) (periodNs * (preferLowerDelays ? 0.018 : 0.030)), 1_500_000L);
+// OPTIMIZED: Reduced guard time for AdaptX (0.025 vs 0.030) to improve responsiveness
+// Maintains stability while reducing the latency penalty reported by users
+                                        long guardNs = Math.min((long) (periodNs * (preferLowerDelays ? 0.018 : 0.025)), 1_500_000L);
                                         long baseTs = nowNs + guardNs;
                                         if (phaseLock != null && lastVsyncNs != 0L) {
                                             baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
@@ -3853,15 +3876,20 @@ boolean isC2Decoder = false;
             final float hz = (refreshRate > 0) ? (float) refreshRate : getDisplayRefreshRateSafe();
             final long vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(30.0f, hz));
 
-            // Present slightly before vsync: ~3% of period (capped ~1.5 ms)
-            final long guardBeforeVsyncNs = Math.min((long) (vsyncPeriodNs * 0.03), 1_500_000L);
+            // Reduced guard time: 2.5% of period (capped at 1.2ms) for better stability
+            // This provides more timing margin to reduce phase correction overshoot
+            final long guardBeforeVsyncNs = Math.min((long) (vsyncPeriodNs * 0.025), 1_200_000L);
 
-            // Stable defaults: brisk phase correction, slow drift removal
-            final double kp = 0.25;
-            final double ki = 0.02;
+            // Conservative PID parameters to reduce oscillation and stuttering:
+            // - Lower proportional gain (0.15 vs 0.25) reduces phase correction overshoot
+            // - Lower integral gain (0.01 vs 0.02) slows down drift compensation
+            final double kp = 0.15;
+            final double ki = 0.01;
 
-            // Output clamp ~3% of period; integral clamp ~25% of period
-            phaseLock = new PhaseLock(vsyncPeriodNs, guardBeforeVsyncNs, kp, ki, 0.03, 0.25);
+            // Tighter clamping to prevent excessive phase adjustments:
+            // - Output clamp: 2% of period (was 3%) limits per-frame correction
+            // - Integral clamp: 15% of period (was 25%) prevents windup accumulation
+            phaseLock = new PhaseLock(vsyncPeriodNs, guardBeforeVsyncNs, kp, ki, 0.02, 0.15);
         } catch (Throwable ignored) {}
     }
     // Online exponentially-weighted quantile estimator (O(1) per update)
