@@ -4,7 +4,7 @@ About This Fork:
 
 This project began with a clear goal: to fix the notoriously high decoding latency on MediaTek (Mtk) devices. The initial approach involved enabling RFI for the c2.mtk and omx.mtk decoders and adjusting specific MediaTek keys within the MediacodecHelper.
 
-Through further experimentation, I've also implemented LFR (Low Frame Rate mode), which successfully reduces the total end-to-end latency by a few milliseconds on many devices.
+Through further experimentation, I've also implemented LFR (Prefer Lower Delays) , which successfully reduces the total end-to-end latency by a few milliseconds on many devices.
 
 A Word of Caution: Here Be Dragons! 🐲
 
