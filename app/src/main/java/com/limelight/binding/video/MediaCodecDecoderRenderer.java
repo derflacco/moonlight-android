@@ -96,7 +96,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             new android.media.MediaCodec.BufferInfo();  // main dequeue path
     private final android.media.MediaCodec.BufferInfo ullBufferInfo =
             new android.media.MediaCodec.BufferInfo();  // ULL/LFR drain path
-
+    // Gpu Resources Cleanup Helper
+    private void cleanupGpuResources() {
+        if (gpuKickPbuffer != null) {
+            try {
+                gpuKickPbuffer.release();
+                gpuKickPbuffer = null;
+            } catch (Throwable t) {
+                LimeLog.warning("Error releasing GPU kick pbuffer: " + t.getMessage());
+            }
+        }
+    }
+    // PtsMapping Helper
+    private void updatePtsMapping(int index, long pts) {
+        synchronized (ptsByIndexLock) {
+            if (index >= ptsByIndexArr.length) {
+                int newSize = Math.max(index + 1, ptsByIndexArr.length * 2);
+                long[] newArr = new long[newSize];
+                Arrays.fill(newArr, PTS_BY_INDEX_EMPTY);
+                System.arraycopy(ptsByIndexArr, 0, newArr, 0, ptsByIndexArr.length);
+                ptsByIndexArr = newArr;
+            }
+            ptsByIndexArr[index] = pts;
+        }
+    }
     // Phase-locked PI controller to align scheduled present time to the vsync grid.
 // Works in nanoseconds; zero allocations in hot path.
     private static final class PhaseLock {
@@ -319,7 +342,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         private volatile int tail = 0; // producer index
         @SuppressWarnings("unused")
         private long q0, q1, q2, q3, q4, q5, q6;
-
+        void clear() {
+            head = tail = 0;
+            Arrays.fill(ptsUs, Long.MIN_VALUE);
+            Arrays.fill(schedNs, 0L);
+        }
         PtsScheduleRing(int requestedCapacity) {
             int cap = 1;
             while (cap < requestedCapacity) cap <<= 1; // power-of-two
@@ -493,8 +520,18 @@ private final PtsLongRing enqueueNsByPtsUs = new PtsLongRing(256);
     }
 
     private int getOutputDequeueTimeoutUs() {
+        // Timeout zero se stiamo fermando
+        if (stopping) {
+            return 0;
+        }
+
         // PURE LFR (latest-only): use configured timeout (0 µs)
         if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
+
+        // Timeout più breve durante il recovery
+        if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+            return 1000;
+        }
 
         if (prefs != null) {
             switch (prefs.framePacing) {
@@ -1757,10 +1794,15 @@ try {
             this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
         }
 
-        // ---- Render up to one frame when in frame pacing mode ----
-        // NB: With queue limit 2, we won't starve the decoder. One extra frame smooths jitter.
+// ---- Render up to one frame when in frame pacing mode ----
+// NB: With queue limit 2, we won't starve the decoder. One extra frame smooths jitter.
         int nextOutputBuffer = outputBufferQueue.poll();
         if (nextOutputBuffer != -1) {
+            // Controllo di sicurezza aggiuntivo
+            if (videoDecoder == null || stopping) {
+                try { videoDecoder.releaseOutputBuffer(nextOutputBuffer, false); } catch (Throwable ignored) {}
+                return;
+            }
             try {
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
                     long tsNs = frameTimeNanos;
@@ -2310,17 +2352,7 @@ boolean isC2Decoder = false;
                             long lastPtsUs = presentationTimeUs;
 // Track PTS for this codec output index (balanced path will use it)
                             try {
-                                synchronized (ptsByIndexLock) {
-                                    if (lastIndex >= ptsByIndexArr.length) {
-                                        int newCap = ptsByIndexArr.length;
-                                        while (newCap <= lastIndex) newCap <<= 1;
-                                        long[] newArr = new long[newCap];
-                                        Arrays.fill(newArr, PTS_BY_INDEX_EMPTY);
-                                        System.arraycopy(ptsByIndexArr, 0, newArr, 0, ptsByIndexArr.length);
-                                        ptsByIndexArr = newArr;
-                                    }
-                                    ptsByIndexArr[lastIndex] = lastPtsUs;
-                                }
+                                updatePtsMapping(lastIndex, lastPtsUs);
                             } catch (Throwable ignored) {}
 
                             numFramesOut++;
@@ -2910,10 +2942,6 @@ boolean isC2Decoder = false;
                 choreographerHandlerThread.join();
             } catch (InterruptedException e) {
                 e.printStackTrace();
-
-                // InterruptedException clears the thread's interrupt status. Since we can't
-                // handle that here, we will re-interrupt the thread to set the interrupt
-                // status back to true.
                 Thread.currentThread().interrupt();
             }
         }
@@ -2923,11 +2951,22 @@ boolean isC2Decoder = false;
             rendererThread.join();
         } catch (InterruptedException e) {
             e.printStackTrace();
-
-            // InterruptedException clears the thread's interrupt status. Since we can't
-            // handle that here, we will re-interrupt the thread to set the interrupt
-            // status back to true.
             Thread.currentThread().interrupt();
+        }
+
+        // Cleanup GPU resources
+        cleanupGpuResources();
+
+        // Clear all ring buffers and data structures
+        outputBufferQueue.clear();
+        enqueueNsByPtsUs.clear();
+        dequeueNsByPtsUs.clear();
+        decodeMsByPtsUs.clear();
+        scheduledByPtsUs.clear();
+
+        // Clear ptsByIndexArr
+        synchronized (ptsByIndexLock) {
+            Arrays.fill(ptsByIndexArr, PTS_BY_INDEX_EMPTY);
         }
 
         // Final safety: ensure GL upscaler is torn down
@@ -2937,7 +2976,6 @@ boolean isC2Decoder = false;
             try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
             decoderInputSurfaceForUpscale = null;
         }
-
     }
 
     @Override
@@ -3056,6 +3094,13 @@ boolean isC2Decoder = false;
                                 long receiveTimeMs, long enqueueTimeMs) {
         if (stopping) {
             // Don't bother if we're stopping
+            return MoonBridge.DR_OK;
+        }
+
+        if (decodeUnitData == null || decodeUnitLength <= 0 || decodeUnitLength > decodeUnitData.length) {
+            LimeLog.warning("Invalid decode unit parameters: data=" + decodeUnitData +
+                    ", length=" + decodeUnitLength +
+                    ", dataLength=" + (decodeUnitData != null ? decodeUnitData.length : 0));
             return MoonBridge.DR_OK;
         }
 
