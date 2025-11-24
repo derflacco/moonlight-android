@@ -1740,8 +1740,11 @@ try {
         }
 
 // ---- Compute display period and gating threshold for Balanced profile ----
-        final int rr = (refreshRate > 0) ? refreshRate : 60;
-        final long periodNs = 1_000_000_000L / Math.max(1, rr);
+// Match gating to the *real* panel refresh (59.94/119.88/etc), not stream FPS.
+        final float displayHzF = getDisplayRefreshRateSafe();
+        final float safeHz = (displayHzF >= 30f && displayHzF <= 1000f) ? displayHzF : 60f;
+        final int rr = Math.round(safeHz);
+        final long periodNs = (long) (1_000_000_000L / safeHz);
 
 // REVISED Gate percentage per profile - RELAXED THRESHOLDS FOR STUTTER REDUCTION:
 // - GPU_RAW: 95% (was 100%) - allows frame submission in wider vsync window
@@ -3933,8 +3936,11 @@ boolean isC2Decoder = false;
     // Initialize PI dPLL from current refresh rate (fallback to display rate if needed)
     private void initPhaseLockIfNeeded() {
         try {
-            final float hz = (refreshRate > 0) ? (float) refreshRate : getDisplayRefreshRateSafe();
-            final long vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(30.0f, hz));
+// Use actual display Hz for dPLL period.
+// Using stream FPS here causes drift on panels like 59.94/119.88 Hz and creates periodic stutter.
+            final float displayHz = getDisplayRefreshRateSafe();
+            final float streamHz = (refreshRate > 0) ? (float) refreshRate : displayHz; // kept for logs only
+            final long vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(30.0f, displayHz));
 
             // Reduced guard time: 2.5% of period (capped at 1.2ms) for better stability
             // This provides more timing margin to reduce phase correction overshoot
