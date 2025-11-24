@@ -1708,8 +1708,12 @@ try {
                     try { appOffsetNs = (Long) android.view.Display.class
                             .getMethod("getAppVsyncOffsetNanos")
                             .invoke(d); } catch (Throwable ignored) {}
-// Apply app vsync offset first, then keep a coherent last vsync for the PI loop
-                    frameTimeNanos -= appOffsetNs;
+                    // Apply app vsync offset first, then keep a coherent last vsync for the PI loop.
+// Some vendors report unstable/huge app offsets on 60 Hz panels.
+// Only apply small sane offsets; otherwise keep raw vsync to avoid jitter.
+                    if (appOffsetNs > 0L && appOffsetNs < 5_000_000L) { // <5 ms
+                        frameTimeNanos -= appOffsetNs;
+                    }
                     lastVsyncNs = frameTimeNanos; // keep same reference frame for PLL
                 }
             }
@@ -1805,10 +1809,21 @@ try {
             }
             try {
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
-                    long tsNs = frameTimeNanos;
+// Balanced path: schedule for the *next* vsync slot (minus a small guard),
+// never at/behind the current vsync. Presenting in the past causes vendor
+// jitter on exact FPS≈Hz matches (especially 60 Hz).
+                    long baseTs = frameTimeNanos + periodNs;
+                    long guardNs = Math.min((long) (periodNs * 0.02), 1_200_000L); // ~2% period, cap 1.2 ms
+                    baseTs -= guardNs;
+
                     if (phaseLock != null && lastVsyncNs != 0L) {
-                        tsNs = phaseLock.adjust(tsNs, lastVsyncNs);
+                        baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
                     }
+
+                    long nowNs = System.nanoTime();
+// Ensure we never schedule in the past. Keep a tiny minimum lead to avoid ASAP snapping.
+                    long tsNs = Math.max(nowNs + 150_000L, baseTs);
+
 
 // Record scheduled time for this frame (by PTS) to feed PLL on actual render
                     try {
