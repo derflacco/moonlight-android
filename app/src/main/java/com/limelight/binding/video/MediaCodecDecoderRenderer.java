@@ -2100,12 +2100,16 @@ try {
                         && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
                     final boolean gpuRaw = (prefs != null
                             && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-                    final long targetNs = gpuRaw
-                            ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
-                            : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
-                    try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs); } catch (Throwable ignored) {}
-                }
 
+                    // GPU_RAW: keep ADPF more latency-oriented (shorter target) to reduce decode slack
+                    final long targetNs = gpuRaw
+                            ? Math.max(3_000_000L, (long) (streamPeriodNs * 0.70))
+                            : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
+
+                    try {
+                        MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs);
+                    } catch (Throwable ignored) {}
+                }
 
                 // Adaptive period selection to avoid added latency on high-refresh devices
                 final boolean highRefresh = displayHz >= 90f;
@@ -2479,26 +2483,73 @@ boolean isC2Decoder = false;
                                 }
 // --- Present policy per profilo di pacing ---
                                 if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    // Immediate present using frame PTS; no decoder-side pacing
+                                    // GPU_RAW: low-latency direct present with simple latency-aware dropping
                                     if (lastIndex >= 0) {
                                         try {
-// Always use monotonic now; PTS is not guaranteed to be on the same clock domain
+                                            // Always use monotonic now; PTS is not guaranteed to be on the same clock domain
                                             final long nowNs = System.nanoTime();
+
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                                // Compute end-to-end frame age in ns (host PTS -> now)
+                                                long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                                if (frameAgeNs < 0L) {
+                                                    frameAgeNs = 0L;
+                                                }
+
+                                                // Latency-oriented threshold (1.0..1.15× period):
+                                                // reuse the same heuristic as latency mode, but applied to GPU_RAW.
+                                                double backPressure = Math.min(1.0, (double) tryAgainStreak / 6.0);
+                                                double streamHz = Math.max(1.0, (double) tfps);
+                                                double mismatch = Math.abs((1_000_000_000.0 / streamHz)
+                                                        - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
+                                                mismatch = Math.min(2.0, mismatch);
+
+                                                double factorLatency = 1.02 + 0.13 * (0.5 * (ijhJitterNs / vsyncPeriodNs)
+                                                        + 0.3 * backPressure
+                                                        + 0.2 * mismatch);
+                                                factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
+
+                                                long dropThresholdNs = (long) (periodNs * factorLatency);
+
+                                                final long sinceLastPresent = (lastPresentNs == 0L)
+                                                        ? Long.MAX_VALUE : (nowNs - lastPresentNs);
+                                                final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
+                                                final boolean isLate = frameAgeNs > dropThresholdNs;
+                                                lateStreak = isLate ? (lateStreak + 1) : 0;
+
+                                                final boolean shouldDrop =
+                                                        isLate &&
+                                                                (lateStreak >= 1) &&
+                                                                (sinceLastPresent < (long) (periodNs * 0.5)) &&
+                                                                dropCooldownOk;
+
+                                                if (shouldDrop) {
+                                                    // Too old: drop to clamp end-to-end latency
+                                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                    frameDropped = true;
+                                                    lastDropNs = nowNs;
+                                                    recentDrops = Math.min(10, recentDrops + 1);
+                                                    continue; // stats already recorded at dequeue for this PTS
+                                                }
+
                                                 // Feed-back map also for immediate present path
                                                 try {
                                                     scheduledByPtsUs.put(lastPtsUs, nowNs);
                                                 } catch (Throwable ignored) {}
 
+                                                // Immediate present at "now" (direct-present path)
                                                 videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                                 gpuKickPresentHook();
+
+                                                lastPresentNs = nowNs;
+                                                lastRenderedFrameTimeNanos = nowNs;
+                                                recentDrops = 0;
                                             } else {
+                                                // Legacy path: no fine-grained timestamps available
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
-                                            lastPresentNs = nowNs;
-                                            lastRenderedFrameTimeNanos = nowNs;
-                                            recentDrops = 0;
+
                                             // FIX: Do NOT call updateDecodeLatencyStats() here:
                                         } catch (IllegalStateException e) {
                                             try { handleDecoderException(e); } catch (Throwable ignored) {}
