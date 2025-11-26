@@ -1770,16 +1770,14 @@ try {
 // Rationale: Wider gating windows reduce the likelihood of missed presentation
 // opportunities, trading minimal latency increase for significant stutter reduction
         double gatePct;
-        if (preferLowerDelays || pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-            gatePct = 0.95; // relaxed from 1.00 - reduces stuttering in GPU_RAW mode
-        } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            gatePct = 0.85; // relaxed from 0.80 - improves fluidity in Balanced mode
+        if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            gatePct = 0.90; // relaxed from 0.80 - improves fluidity in Balanced mode
         } else if (pacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-            gatePct = 0.90; // relaxed from 0.85 - better stability when capping FPS
+            gatePct = 0.95; // relaxed from 0.85 - better stability when capping FPS
         } else if (pacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-            gatePct = 0.95; // relaxed from 0.90 - prioritizes smoothness above all
+            gatePct = 0.85; // relaxed from 0.90 - prioritizes smoothness above all
         } else { // others: Warp, Warp2, Lower Latency
-            gatePct = 0.95; // relaxed from 1.00 - balanced approach for low-latency variants
+            gatePct = 0.80; // relaxed from 1.00 - balanced approach for low-latency variants
         }
         final long gateNs = (long) (periodNs * gatePct);
 
