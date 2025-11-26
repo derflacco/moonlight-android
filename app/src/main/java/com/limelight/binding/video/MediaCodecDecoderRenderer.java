@@ -48,6 +48,12 @@ import android.view.SurfaceView;
 
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    // --- Variables to prevent microstutter ---
+    private long lastPhaseLockResetNs = 0L;
+    private static final long PHASE_LOCK_RESET_INTERVAL_NS = 30_000_000_000L; // 30 secondi
+    private long lastJitterDecayNs = 0L;
+    private static final long JITTER_DECAY_INTERVAL_NS = 5_000_000_000L; // 5 secondi
+    private double jitterDecayFactor = 0.98; // Decay del 2% ogni intervallo
     // Lock-free single-producer/single-consumer ring for output indices
     private static final class SpscRing {
         private final int[] buf;
@@ -147,12 +153,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         // Optional feedback from actual render time vs scheduled time.
 // Inject a tiny bias into the integral to remove slow drift.
+        private static final double INTEGRAL_DECAY_FACTOR = 0.995;
         synchronized void onFrameRendered(long scheduledRenderNs, long actualRenderNs) {
             long err = actualRenderNs - scheduledRenderNs; // +late / -early
-            double fb = 0.02 * (double) err; // tiny gain
+            double fb = 0.015 * (double) err; // gain reduced
+
+            // Apply the  decay
+            integ *= INTEGRAL_DECAY_FACTOR;
+
             integ += fb;
-            if (integ > integClampNs) integ = integClampNs;
-            if (integ < -integClampNs) integ = -integClampNs;
+
+            // Conservative limits for long sessions
+            double effectiveIntegClamp = integClampNs * 0.7; // 30% più conservativo
+            if (integ > effectiveIntegClamp) integ = effectiveIntegClamp;
+            if (integ < -effectiveIntegClamp) integ = -effectiveIntegClamp;
         }
 
         // Wrap x into [-period/2 .. +period/2]
@@ -2140,6 +2154,22 @@ boolean isC2Decoder = false;
                         && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
 
                 while (!stopping) {
+                    // reset phaselock
+                    long currentTimeNs = System.nanoTime();
+                    if (phaseLock != null && currentTimeNs - lastPhaseLockResetNs > PHASE_LOCK_RESET_INTERVAL_NS) {
+                        initPhaseLockIfNeeded();
+                        lastPhaseLockResetNs = currentTimeNs;
+                        LimeLog.info("PhaseLock: periodic reset applied");
+                    }
+                    // periodic jitter decay
+                    if (currentTimeNs - lastJitterDecayNs > JITTER_DECAY_INTERVAL_NS) {
+                        if (ijhJitterNs > expectedInterNs * 0.05) {
+                            ijhJitterNs *= jitterDecayFactor;
+                            ijhJitterNs = Math.max(expectedInterNs * 0.02, ijhJitterNs);
+                            LimeLog.info("Jitter decay applied: " + (ijhJitterNs / 1_000_000.0) + "ms");
+                        }
+                        lastJitterDecayNs = currentTimeNs;
+                    }
                     // Start ADPF work interval for non-Choreographer paths
                     if (MediaCodecDecoderRenderer.this.perfHint != null
                             && MediaCodecDecoderRenderer.this.perfHint.isActive()
