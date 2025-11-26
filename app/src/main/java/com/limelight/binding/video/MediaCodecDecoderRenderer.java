@@ -2129,7 +2129,7 @@ boolean isC2Decoder = false;
 
 // --- Robust Quantile Hybrid (RQH) state ---
 // Keep naming compatible with old IJH usage where possible
-                final double IJH_INST_WEIGHT = 0.60;  // instant deviation weight (0..1)
+                final double IJH_INST_WEIGHT = 0.45;  // instant deviation weight (0..1)
                 final double IJH_PCTL       = 0.80;   // target quantile of inter-arrival deviations
                 final double expectedInterNs = (double) streamPeriodNs; // cadence from stream FPS
 
@@ -2337,7 +2337,7 @@ boolean isC2Decoder = false;
                                         // Pre-compute constants to avoid repeated multiplications
                                         final double expectedInterClamp   = expectedInterNs * 0.75;
                                         final double minJitterThreshold   = expectedInterNs * 0.02;
-                                        final double maxJitterThreshold   = expectedInterNs * 0.50;
+                                        final double maxJitterThreshold   = expectedInterNs * 0.40;  // was 0.50: slightly less aggressive
 
                                         // RQH: instantaneous deviation + online quantile (no arrays, no sort)
                                         final double instDev = Math.min(
@@ -2427,7 +2427,7 @@ boolean isC2Decoder = false;
 // Hybrid jitter: weighted instant + online quantile, then clamp
                                     double hybrid = (IJH_INST_WEIGHT * instDev) + ((1.0 - IJH_INST_WEIGHT) * pctl);
                                     double lo = expectedInterNs * 0.02;  // >= 2% of period
-                                    double hi = expectedInterNs * 0.50;  // <= 50% of period
+                                    double hi = expectedInterNs * 0.40;  // <= 40% of period (less aggressive at low Hz)
                                     ijhJitterNs = Math.max(lo, Math.min(hi, hybrid));
                                 }
                             }
