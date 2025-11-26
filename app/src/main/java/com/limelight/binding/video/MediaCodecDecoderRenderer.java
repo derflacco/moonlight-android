@@ -496,7 +496,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         long margin = base + (long) (Math.max(0.0, jitterNs) * scale);
 
         final long minMargin = 150_000L; // keep same floor used by present scheduling
-        final long maxMargin = periodNs / 3; // don't eat more than ~33% of a frame period
+
+        // On low-refresh panels (long period), avoid over-conservative margins.
+        // Clamp around 22–30% of the period depending on profile.
+        final double maxFrac;
+        if (periodNs >= 12_000_000L) { // ~<= 83 Hz (e.g. 60 Hz, 75 Hz)
+            maxFrac = preferLowerDelays ? 0.22 : 0.25;
+        } else {
+            maxFrac = preferLowerDelays ? 0.25 : 0.30;
+        }
+        final long maxMargin = (long) (periodNs * maxFrac);
 
         if (margin < minMargin) margin = minMargin;
         if (margin > maxMargin) margin = maxMargin;
@@ -2123,8 +2132,27 @@ boolean isC2Decoder = false;
                 int    lateStreak        = 0;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
+
+                // Low-Hz & FPS-match detection for deadline gating (e.g. 60 Hz / 60 fps)
+                final boolean lowRefreshPanel = displayHz <= 70f;
+                final boolean fpsNearDisplay  = Math.abs(tfps - displayHz) <= 1.01f;
+
                 // --- Frame deadline gating (early drop) ---
-                final int deadlineMissHystFrac = 8; // clear miss if later than period/8
+                // clearMiss threshold = periodNs / deadlineMissHystFrac
+                //  - smaller value  => larger threshold  => more tolerant
+                //  - larger value   => smaller threshold => more aggressive
+                final int deadlineMissHystFrac;
+                if (lowRefreshPanel && fpsNearDisplay) {
+                    // 60/60 (o 50/50): serve più margine prima di considerare un "miss" duro (~1/3 periodo)
+                    deadlineMissHystFrac = 3;  // ≈ 33% of period
+                } else if (lowRefreshPanel) {
+                    // Low Hz ma fps non perfettamente matchati (~1/5 periodo)
+                    deadlineMissHystFrac = 5;  // ≈ 20% of period
+                } else {
+                    // High-Hz (90/120/144+): mantieni gating più stretto (~1/8 periodo)
+                    deadlineMissHystFrac = 8;  // ≈ 12.5% of period
+                }
+
                 long predictedVsyncNs = 0L;
 
 // --- Robust Quantile Hybrid (RQH) state ---
