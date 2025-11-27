@@ -472,46 +472,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return pfx.append(text).toString(); // shift solo prima riga
     }
     // --- end helpers ---
-    // --- Frame deadline gating helpers (early drop) ---
-    private static long advancePredictedVsync(long predictedNs, long nowNs, long periodNs) {
-        if (periodNs <= 0) return nowNs;
-        if (predictedNs <= 0) {
-            return nowNs + periodNs;
-        }
-        long delta = nowNs - predictedNs;
-        if (delta >= 0) {
-            long steps = (delta / periodNs) + 1;
-            predictedNs += steps * periodNs;
-        }
-        return predictedNs;
-    }
-
-    private static long computeDeadlineMarginNs(
-            long periodNs, double jitterNs, boolean usingDirectPresent, boolean preferLowerDelays) {
-
-        // Base safety margin: tighter for GPU_RAW/Direct Present, looser for GL/compositor paths
-        final long base = usingDirectPresent ? 250_000L : 400_000L; // 0.25 ms vs 0.40 ms
-        final double scale = preferLowerDelays ? 0.8 : 1.2;
-
-        long margin = base + (long) (Math.max(0.0, jitterNs) * scale);
-
-        final long minMargin = 150_000L; // keep same floor used by present scheduling
-
-        // On low-refresh panels (long period), avoid over-conservative margins.
-        // Clamp around 22–30% of the period depending on profile.
-        final double maxFrac;
-        if (periodNs >= 12_000_000L) { // ~<= 83 Hz (e.g. 60 Hz, 75 Hz)
-            maxFrac = preferLowerDelays ? 0.22 : 0.25;
-        } else {
-            maxFrac = preferLowerDelays ? 0.25 : 0.30;
-        }
-        final long maxMargin = (long) (periodNs * maxFrac);
-
-        if (margin < minMargin) margin = minMargin;
-        if (margin > maxMargin) margin = maxMargin;
-
-        return margin;
-    }
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
@@ -2137,28 +2097,6 @@ boolean isC2Decoder = false;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
 
-                // Low-Hz & FPS-match detection for deadline gating (e.g. 60 Hz / 60 fps)
-                final boolean lowRefreshPanel = displayHz <= 70f;
-                final boolean fpsNearDisplay  = Math.abs(tfps - displayHz) <= 1.01f;
-
-                // --- Frame deadline gating (early drop) ---
-                // clearMiss threshold = periodNs / deadlineMissHystFrac
-                //  - smaller value  => larger threshold  => more tolerant
-                //  - larger value   => smaller threshold => more aggressive
-                final int deadlineMissHystFrac;
-                if (lowRefreshPanel && fpsNearDisplay) {
-                    // 60/60 (o 50/50): serve più margine prima di considerare un "miss" duro (~1/3 periodo)
-                    deadlineMissHystFrac = 3;  // ≈ 33% of period
-                } else if (lowRefreshPanel) {
-                    // Low Hz ma fps non perfettamente matchati (~1/5 periodo)
-                    deadlineMissHystFrac = 5;  // ≈ 20% of period
-                } else {
-                    // High-Hz (90/120/144+): mantieni gating più stretto (~1/8 periodo)
-                    deadlineMissHystFrac = 8;  // ≈ 12.5% of period
-                }
-
-                long predictedVsyncNs = 0L;
-
 // --- Robust Quantile Hybrid (RQH) state ---
 // Keep naming compatible with old IJH usage where possible
                 final double IJH_INST_WEIGHT = 0.45;  // instant deviation weight (0..1)
@@ -2564,48 +2502,33 @@ boolean isC2Decoder = false;
                                     // AdaptX: auto-adaptive pacing (vsync-aligned with dynamic guard)
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-                                        // --- Deadline gating: if we already missed the next vsync window, drop early ---
-                                        predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, nowNs, periodNs);
 
-                                        final long marginNs = computeDeadlineMarginNs(
-                                                periodNs,
-                                                ijhJitterNs,
-                                                usingDirectPresent,
-                                                preferLowerDelays
-                                        );
-                                        final long deadlineNs = predictedVsyncNs - marginNs;
-                                        final long missByNs = nowNs - deadlineNs;
-                                        final boolean missDeadline = missByNs > 0;
-                                        final boolean clearMiss = missByNs > (periodNs / deadlineMissHystFrac);
-
-                                        if (missDeadline && (lateStreak > 0 || clearMiss)) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue;
+                                        // Pressure from jitter + recent drops
+                                        double pressure = 0.0;
+                                        if (vsyncPeriodNs > 0L) {
+                                            pressure = (ijhJitterNs > 0.0 ? (ijhJitterNs / (double) vsyncPeriodNs) : 0.0)
+                                                    + (recentDrops * 0.10);
                                         }
+                                        if (pressure < 0.0) pressure = 0.0;
+                                        else if (pressure > 1.0) pressure = 1.0;
 
-                                        // Pressure from jitter + recent drops (using your ijhJitterNs)
-                                        double pressure = Math.min(1.0, (ijhJitterNs / (double) periodNs) + (recentDrops * 0.1));
-
-                                        // Drop threshold between Latency and Smoothness (auto)
+                                        // Drop threshold between latency and smoothness (auto):
+                                        //  - low pressure  -> ~1.05× period (low latency)
+                                        //  - high pressure -> ~1.15× period (more forgiving)
                                         double factor = 1.05 + 0.10 * pressure;   // ~1.05x..1.15x
-                                        factor = Math.max(1.05, Math.min(1.15, factor));
-                                        long dropThresholdNs = (long) (periodNs * factor);
+                                        if (factor < 1.05) factor = 1.05;
+                                        else if (factor > 1.15) factor = 1.15;
+                                        final long dropThresholdNs = (long) (periodNs * factor);
 
-                                        // Drop heuristic (debounce + cooldown)
-                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : Math.max(0L, nowNs - lastPresentNs);
+                                        // Drop heuristic (cooldown-based), using local present spacing
+                                        final long sinceLastPresent = (lastPresentNs == 0L)
+                                                ? Long.MAX_VALUE
+                                                : Math.max(0L, nowNs - lastPresentNs);
                                         final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
-                                        final boolean isLate = frameAgeNs > dropThresholdNs;
+                                        final boolean isLate = sinceLastPresent > dropThresholdNs;
 
-                                        if (isLate) {
-                                            lateStreak++;
-                                        } else if (lateStreak > 0) {
-                                            lateStreak = 0;
-                                        }
-                                        if (isLate && dropCooldownOk && sinceLastPresent < (long) (periodNs * 0.50)) {
+                                        if (isLate && dropCooldownOk) {
+                                            // We're drifting away from vsync cadence: drop to shed backlog
                                             videoDecoder.releaseOutputBuffer(lastIndex, false);
                                             frameDropped = true;
                                             lastDropNs = nowNs;
@@ -2613,16 +2536,21 @@ boolean isC2Decoder = false;
                                             continue;
                                         }
 
-// Target present: align to vsync with optimized guard time (dPLL)
-                                        if (phaseLock == null) { initPhaseLockIfNeeded(); }  // uses refreshRate -> vsyncPeriod (dPLL)
-// OPTIMIZED: Reduced guard time for AdaptX (0.025 vs 0.030) to improve responsiveness
-// Maintains stability while reducing the latency penalty reported by users
-                                        long guardNs = Math.min((long) (periodNs * (preferLowerDelays ? 0.018 : 0.025)), 1_500_000L);
+                                        // Target present: vsync-aligned with dynamic guard based on jitter
+                                        if (phaseLock == null) {
+                                            initPhaseLockIfNeeded();  // uses refreshRate -> vsyncPeriod (dPLL)
+                                        }
+
+                                        // Base guard slightly higher, with extra 1% at max pressure
+                                        final double guardBase = preferLowerDelays ? 0.020 : 0.027;
+                                        final double guardFrac = guardBase + 0.010 * pressure; // [~2.0%..3.7%] depending on jitter
+                                        final long guardNs = Math.min((long) (periodNs * guardFrac), 1_500_000L);
+
                                         long baseTs = nowNs + guardNs;
                                         if (phaseLock != null && lastVsyncNs != 0L) {
                                             baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
                                         }
-                                        long tsNs = Math.max(nowNs + 150_000L, baseTs); // never in the past
+                                        final long tsNs = Math.max(nowNs + 150_000L, baseTs); // never in the past
 
                                         // Register scheduled time for feedback (OnFrameRendered) and present
                                         try {
@@ -2632,7 +2560,7 @@ boolean isC2Decoder = false;
                                         videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                         gpuKickPresentHook();
 
-                                        predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, tsNs, periodNs);
+                                        lastPresentNs = tsNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
                                     } else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
