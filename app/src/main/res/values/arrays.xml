@@ -132,8 +132,6 @@
         <item>warp</item>
         <item>latency</item>
         <item>balanced</item>
-        <item>cap-fps</item>
-        <item>smoothness</item>
         <item>gpu-raw</item>
 		<item>adaptx</item>
     </string-array>
