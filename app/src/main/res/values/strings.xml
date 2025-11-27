@@ -367,6 +367,10 @@
     <string name="title_seekbar_adaptx_mode">AdaptX mode</string>
     <string name="prefix_seekbar_adaptx_mode">Mode</string>
     <string name="summary_seekbar_adaptx_mode">0 = Smoothness, 1 = Balanced, 2 = Latency</string>
+    <string name="title_seekbar_warp_factor">Warp factor</string>
+    <string name="prefix_seekbar_warp_factor">Warp</string>
+    <string name="summary_seekbar_warp_factor"> (0 = off, 1=Warp, 2=Warp2)</string>
+
 
 
     <string name="keyboard_service_label">Artemis Physical keyboard</string>

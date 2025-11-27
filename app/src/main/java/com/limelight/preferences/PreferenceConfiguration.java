@@ -112,6 +112,7 @@ public class PreferenceConfiguration {
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String LOW_LATENCY_FRAME_BALANCE_PREF_STRING = "pref_low_latency_frame_balance";
+    private static final String WARP_FACTOR_PREF_STRING = "warp_factor_mode";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
@@ -922,11 +923,19 @@ private static int getFramePacingValue(Context context) {
         config.cpuWarmUpOverridePerfHint = prefs.getBoolean("pref_cpu_warmup_override", false);
 
 
-        String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
-        if (warpFactorStr.equals("warp")) {
-            config.framePacingWarpFactor = 2;
-        } else if (warpFactorStr.equals("warp2")) {
-            config.framePacingWarpFactor = 4;
+        // Global Warp factor from slider:
+        //  slider: 0 = off, 1 = x2, 2 = x4
+        int warpSlider = prefs.getInt("seekbar_warp_factor", 0);
+        switch (warpSlider) {
+            case 1:
+                config.framePacingWarpFactor = 2; // x2
+                break;
+            case 2:
+                config.framePacingWarpFactor = 4; // x4
+                break;
+            default:
+                config.framePacingWarpFactor = 0; // off
+                break;
         }
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
