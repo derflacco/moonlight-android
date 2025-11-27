@@ -58,6 +58,19 @@
             android:summary="@string/summary_frame_pacing"
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
+        <com.limelight.preferences.SeekBarPreference
+            android:key="seekbar_warp_factor"
+            android:title="@string/title_seekbar_warp_factor"
+            android:summary="@string/summary_seekbar_warp_factor"
+            android:dialogMessage="@string/summary_seekbar_warp_factor"
+            android:text="@string/prefix_seekbar_warp_factor"
+            android:defaultValue="0"
+            android:max="3"
+            app:iconSpaceReserved="false"
+            seekbar:min="0"
+            seekbar:step="1"
+            seekbar:keyStep="1"
+            seekbar:divisor="1" />
     <CheckBoxPreference
         android:defaultValue="false"
         android:key="pref_low_latency_frame_balance"
