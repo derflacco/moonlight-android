@@ -2564,10 +2564,7 @@ boolean isC2Decoder = false;
                                     // AdaptX: auto-adaptive pacing (vsync-aligned with dynamic guard)
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
-                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-                                        if (frameAgeNs < 0L) {
-                                            frameAgeNs = 0L;
-                                        }
+                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
                                         // --- Deadline gating: if we already missed the next vsync window, drop early ---
                                         predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, nowNs, periodNs);
 
@@ -2636,7 +2633,6 @@ boolean isC2Decoder = false;
                                         gpuKickPresentHook();
 
                                         predictedVsyncNs = advancePredictedVsync(predictedVsyncNs, tsNs, periodNs);
-                                        lastPresentNs = tsNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
                                     } else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
