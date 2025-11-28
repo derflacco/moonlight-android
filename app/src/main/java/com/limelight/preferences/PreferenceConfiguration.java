@@ -709,7 +709,7 @@ private static int getFramePacingValue(Context context) {
         else if (str.equals("gpu-raw")) {
             return FRAME_PACING_GPU_RAW;
         }
-		else if (str.equals("adaptx)")) {
+		else if (str.equals("adaptx")) {
 		 return FRAME_PACING_ADAPTX; }
         else {
             // Should never get here
