@@ -198,6 +198,7 @@ public class StreamSettings extends AppCompatActivity {
             Preference pacingPref = findPreference("frame_pacing");
             Preference lfrBal     = findPreference("pref_low_latency_frame_balance");
             Preference fsrEn      = findPreference("pref_video_upscale_enable");
+            Preference warpSeek   = findPreference("seekbar_warp_factor");
             Preference adaptxSeek = findPreference("seekbar_adaptx_mode");
 
             if (pacingPref != null) pacingPref.setEnabled(!lockPacing);
@@ -208,7 +209,29 @@ public class StreamSettings extends AppCompatActivity {
             String pacingStr = sp.getString("frame_pacing", "latency");
             if (pacingStr == null) pacingStr = "latency";
 
-            final boolean isAdaptx = "adaptx".equals(pacingStr);
+            final boolean isMinLatency = "latency".equals(pacingStr);
+            final boolean isGpuRaw     = "gpu-raw".equals(pacingStr);
+            final boolean isAdaptx     = "adaptx".equals(pacingStr);
+
+            // AdaptX sub-mode (0=Smoothness, 1=Balanced, 2=Latency)
+            int adaptxMode = 1;
+            try {
+                adaptxMode = sp.getInt("seekbar_adaptx_mode", 1);
+            } catch (ClassCastException e) {
+                try {
+                    String s = sp.getString("seekbar_adaptx_mode", "1");
+                    adaptxMode = Integer.parseInt(s);
+                } catch (Throwable ignored) {
+                    adaptxMode = 1;
+                }
+            }
+            final boolean isAdaptxLatencyMode = isAdaptx && (adaptxMode == 2);
+
+            // Warp factor: enabled for latency-focused modes
+            if (warpSeek != null) {
+                boolean enableWarp = (isMinLatency || isGpuRaw || isAdaptxLatencyMode) && !gpuPath;
+                warpSeek.setEnabled(enableWarp);
+            }
 
             // AdaptX seekbar: only enabled in AdaptX mode
             if (adaptxSeek != null) {
