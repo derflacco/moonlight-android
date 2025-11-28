@@ -248,7 +248,10 @@ public class PreferenceConfiguration {
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
     public static final int FRAME_PACING_GPU_RAW = 4;
 	public static final int FRAME_PACING_ADAPTX = 5; // Auto-adaptive pacing
-
+    // AdaptX modes for fine control
+    public static final int ADAPTX_MODE_SMOOTHNESS = 0;
+    public static final int ADAPTX_MODE_BALANCED   = 1;
+    public static final int ADAPTX_MODE_LATENCY    = 2;
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";
@@ -267,6 +270,8 @@ public class PreferenceConfiguration {
     public int meteredBitrate;
     public FormatOption videoFormat;
     public int framePacingWarpFactor = 0;
+    // AdaptX sub-mode: 0 = Smoothness, 1 = Balanced, 2 = Latency
+    public int adaptxMode = ADAPTX_MODE_BALANCED;
     public int deadzonePercentage;
     public int oscOpacity;
     public int oscKeyboardOpacity;
@@ -903,6 +908,10 @@ private static int getFramePacingValue(Context context) {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
+        // AdaptX sub-mode slider: 0 = Smoothness, 1 = Balanced, 2 = Latency
+        config.adaptxMode = prefs.getInt("seekbar_adaptx_mode",
+                com.limelight.preferences.PreferenceConfiguration.ADAPTX_MODE_BALANCED);
+        config.preferLowerDelays = getPreferLowerDelays(context);
         config.preferLowerDelays = getPreferLowerDelays(context);
         // Big cores preference (non-root)
         config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);
