@@ -3,6 +3,8 @@ package com.limelight;
 
 import static com.limelight.StartExternalDisplayControlReceiver.requestFocusToExternalDisplayControl;
 import static com.limelight.binding.input.KeyboardTranslator.getModifier;
+import static com.limelight.preferences.PreferenceConfiguration.ADAPTX_MODE_LATENCY;
+import static com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_ADAPTX;
 import static com.limelight.utils.ExternalDisplayControlActivity.SECONDARY_SCREEN_NOTIFICATION_ID;
 import static com.limelight.utils.ExternalDisplayControlActivity.closeExternalDisplayControl;
 import static com.limelight.utils.ServerHelper.getActiveDisplay;
@@ -837,9 +839,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
 
-        if (prefConfig.framePacingWarpFactor > 0) {
+        // Apply Warp factor only on latency-oriented pacing profiles
+        final boolean warpEnabledForMode =
+                (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
+                        (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) ||(prefConfig.framePacing == FRAME_PACING_ADAPTX &&
+                                prefConfig.adaptxMode == ADAPTX_MODE_LATENCY);
+
+        if (warpEnabledForMode && prefConfig.framePacingWarpFactor > 0) {
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
+            LimeLog.info("Warp factor x" + prefConfig.framePacingWarpFactor +
+                    " -> target refresh " + chosenFrameRate + " Hz");
         }
+
 
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
@@ -4507,10 +4518,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             final boolean isMaxSmooth =
                     (fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
             final boolean isAdaptx =
-                    (fp == PreferenceConfiguration.FRAME_PACING_ADAPTX);
+                    (fp == FRAME_PACING_ADAPTX);
 
             final boolean adaptxLatencyMode =
-                    isAdaptx && (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY);
+                    isAdaptx && (adaptxMode == ADAPTX_MODE_LATENCY);
 
             // For AdaptX/Latency we force LFR regardless of global toggle.
             if (adaptxLatencyMode) {
