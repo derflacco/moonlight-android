@@ -2499,70 +2499,259 @@ boolean isC2Decoder = false;
                                     }
                                 }
                                 else if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
-                                    // AdaptX: auto-adaptive pacing (vsync-aligned with dynamic guard)
+                                    // AdaptX: intelligent pacing with 3 sub-modes:
+                                    // - Smoothness: maximum smoothness (vsync-locked, tolerant to lateness)
+                                    // - Balanced  : middle ground (vsync-locked, moderate drops)
+                                    // - Latency   : low-latency (immediate present, aggressive stale-frame drops)
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
 
-                                        // Pressure from jitter + recent drops
-                                        double pressure = 0.0;
-                                        if (vsyncPeriodNs > 0L) {
-                                            pressure = (ijhJitterNs > 0.0 ? (ijhJitterNs / (double) vsyncPeriodNs) : 0.0)
-                                                    + (recentDrops * 0.10);
+                                        // End-to-end frame age (from host PTS to now)
+                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
+                                        if (frameAgeNs < 0L) {
+                                            frameAgeNs = 0L;
                                         }
-                                        if (pressure < 0.0) pressure = 0.0;
-                                        else if (pressure > 1.0) pressure = 1.0;
 
-                                        // Drop threshold between latency and smoothness (auto):
-                                        //  - low pressure  -> ~1.05× period (low latency)
-                                        //  - high pressure -> ~1.15× period (more forgiving)
-                                        double factor = 1.05 + 0.10 * pressure;   // ~1.05x..1.15x
-                                        if (factor < 1.05) factor = 1.05;
-                                        else if (factor > 1.15) factor = 1.15;
-                                        final long dropThresholdNs = (long) (periodNs * factor);
-
-                                        // Drop heuristic (cooldown-based), using local present spacing
+                                        // Time since last present
                                         final long sinceLastPresent = (lastPresentNs == 0L)
                                                 ? Long.MAX_VALUE
                                                 : Math.max(0L, nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
-                                        final boolean isLate = sinceLastPresent > dropThresholdNs;
 
-                                        if (isLate && dropCooldownOk) {
-                                            // We're drifting away from vsync cadence: drop to shed backlog
-                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue;
+                                        // Jitter and back-pressure normalization
+                                        double jitterNorm = 0.0;
+                                        if (vsyncPeriodNs > 0L) {
+                                            jitterNorm = (ijhJitterNs > 0.0)
+                                                    ? (ijhJitterNs / (double) vsyncPeriodNs)
+                                                    : 0.0;
+                                            if (jitterNorm > 2.0) jitterNorm = 2.0; // clamp extreme spikes
                                         }
 
-                                        // Target present: vsync-aligned with dynamic guard based on jitter
-                                        if (phaseLock == null) {
-                                            initPhaseLockIfNeeded();  // uses refreshRate -> vsyncPeriod (dPLL)
+                                        double backPressure = 0.0;
+                                        if (tryAgainStreak > 0) {
+                                            // 0..1 over 4 consecutive TRY_AGAINs
+                                            backPressure = Math.min(1.0, (double) tryAgainStreak / 4.0);
                                         }
 
-                                        // Base guard slightly higher, with extra 1% at max pressure
-                                        final double guardBase = preferLowerDelays ? 0.020 : 0.027;
-                                        final double guardFrac = guardBase + 0.010 * pressure; // [~2.0%..3.7%] depending on jitter
-                                        final long guardNs = Math.min((long) (periodNs * guardFrac), 1_500_000L);
-
-                                        long baseTs = nowNs + guardNs;
-                                        if (phaseLock != null && lastVsyncNs != 0L) {
-                                            baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
+                                        double dropPressure = 0.0;
+                                        if (recentDrops > 0) {
+                                            dropPressure = Math.min(1.0, (double) recentDrops / 6.0);
                                         }
-                                        final long tsNs = Math.max(nowNs + 150_000L, baseTs); // never in the past
 
-                                        // Register scheduled time for feedback (OnFrameRendered) and present
-                                        try {
-                                            scheduledByPtsUs.put(lastPtsUs, tsNs);
-                                        } catch (Throwable ignored) {}
+                                        // Combined "pressure" in [0..1] used mainly for guard tuning
+                                        double pressure = (0.5 * jitterNorm) + (0.3 * dropPressure) + (0.2 * backPressure);
+                                        if (pressure < 0.0) pressure = 0.0;
+                                        else if (pressure > 1.0) pressure = 1.0;
 
-                                        videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
-                                        gpuKickPresentHook();
+                                        // AdaptX sub-mode: 0 = Smoothness, 1 = Balanced, 2 = Latency
+                                        final int adaptxMode = (prefs != null)
+                                                ? prefs.adaptxMode
+                                                : PreferenceConfiguration.ADAPTX_MODE_BALANCED;
+                                        final boolean modeSmooth =
+                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
+                                        final boolean modeLatency =
+                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY);
+                                        final boolean modeBalanced = !modeSmooth && !modeLatency;
 
-                                        lastPresentNs = tsNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
+                                        // Warp factor: only Latency mode uses it
+                                        int warpLevel = 0;
+                                        if (modeLatency && prefs != null && prefs.framePacingWarpFactor > 0) {
+                                            // Map slider 1..3 to low/medium/high aggressiveness
+                                            warpLevel = Math.min(3, Math.max(1, prefs.framePacingWarpFactor));
+                                        }
+
+                                        final boolean havePeriod = (periodNs > 0L && vsyncPeriodNs > 0L);
+
+                                        // Under-run detection: game not keeping up with display/stream rate
+                                        boolean underRun = false;
+                                        if (havePeriod) {
+                                            // If frames are consistently older than ~1.5× period and jitter is high,
+                                            // treat this as under-run (e.g. 45 fps on a 60 Hz stream).
+                                            if (frameAgeNs > (long) (1.5 * (double) periodNs)) {
+                                                underRun = true;
+                                            }
+                                            if (jitterNorm > 1.1 &&
+                                                    sinceLastPresent > (long) (1.1 * (double) periodNs)) {
+                                                underRun = true;
+                                            }
+                                        }
+
+                                        if (modeLatency) {
+                                            // ---- AdaptX Latency: GPU-RAW-like immediate present with stale-frame drops ----
+                                            if (havePeriod) {
+                                                double minLatFactor = 1.00;
+                                                double maxLatFactor = 1.08;
+
+                                                // Warp tightens allowed lateness (more aggressive)
+                                                if (warpLevel > 0) {
+                                                    final double tighten = 0.01 * warpLevel; // 1–3%
+                                                    minLatFactor = Math.max(0.96, minLatFactor - tighten * 0.3);
+                                                    maxLatFactor = Math.max(1.00, maxLatFactor - tighten);
+                                                }
+
+                                                // Threshold around 1.0× period, slightly relaxed by jitter/back-pressure
+                                                double factorLatency = 1.00
+                                                        + 0.06 * jitterNorm
+                                                        + 0.04 * backPressure;
+                                                if (factorLatency < minLatFactor) factorLatency = minLatFactor;
+                                                else if (factorLatency > maxLatFactor) factorLatency = maxLatFactor;
+
+                                                final long dropThresholdNs = (long) (periodNs * factorLatency);
+
+                                                long hardDropNs = (long) (2.0 * (double) periodNs);
+                                                if (warpLevel > 0) {
+                                                    double hardTighten = 0.20 * warpLevel; // 20–60%
+                                                    if (hardTighten > 0.75) hardTighten = 0.75;
+                                                    hardDropNs = (long) (hardDropNs * (1.0 - hardTighten));
+                                                    if (hardDropNs < (long) (1.05 * (double) periodNs)) {
+                                                        hardDropNs = (long) (1.05 * (double) periodNs);
+                                                    }
+                                                }
+
+                                                final boolean veryStale = frameAgeNs > hardDropNs;
+                                                final long cooldownDiv = 3L;
+                                                final boolean dropCooldownOk =
+                                                        (nowNs - lastDropNs) >= (periodNs / cooldownDiv);
+
+                                                final boolean isLate = frameAgeNs > dropThresholdNs;
+                                                lateStreak = isLate ? (lateStreak + 1) : 0;
+
+                                                final boolean backlog =
+                                                        sinceLastPresent < (long) (1.0 * (double) periodNs);
+
+                                                final boolean shouldDrop =
+                                                        dropCooldownOk && (
+                                                                veryStale ||
+                                                                        (isLate && backlog && lateStreak >= 1)
+                                                        );
+
+                                                if (shouldDrop) {
+                                                    // Drop stale frames to clamp end-to-end latency
+                                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                    frameDropped = true;
+                                                    lastDropNs = nowNs;
+                                                    recentDrops = Math.min(10, recentDrops + 1);
+                                                    continue; // stats already recorded at dequeue for this PTS
+                                                }
+                                            }
+
+                                            // Immediate present at "now" (phase-agnostic)
+                                            try {
+                                                scheduledByPtsUs.put(lastPtsUs, nowNs);
+                                            } catch (Throwable ignored) {}
+
+                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                            gpuKickPresentHook();
+
+                                            lastPresentNs = nowNs;
+                                            lateStreak = 0;
+                                            recentDrops = Math.max(0, recentDrops - 1);
+                                        } else {
+                                            // ---- AdaptX Smoothness / Balanced: vsync-locked with mismatch-aware drops ----
+                                            if (havePeriod) {
+                                                double minFactor;
+                                                double maxFactor;
+                                                long hardDropNs;
+                                                long cooldownDiv;
+                                                int requiredLateStreak;
+                                                double backlogWindowMul;
+
+                                                if (modeSmooth) {
+                                                    // Smoothness: very tolerant to lateness, drops are rare
+                                                    minFactor = 1.08;
+                                                    maxFactor = 1.28;
+                                                    hardDropNs = periodNs * 4L;  // only very stale frames
+                                                    cooldownDiv = 3L;            // slower drop rate
+                                                    requiredLateStreak = 3;      // need multiple late detections
+                                                    backlogWindowMul = 1.5;      // require relatively frequent presents
+                                                } else {
+                                                    // Balanced: middle ground between Latency and Smoothness
+                                                    minFactor = 1.03;
+                                                    maxFactor = 1.18;
+                                                    hardDropNs = periodNs * 3L;
+                                                    cooldownDiv = 2L;
+                                                    requiredLateStreak = 2;
+                                                    backlogWindowMul = 1.0;
+                                                }
+
+                                                // Threshold based on jitter/back-pressure
+                                                double factor = minFactor
+                                                        + (maxFactor - minFactor) * (0.6 * jitterNorm + 0.4 * backPressure);
+                                                if (factor < minFactor) factor = minFactor;
+                                                else if (factor > maxFactor) factor = maxFactor;
+
+                                                final long dropThresholdNs = (long) (periodNs * factor);
+
+                                                final boolean veryStale = frameAgeNs > hardDropNs;
+                                                final boolean dropCooldownOk =
+                                                        (nowNs - lastDropNs) >= (periodNs / cooldownDiv);
+
+                                                final boolean isLate = frameAgeNs > dropThresholdNs;
+                                                lateStreak = isLate ? (lateStreak + 1) : 0;
+
+                                                final boolean backlog =
+                                                        sinceLastPresent < (long) (backlogWindowMul * (double) periodNs);
+
+                                                // Under-run: disable soft drops, keep only hard protection
+                                                final boolean shouldDrop =
+                                                        dropCooldownOk && (
+                                                                veryStale ||
+                                                                        (!underRun && isLate && backlog && lateStreak >= requiredLateStreak)
+                                                        );
+
+                                                if (shouldDrop) {
+                                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                    frameDropped = true;
+                                                    lastDropNs = nowNs;
+                                                    recentDrops = Math.min(10, recentDrops + 1);
+                                                    continue;
+                                                }
+                                            }
+
+                                            // Guard window: per-mode, jitter-aware
+                                            double guardBase;
+                                            double guardSlope;
+
+                                            if (modeSmooth) {
+                                                // Smoothness: larger guard -> more latency, jitter almost invisible
+                                                guardBase = 0.030;  // ~3.0% of period
+                                                guardSlope = 0.015; // up to ~4.5%
+                                            } else {
+                                                // Balanced: moderate guard
+                                                guardBase = preferLowerDelays ? 0.020 : 0.027;
+                                                guardSlope = 0.010;
+                                            }
+
+                                            double guardFrac = guardBase + guardSlope * pressure;
+                                            if (guardFrac < 0.004) guardFrac = 0.004;
+                                            final long guardNs;
+                                            if (periodNs > 0L) {
+                                                guardNs = Math.min((long) (periodNs * guardFrac), 1_800_000L);
+                                            } else {
+                                                guardNs = 1_000_000L; // ~1 ms fallback
+                                            }
+
+                                            // Smoothness + Balanced: vsync-locked via PhaseLock
+                                            if (phaseLock == null) {
+                                                initPhaseLockIfNeeded();
+                                            }
+                                            long baseTs = nowNs + guardNs;
+                                            if (phaseLock != null && lastVsyncNs != 0L) {
+                                                baseTs = phaseLock.adjust(baseTs, lastVsyncNs);
+                                            }
+                                            final long tsNs = Math.max(nowNs + 150_000L, baseTs); // never in the past
+
+                                            try {
+                                                scheduledByPtsUs.put(lastPtsUs, tsNs);
+                                            } catch (Throwable ignored) {}
+
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            gpuKickPresentHook();
+
+                                            lastPresentNs = tsNs;
+                                            recentDrops = Math.max(0, recentDrops - 1);
+                                        }
                                     } else {
+                                        // Legacy path: no fine-grained timestamps available
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
                                         gpuKickPresentHook();
                                     }
