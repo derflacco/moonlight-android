@@ -364,7 +364,9 @@
 	<string name="pacing_adaptx">AdaptX</string>
     <string name="gpu_path_mode_title">Direct Present</string>
     <string name="gpu_path_mode_summary">uses system-driven vsync; disable to use FSR; forces GPU RAW,FSR off</string>
-
+    <string name="title_seekbar_adaptx_mode">AdaptX mode</string>
+    <string name="prefix_seekbar_adaptx_mode">Mode</string>
+    <string name="summary_seekbar_adaptx_mode">0 = Smoothness, 1 = Balanced, 2 = Latency</string>
 
 
     <string name="keyboard_service_label">Artemis Physical keyboard</string>
@@ -792,8 +794,8 @@
 
     <string name="pref_gpu_kick_enable_title">GPU Kick (adaptive)</string>
     <string name="pref_gpu_kick_enable_summary">Keep GPU clocks active with a tiny per-frame draw. Adapts to FSR/Direct Present.</string>
-	<string name="pref_cpu_warmup_enable_title">CPU warm-up (medium)</string>
-<string name="pref_cpu_warmup_enable_summary">Pre-boost CPU with 8 worker threads (~50% duty, light 10 ms bursts). Increases power/thermals.</string>
+	<string name="pref_cpu_warmup_enable_title">Hack: CPU Warm-Up </string>
+<string name="pref_cpu_warmup_enable_summary">Pre-boost the CPU. Increases power/thermals. Use at your own risk..</string>
 <string name="pref_cpu_warmup_override_title">Force warm-up even with PerfHint</string>
 <string name="pref_cpu_warmup_override_summary">Ignore ADPF/PerfHint and run warm-up anyway (A/B testing). Use with care.</string>
 
