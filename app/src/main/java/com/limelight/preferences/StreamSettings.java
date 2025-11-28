@@ -162,49 +162,81 @@ public class StreamSettings extends AppCompatActivity {
     }
 
     public static class SettingsFragment extends PreferenceFragmentCompat {
-        // --- UI lock helpers (Direct Present / FSR / HDR) ---
-        private final SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
+        // --- UI state listeners ---
+        SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
                 (sp, key) -> {
                     if ("checkbox_gpu_path_mode".equals(key)                 // Direct Present
                             || "pref_video_upscale_enable".equals(key)       // FSR
-                            || "pref_video_hdr_enable".equals(key)           // HDR (var. 1)
-                            || "pref_hdr_enable".equals(key)                 // HDR (var. 2)
-                            || "pref_hdr_pipeline_enable".equals(key)) {     // HDR pipeline toggle
+                            || "pref_video_hdr_enable".equals(key)           // HDR
+                            || "pref_hdr_enable".equals(key)                 // HDR
+                            || "pref_hdr_pipeline_enable".equals(key)        // HDR
+                            || "frame_pacing".equals(key)                    // Pacing
+                            || "seekbar_adaptx_mode".equals(key)) {          // AdaptX
                         updateLocks();
                     }
                 };
 
-
         private void updateLocks() {
-            // --- UI lock helpers (Direct Present / FSR / HDR) ---
+            // --- UI state management ---
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-            // Direct Present (GPU Path) state
             boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
 
-            // HDR state: true if any HDR toggle is ON
+            // HDR enabled if any HDR toggle is active
             boolean hdrOn =
                     (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
-            // Rules:
-            // - FSR: disable UI when Direct Present OR HDR are active .
-            // - Frame pacing: disable UI when Direct Present is active .
-            boolean lockPacing = gpuPath;               // "frame_pacing"
-            boolean lockLfr    = false;               // "pref_low_latency_frame_balance"
-            boolean lockFsrEn  = gpuPath || hdrOn;      // "pref_video_upscale_enable"
+            // Lock rules:
+            // - FSR: disabled when Direct Present or HDR active
+            // - Frame pacing: disabled when Direct Present active
+            boolean lockPacing = gpuPath;
+            boolean lockLfr    = false;
+            boolean lockFsrEn  = gpuPath || hdrOn;
 
-            Preference pacing = findPreference("frame_pacing");
-            Preference lfrBal = findPreference("pref_low_latency_frame_balance");
-            Preference fsrEn  = findPreference("pref_video_upscale_enable");
-            // If you also want to lock Tight VSync with Direct Present, uncomment below:
-            // Preference tight = findPreference("checkbox_forceTightThresholds");
-            // if (tight != null) tight.setEnabled(!gpuPath);
+            Preference pacingPref = findPreference("frame_pacing");
+            Preference lfrBal     = findPreference("pref_low_latency_frame_balance");
+            Preference fsrEn      = findPreference("pref_video_upscale_enable");
+            Preference warpSeek   = findPreference("seekbar_warp_factor");
+            Preference adaptxSeek = findPreference("seekbar_adaptx_mode");
 
-            if (pacing != null) pacing.setEnabled(!lockPacing);
-            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
-            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
+            if (pacingPref != null) pacingPref.setEnabled(!lockPacing);
+            if (lfrBal   != null)   lfrBal.setEnabled(!lockLfr);
+            if (fsrEn    != null)   fsrEn.setEnabled(!lockFsrEn);
+
+            // Current frame pacing mode
+            String pacingStr = sp.getString("frame_pacing", "latency");
+            if (pacingStr == null) pacingStr = "latency";
+
+            final boolean isMinLatency = "latency".equals(pacingStr);
+            final boolean isGpuRaw     = "gpu-raw".equals(pacingStr);
+            final boolean isAdaptx     = "adaptx".equals(pacingStr);
+
+            // AdaptX sub-mode (0=Smoothness, 1=Balanced, 2=Latency)
+            int adaptxMode = 1;
+            try {
+                adaptxMode = sp.getInt("seekbar_adaptx_mode", 1);
+            } catch (ClassCastException e) {
+                try {
+                    String s = sp.getString("seekbar_adaptx_mode", "1");
+                    adaptxMode = Integer.parseInt(s);
+                } catch (Throwable ignored) {
+                    adaptxMode = 1;
+                }
+            }
+            final boolean isAdaptxLatencyMode = isAdaptx && (adaptxMode == 2);
+
+            // Warp factor: enabled for latency-focused modes
+            if (warpSeek != null) {
+                boolean enableWarp = (isMinLatency || isGpuRaw || isAdaptxLatencyMode) && !gpuPath;
+                warpSeek.setEnabled(enableWarp);
+            }
+
+            // AdaptX seekbar: only enabled in AdaptX mode
+            if (adaptxSeek != null) {
+                adaptxSeek.setEnabled(isAdaptx);
+            }
         }
 
 @Override
