@@ -4483,6 +4483,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // Apply low-latency vs smooth policy to the decoder renderer
 // - LFR ON only for Max Smoothness (tollerante). Bypass on Balanced/CapFPS.
 // - Dequeue timeout: renderer decides per-profile (non-zero) when LFR is OFF.
+// Apply latency policy to decoder renderer based on current profile
     private void applyLatencyPolicy(
             com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
             com.limelight.preferences.PreferenceConfiguration prefConfig) {
@@ -4510,28 +4511,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         } catch (Throwable ignored) {}
     }
 
-        private static boolean isLfrEffective(int fp, int adaptxMode, boolean userLfr) {
-            final boolean isBalanced =
-                    (fp == PreferenceConfiguration.FRAME_PACING_BALANCED);
-            final boolean isCapFps =
-                    (fp == PreferenceConfiguration.FRAME_PACING_CAP_FPS);
-            final boolean isMaxSmooth =
-                    (fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
-            final boolean isAdaptx =
-                    (fp == FRAME_PACING_ADAPTX);
+    private static boolean isLfrEffective(int fp, int adaptxMode, boolean userLfr) {
+        final boolean isBalanced = (fp == PreferenceConfiguration.FRAME_PACING_BALANCED);
+        final boolean isCapFps = (fp == PreferenceConfiguration.FRAME_PACING_CAP_FPS);
+        final boolean isMaxSmooth = (fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
+        final boolean isAdaptx = (fp == FRAME_PACING_ADAPTX);
 
-            final boolean adaptxLatencyMode =
-                    isAdaptx && (adaptxMode == ADAPTX_MODE_LATENCY);
+        final boolean adaptxLatencyMode = isAdaptx && (adaptxMode == ADAPTX_MODE_LATENCY);
 
-            // For AdaptX/Latency we force LFR regardless of global toggle.
-            if (adaptxLatencyMode) {
-                return true;
-            }
-
-            // Bypass LFR on Balanced/CapFPS/Max Smoothness
-            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth;
+        // Force LFR for AdaptX/Latency regardless of global toggle
+        if (adaptxLatencyMode) {
+            return true;
         }
 
+        // Disable LFR for Balanced, CapFPS, and Max Smoothness profiles
+        return userLfr && !isBalanced && !isCapFps && !isMaxSmooth;
+    }
 
 
     // Force host monitor via Sunshine/Apollo hotkey (Ctrl+Alt+Shift+F{N})
