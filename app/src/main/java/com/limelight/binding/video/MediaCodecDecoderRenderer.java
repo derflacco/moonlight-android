@@ -1234,16 +1234,17 @@ try {
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-        }
-
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
         long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
+        if (actualFrameTimeDeltaNs < 0L) {
+            actualFrameTimeDeltaNs = 0L;
+        }
 // Avoid division by zero if refresh rate is not known yet
         int rr = (refreshRate > 0) ? refreshRate : 60;
-        long expectedFrameTimeDeltaNs = 800_000_000L / rr; // within 80% of the next frame
+        final long vsyncPeriodNs = 1_000_000_000L / rr;
+// Soglia a ~80% del periodo
+        long expectedFrameTimeDeltaNs = (vsyncPeriodNs * 8L) / 10L;
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
             // Mark start of CPU work for this frame
             if (MediaCodecDecoderRenderer.this.perfHint != null) {
