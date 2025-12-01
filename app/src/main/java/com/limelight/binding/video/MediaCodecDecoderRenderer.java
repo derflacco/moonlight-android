@@ -1814,10 +1814,11 @@ boolean isC2Decoder = false;
                                         final int    requiredLateStreak;
 
                                         if (modeSmooth) {
-                                            // Smoothness: very tolerant, only drop clearly stale frames
-                                            dropFactor         = 1.30;  // ~30% over target period
-                                            backlogWindowMul   = 1.5;   // consider backlog only if presents are frequent
-                                            cooldownDiv        = 3L;    // slower drop cadence
+                                            // Smoothness: heavily biased toward *not* dropping.
+                                            // Drop only clearly stale frames, and only after a short streak.
+                                            dropFactor         = 1.70;  // ~70% over target period
+                                            backlogWindowMul   = 2.2;   // require recent presents (real backlog)
+                                            cooldownDiv        = 4L;    // slower drop cadence
                                             requiredLateStreak = 3;     // need multiple late frames in a row
                                         } else if (modeLatency) {
                                             // Latency: aggressive, drop quickly when frames are late
@@ -1826,11 +1827,12 @@ boolean isC2Decoder = false;
                                             cooldownDiv        = 2L;    // moderately fast drop cadence
                                             requiredLateStreak = 1;     // drop on first late frame
                                         } else {
-                                            // Balanced: middle ground between Smoothness and Latency
-                                            dropFactor         = 1.12;  // ~12% over target period
-                                            backlogWindowMul   = 1.2;
-                                            cooldownDiv        = 2L;
-                                            requiredLateStreak = 2;
+                                            // Balanced: moderate behavior between Smoothness and Latency.
+                                            // Still drops, but only once lateness is clearly persistent.
+                                            dropFactor         = 1.28;  // ~28% over target period
+                                            backlogWindowMul   = 1.6;   // require a reasonably "busy" queue
+                                            cooldownDiv        = 3L;    // slower than Latency, faster than Smoothness
+                                            requiredLateStreak = 2;     // need at least 2 late frames
                                         }
 
                                         final long dropThresholdNs = (long) (basePeriodNs * dropFactor);

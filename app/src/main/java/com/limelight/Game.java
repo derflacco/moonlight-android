@@ -4458,7 +4458,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
 
     // Apply low-latency vs smooth policy to the decoder renderer
-// - LFR ON only for Max Smoothness (tollerante). Bypass on Balanced/CapFPS.
 // - Dequeue timeout: renderer decides per-profile (non-zero) when LFR is OFF.
     private void applyLatencyPolicy(
             com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
@@ -4501,8 +4500,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 return true;
             }
 
-            // Bypass LFR on Balanced/CapFPS/Max Smoothness
-            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth;
+            // Bypass LFR on Balanced/CapFPS/Max Smoothness and non-latency AdaptX
+            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth && !isAdaptx;
         }
 
 
