@@ -138,7 +138,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
     private final PreferenceConfiguration prefs;
-
+    // Cached direct-present
+    private final boolean fastBypassStatic;
     // --- GPU Kick (GL path) ---
     private boolean enableGpuKick = false;
     private int kickFbo = 0, kickTex = 0, kickProg = 0, kickVbo = 0;
@@ -224,7 +225,21 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
+
+        // Precompute whether we can always take the ultra-thin OES->screen path.
+        this.fastBypassStatic = computeFastBypassStatic(prefs);
     }
+    // Decide once, at construction, if this renderer can use the ultra-thin path.
+    // True when GPU direct path is forced or FSR mode is logically disabled.
+    private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
+        if (prefs == null) return false;
+        if (prefs.gpuPathMode) return true;
+
+        final String mode = prefs.videoUpscaleMode;
+        // FSR bypass
+        return (mode == null || "none".equals(mode));
+    }
+
 
     /** Optional: hint actual on-screen buffer size. */
     public void setPresentationSizeHint(int w, int h) {
@@ -403,6 +418,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     // ====== Render Mode Decision ======
+    // ====== Render Mode Decision ======
     private enum RenderMode { BYPASS, RCAS_ONLY, EASU_RCAS }
 
     private RenderMode determineRenderMode(boolean upscaleEnabled, String mode, boolean nearNative) {
@@ -415,15 +431,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
     }
 
+    // FSR completely bypassed (no EASU, no RCAS): we can just blit OES -> screen.
+    // Used to skip renderFrame() entirely when FSR is logically off.
+    private boolean isFsrBypassFastPath() {
+        if (prefs == null) return false;
+        final String mode = prefs.videoUpscaleMode;
+        // Treat null or "none" as full bypass
+        return (mode == null || "none".equals(mode));
+    }
+
     private boolean isNearNativeScale(int dstW, int dstH) {
         float scaleX = (float) dstW / (float) srcW;
         float scaleY = (float) dstH / (float) srcH;
         return Math.abs(Math.min(scaleX, scaleY) - 1.0f) < NEAR_NATIVE_THRESHOLD;
     }
 
+
     // ====== Main Render Loop ======
     private void renderLoop() {
         try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY); } catch (Throwable ignored) {}
+
+        // If the user fully disabled FSR, stop this renderer thread early.
         if (prefs != null && !prefs.videoUpscaleEnable) {
             running.set(false);
             return;
@@ -435,6 +463,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         final long minIdleWaitMs = 5L;  // responsive lower bound
 
         while (running.get()) {
+            // Wait for either a new frame or a size change (with adaptive idle sleep).
             synchronized (frameLock) {
                 boolean hasWork = (pendingFrames.get() > 0 || sizeChangedSinceLastSwap);
                 if (!hasWork) {
@@ -459,35 +488,37 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (!running.get()) break;
             if (!isGlReady()) continue;
             if (!makeCurrent()) continue;
-            if (!fixedStateApplied) { applyFixedState(); }
 
             boolean didUpdateTex = updateTexture();
             boolean valid = refreshWindowSizeIfNeeded();
             if (!valid || fbW <= 0 || fbH <= 0) continue;
 
-            // Skip frame if nothing changed
+            // Skip frame if nothing changed (no new frame, no size change)
             if (!didUpdateTex && !sizeChangedSinceLastSwap) continue;
 
             ensureViewport(fbW, fbH);
 
-            // Special GPU path: just blit OES to screen
-            if (prefs != null && prefs.gpuPathMode) {
+            // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
+            if (fastBypassStatic) {
                 drawOesToScreen();
                 if (!presentFrame()) break;
+
                 texMatrixDirty = false;
                 sizeChangedSinceLastSwap = false;
                 lastFrameNs = System.nanoTime();
                 continue;
             }
 
+            // Full FSR path (EASU/RCAS/RCAS-only) when enabled.
             RenderResult result = renderFrame();
             if (!result.success) {
-                // Fallback: direct blit
+                // Fallback: direct blit if FSR draw failed.
                 drawOesToScreen();
             }
 
             if (!presentFrame()) {
-                break; // stop loop on persistent failure / invalid surface
+                // Stop loop on persistent failure / invalid surface.
+                break;
             }
 
             texMatrixDirty = false;
@@ -1039,9 +1070,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         initializeGeometry();
         glCheckError("initializeGeometry");
         initializeShaders();
+
+        // Apply fixed GL state once per EGL/GL init (no need to re-check in renderLoop).
+        applyFixedState();
+
         this.enableGpuKick = (prefs != null && prefs.enableGpuKick);
         initGpuKickIfNeeded();
     }
+
 
     private void initializeGeometry() {
         // Fullscreen quad positions/UVs
