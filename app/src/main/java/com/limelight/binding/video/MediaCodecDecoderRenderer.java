@@ -58,7 +58,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile long lastAffinityRefreshNs = 0L;
     private volatile String lastAllowedMask = null;
     private volatile boolean affinityPinned = false;
-      // Latency profile: favor minimal end-to-end delay over absolute smoothness.
+    // Display refresh tracking
+    private DisplayRefreshManager displayRefreshManager;
 // --- FSR-like upscaler reflection helpers (no hard dependency) ---
 // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
 
@@ -1578,17 +1579,24 @@ try {
                 }
 //* Pin hot threads to big cluster *//
 
-                // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
-                long vsyncPeriodNs;
-                float displayHz = 60f;
-                try {
-                    if (Build.VERSION.SDK_INT >= 17 && context != null) {
-                        android.view.Display d = ((android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay();
-                        if (d != null) displayHz = d.getRefreshRate();
+                // Compute display refresh and vsync period once using DisplayRefreshManager (fallback 60 Hz)
+                if (displayRefreshManager == null && context != null) {
+                    try {
+                        displayRefreshManager = new DisplayRefreshManager(context);
+                    } catch (Throwable t) {
+                        LimeLog.warning("DisplayRefreshManager: init failed, falling back to defaults: " + t);
                     }
-                } catch (Throwable ignored) {}
-                if (displayHz <= 0f) displayHz = 60f;
-                vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
+                }
+
+                final long vsyncPeriodNs;
+                final float displayHz;
+                if (displayRefreshManager != null) {
+                    vsyncPeriodNs = displayRefreshManager.getVsyncPeriodNs();
+                    displayHz = displayRefreshManager.getRefreshRateHz();
+                } else {
+                    vsyncPeriodNs = 16_666_667L; // ~60 Hz
+                    displayHz = 60f;
+                }
 
                 // Stream cadence (targetFps set in setup(...))
                 final float tfps = (targetFps > 0f ? targetFps : 60f);
@@ -2405,19 +2413,30 @@ boolean isC2Decoder = false;
 
     }
 
-    @Override
-    public void cleanup() {
-        try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
+        @Override
+        public void cleanup() {
+            try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
 
-        // Ensure decoder and any GL upscaler resources are released
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+            // Ensure decoder and any GL upscaler resources are released
+            try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
+            glUpscaler = null;
+            if (decoderInputSurfaceForUpscale != null) {
+                try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+                decoderInputSurfaceForUpscale = null;
+            }
+
+            // Release display refresh listener/manager
+            if (displayRefreshManager != null) {
+                try {
+                    displayRefreshManager.release();
+                } catch (Throwable ignored) {
+                }
+                displayRefreshManager = null;
+            }
+
+            videoDecoder.release();
         }
-        videoDecoder.release();
-    }
+
 
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
@@ -3337,6 +3356,144 @@ boolean isC2Decoder = false;
                 gpuKickPbuffer.kickOnce();
             }
         } catch (Throwable ignored) {}
+    }
+    // Simple display refresh tracking: detect once, optionally update when the display mode changes.
+    private static class DisplayRefreshManager {
+        private static final long DEFAULT_VSYNC_PERIOD_NS   = 16_666_667L; // ~60 Hz
+        private static final long MIN_VALID_VSYNC_NS        = 4_000_000L;  // 250 Hz
+        private static final long MAX_VALID_VSYNC_NS        = 50_000_000L; // 20 Hz
+
+        private final Context appContext;
+
+        // Read-mostly fields, read from render thread
+        private volatile long vsyncPeriodNs = DEFAULT_VSYNC_PERIOD_NS;
+        private volatile float refreshRateHz = 60f;
+
+        // Keep references so we can unregister on release
+        private Object displayManagerRef;  // android.hardware.display.DisplayManager
+        private Object displayListenerRef; // android.hardware.display.DisplayManager.DisplayListener
+
+        DisplayRefreshManager(Context context) {
+            this.appContext = context.getApplicationContext();
+            detectOnce();
+            registerDisplayListenerIfSupported();
+        }
+
+        // Detect refresh rate once using the default display
+        private void detectOnce() {
+            long periodNs = DEFAULT_VSYNC_PERIOD_NS;
+            float hz = 60f;
+
+            try {
+                android.view.WindowManager wm =
+                        (android.view.WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE);
+                if (wm != null) {
+                    android.view.Display display = wm.getDefaultDisplay();
+                    if (display != null) {
+                        float refresh = display.getRefreshRate();
+                        if (refresh > 1f) {
+                            hz = refresh;
+                            long candidate = (long) (1_000_000_000L / refresh);
+                            if (candidate >= MIN_VALID_VSYNC_NS && candidate <= MAX_VALID_VSYNC_NS) {
+                                periodNs = candidate;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                // Keep defaults on failure
+                LimeLog.warning("DisplayRefreshManager: using default vsync, error=" + t);
+            }
+
+            vsyncPeriodNs = periodNs;
+            refreshRateHz = hz;
+            LimeLog.info("DisplayRefreshManager: initial refresh=" + hz + " Hz, period="
+                    + (periodNs / 1_000_000L) + " ms");
+        }
+
+        @android.annotation.TargetApi(android.os.Build.VERSION_CODES.JELLY_BEAN_MR1)
+        private void registerDisplayListenerIfSupported() {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                return;
+            }
+
+            try {
+                android.hardware.display.DisplayManager dm =
+                        (android.hardware.display.DisplayManager) appContext.getSystemService(Context.DISPLAY_SERVICE);
+                if (dm == null) {
+                    return;
+                }
+
+                final android.view.Display defaultDisplay =
+                        dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+                if (defaultDisplay == null) {
+                    return;
+                }
+
+                android.hardware.display.DisplayManager.DisplayListener listener =
+                        new android.hardware.display.DisplayManager.DisplayListener() {
+                            @Override
+                            public void onDisplayAdded(int displayId) {
+                            }
+
+                            @Override
+                            public void onDisplayRemoved(int displayId) {
+                            }
+
+                            @Override
+                            public void onDisplayChanged(int displayId) {
+                                if (displayId != defaultDisplay.getDisplayId()) {
+                                    return;
+                                }
+                                try {
+                                    float refresh = defaultDisplay.getRefreshRate();
+                                    if (refresh > 1f && Math.abs(refresh - refreshRateHz) > 0.5f) {
+                                        long candidate = (long) (1_000_000_000L / refresh);
+                                        if (candidate >= MIN_VALID_VSYNC_NS &&
+                                                candidate <= MAX_VALID_VSYNC_NS) {
+                                            refreshRateHz = refresh;
+                                            vsyncPeriodNs = candidate;
+                                            LimeLog.info("DisplayRefreshManager: refresh changed to "
+                                                    + refresh + " Hz");
+                                        }
+                                    }
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        };
+
+                dm.registerDisplayListener(listener, null);
+                displayManagerRef = dm;
+                displayListenerRef = listener;
+            } catch (Throwable t) {
+                LimeLog.warning("DisplayRefreshManager: failed to register listener: " + t);
+            }
+        }
+
+        long getVsyncPeriodNs() {
+            return vsyncPeriodNs;
+        }
+
+        float getRefreshRateHz() {
+            return refreshRateHz;
+        }
+
+        void release() {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                return;
+            }
+            try {
+                if (displayManagerRef instanceof android.hardware.display.DisplayManager &&
+                        displayListenerRef instanceof android.hardware.display.DisplayManager.DisplayListener) {
+                    android.hardware.display.DisplayManager dm =
+                            (android.hardware.display.DisplayManager) displayManagerRef;
+                    android.hardware.display.DisplayManager.DisplayListener listener =
+                            (android.hardware.display.DisplayManager.DisplayListener) displayListenerRef;
+                    dm.unregisterDisplayListener(listener);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
 private boolean isMTKDecoderName(String name) {
