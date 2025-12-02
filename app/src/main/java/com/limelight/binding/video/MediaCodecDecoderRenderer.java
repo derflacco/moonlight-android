@@ -1806,6 +1806,13 @@ boolean isC2Decoder = false;
                                         final boolean modeLatency =
                                                 (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY);
 
+                                        // Warp factor: used only for Latency mode
+                                        // pNow.framePacingWarpFactor comes from config (0 = off, 2 = x2, 4 = x4)
+                                        final int warpFactorRaw = (pNow.framePacingWarpFactor > 0)
+                                                ? pNow.framePacingWarpFactor
+                                                : 1;
+                                        final boolean warpActive = modeLatency && warpFactorRaw > 1;
+
                                         // --- Per-mode tuning: fixed factors, no complex heuristics ---
                                         // dropFactor: how "late" a frame may be vs the base period before we drop.
                                         final double dropFactor;
@@ -1821,8 +1828,9 @@ boolean isC2Decoder = false;
                                             cooldownDiv        = 4L;    // slower drop cadence
                                             requiredLateStreak = 3;     // need multiple late frames in a row
                                         } else if (modeLatency) {
-                                            // Latency: aggressive, drop quickly when frames are late
-                                            dropFactor         = 1.04;  // ~4% over target period
+                                            // Latency: aggressive, drop quickly when frames are late.
+                                            // Warp-aware: when Warp is active, treat deadlines as if the period were shorter.
+                                            dropFactor         = 1.04;  // base ~4% over target period
                                             backlogWindowMul   = 0.8;   // small backlog window
                                             cooldownDiv        = 2L;    // moderately fast drop cadence
                                             requiredLateStreak = 1;     // drop on first late frame
@@ -1835,7 +1843,19 @@ boolean isC2Decoder = false;
                                             requiredLateStreak = 2;     // need at least 2 late frames
                                         }
 
-                                        final long dropThresholdNs = (long) (basePeriodNs * dropFactor);
+                                        // --- Warp-aware drop timing for Latency mode ---
+                                        // For Latency + Warp, we use a shorter "effective" period for:
+                                        //  - lateness threshold (dropThresholdNs)
+                                        //  - cooldown between drops
+                                        final long dropBasePeriodNs;
+                                        if (warpActive) {
+                                            // Example: at 60 Hz with Warp x2, effective period ~ 8.3 ms instead of 16.6 ms
+                                            dropBasePeriodNs = Math.max(1L, basePeriodNs / warpFactorRaw);
+                                        } else {
+                                            dropBasePeriodNs = basePeriodNs;
+                                        }
+
+                                        final long dropThresholdNs = (long) (dropBasePeriodNs * dropFactor);
 
                                         // Time since last present in this renderer thread
                                         final long sinceLastPresent = (lastPresentNs == 0L)
@@ -1844,7 +1864,7 @@ boolean isC2Decoder = false;
 
                                         // Cooldown to avoid spamming drops
                                         final boolean dropCooldownOk =
-                                                (nowNs - lastDropNs) >= (basePeriodNs / cooldownDiv);
+                                                (nowNs - lastDropNs) >= (dropBasePeriodNs / cooldownDiv);
 
                                         // Late if the frame is older than our per-mode threshold
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
