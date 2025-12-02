@@ -184,16 +184,50 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
-    // Used on versions < 5.0
-    private ByteBuffer[] legacyInputBuffers;
+    // ------------------------------------------------------------
+    // Cold codec configuration/state (rarely touched in hot path)
+    // ------------------------------------------------------------
+    private static final class ColdCodecConfig {
+        // Used on versions < 5.0
+        ByteBuffer[] legacyInputBuffers;
+        // Selected decoders (used only during init/recovery)
+        MediaCodecInfo avcDecoder;
+        MediaCodecInfo hevcDecoder;
+        MediaCodecInfo av1Decoder;
+        // CSD/HDR buffers (init-only)
+        final ArrayList<byte[]> vpsBuffers = new ArrayList<>();
+        final ArrayList<byte[]> spsBuffers = new ArrayList<>();
+        final ArrayList<byte[]> ppsBuffers = new ArrayList<>();
+
+        boolean submittedCsd;
+        byte[] currentHdrMetadata;
+
+        boolean needsSpsBitstreamFixup, isExynos4;
+        boolean adaptivePlayback, directSubmit, fusedIdrFrame;
+        boolean constrainedHighProfile;
+        boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
+        byte optimalSlicesPerFrame;
+        boolean refFrameInvalidationActive;
+
+        // Formats (init/reconfigure)
+        MediaFormat inputFormat;
+        MediaFormat outputFormat;
+        MediaFormat configuredFormat;
+        // SPS hacks (rare)
+        boolean needsBaselineSpsHack;
+        SeqParameterSet savedSps;
+        // Deferred exception reporting (rare)
+        RendererException initialException;
+        long initialExceptionTimestamp;
+    }
+
+    private final ColdCodecConfig coldCfg = new ColdCodecConfig();
+
 
     private MediaCodecInfo avcDecoder;
     private MediaCodecInfo hevcDecoder;
     private MediaCodecInfo av1Decoder;
 
-    private final ArrayList<byte[]> vpsBuffers = new ArrayList<>();
-    private final ArrayList<byte[]> spsBuffers = new ArrayList<>();
-    private final ArrayList<byte[]> ppsBuffers = new ArrayList<>();
     private boolean submittedCsd;
     private byte[] currentHdrMetadata;
 
@@ -207,12 +241,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     // CPU warm-up helper (MEDIUM, 8 workers)
     private final com.limelight.perf.CpuWarmUp cpuWarmUp = new com.limelight.perf.CpuWarmUp();
 
-    private boolean needsSpsBitstreamFixup, isExynos4;
-    private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
-    private boolean constrainedHighProfile;
-    private boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
-    private byte optimalSlicesPerFrame;
-    private boolean refFrameInvalidationActive;
+
     private int initialWidth, initialHeight;
     private boolean invertResolution;
     private int videoFormat;
@@ -260,8 +289,6 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private MediaFormat outputFormat;
     private MediaFormat configuredFormat;
 
-    private boolean needsBaselineSpsHack;
-    private SeqParameterSet savedSps;
 
     private RendererException initialException;
     private long initialExceptionTimestamp;
@@ -525,24 +552,24 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         int avcOptimalSlicesPerFrame = 0;
         int hevcOptimalSlicesPerFrame = 0;
         if (avcDecoder != null) {
-            directSubmit = MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName());
-            refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), initialHeight);
+            coldCfg.directSubmit = MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName());
+            coldCfg.refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), initialHeight);
             avcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(avcDecoder.getName());
 
-            if (directSubmit) {
+            if (coldCfg.directSubmit) {
                 LimeLog.info("Decoder "+avcDecoder.getName()+" will use direct submit");
             }
-            if (refFrameInvalidationAvc) {
-                LimeLog.info("Decoder "+avcDecoder.getName()+" will use reference frame invalidation for AVC");
+            if (coldCfg.refFrameInvalidationAvc) {
+                                LimeLog.info("Decoder "+avcDecoder.getName()+" will use reference frame invalidation for AVC");
             }
             LimeLog.info("Decoder "+avcDecoder.getName()+" wants "+avcOptimalSlicesPerFrame+" slices per frame");
         }
 
         if (hevcDecoder != null) {
-            refFrameInvalidationHevc = MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
+            coldCfg.refFrameInvalidationHevc = MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
             hevcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(hevcDecoder.getName());
 
-            if (refFrameInvalidationHevc) {
+            if (coldCfg.refFrameInvalidationHevc) {
                 LimeLog.info("Decoder "+hevcDecoder.getName()+" will use reference frame invalidation for HEVC");
             }
 
@@ -550,19 +577,19 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         }
 
         if (av1Decoder != null) {
-            refFrameInvalidationAv1 = MediaCodecHelper.decoderSupportsRefFrameInvalidationAv1(av1Decoder);
+            coldCfg.refFrameInvalidationAv1 = MediaCodecHelper.decoderSupportsRefFrameInvalidationAv1(av1Decoder);
 
-            if (refFrameInvalidationAv1) {
+            if (coldCfg.refFrameInvalidationAv1) {
                 LimeLog.info("Decoder "+av1Decoder.getName()+" will use reference frame invalidation for AV1");
             }
         }
 
         // Use the larger of the two slices per frame preferences
-        optimalSlicesPerFrame = (byte)Math.max(avcOptimalSlicesPerFrame, hevcOptimalSlicesPerFrame);
-        LimeLog.info("Requesting "+optimalSlicesPerFrame+" slices per frame");
+        coldCfg.optimalSlicesPerFrame = (byte)Math.max(avcOptimalSlicesPerFrame, hevcOptimalSlicesPerFrame);
+        LimeLog.info("Requesting "+coldCfg.optimalSlicesPerFrame+" slices per frame");
 
         if (consecutiveCrashCount % 2 == 1) {
-            refFrameInvalidationAvc = refFrameInvalidationHevc = false;
+            coldCfg.refFrameInvalidationAvc = coldCfg.refFrameInvalidationHevc = false;
             LimeLog.warning("Disabling RFI due to previous crash");
         }
     }
@@ -655,7 +682,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         }
 
         // Populate keys for adaptive playback
-        if (adaptivePlayback) {
+        if (coldCfg.adaptivePlayback) {
             videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, initialWidth);
             videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
         }
@@ -777,9 +804,9 @@ try {
 
         // After reconfiguration, we must resubmit CSD buffers
         submittedCsd = false;
-        vpsBuffers.clear();
-        spsBuffers.clear();
-        ppsBuffers.clear();
+        coldCfg.vpsBuffers.clear();
+        coldCfg.spsBuffers.clear();
+        coldCfg.ppsBuffers.clear();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             // This will contain the actual accepted input format attributes
@@ -804,7 +831,7 @@ try {
 
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            legacyInputBuffers = videoDecoder.getInputBuffers();
+            coldCfg.legacyInputBuffers = videoDecoder.getInputBuffers();
         }
     }
 
@@ -858,24 +885,24 @@ try {
             }
 
             // These fixups only apply to H264 decoders
-            needsSpsBitstreamFixup = MediaCodecHelper.decoderNeedsSpsBitstreamRestrictions(selectedDecoderInfo.getName());
-            needsBaselineSpsHack = MediaCodecHelper.decoderNeedsBaselineSpsHack(selectedDecoderInfo.getName());
-            constrainedHighProfile = MediaCodecHelper.decoderNeedsConstrainedHighProfile(selectedDecoderInfo.getName());
-            isExynos4 = MediaCodecHelper.isExynos4Device();
-            if (needsSpsBitstreamFixup) {
+            coldCfg.needsSpsBitstreamFixup = MediaCodecHelper.decoderNeedsSpsBitstreamRestrictions(selectedDecoderInfo.getName());
+            coldCfg.needsBaselineSpsHack = MediaCodecHelper.decoderNeedsBaselineSpsHack(selectedDecoderInfo.getName());
+            coldCfg.constrainedHighProfile = MediaCodecHelper.decoderNeedsConstrainedHighProfile(selectedDecoderInfo.getName());
+            coldCfg.isExynos4 = MediaCodecHelper.isExynos4Device();
+            if (coldCfg.needsSpsBitstreamFixup) {
                 LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs SPS bitstream restrictions fixup");
             }
-            if (needsBaselineSpsHack) {
+            if (coldCfg.needsBaselineSpsHack) {
                 LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs baseline SPS hack");
             }
-            if (constrainedHighProfile) {
+            if (coldCfg.constrainedHighProfile) {
                 LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs constrained high profile");
             }
-            if (isExynos4) {
+            if (coldCfg.isExynos4) {
                 LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" is on Exynos 4");
             }
 
-            refFrameInvalidationActive = refFrameInvalidationAvc;
+            coldCfg.refFrameInvalidationActive = coldCfg.refFrameInvalidationAvc;
         }
         else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
             mimeType = "video/hevc";
@@ -886,7 +913,7 @@ try {
                 return -2;
             }
 
-            refFrameInvalidationActive = refFrameInvalidationHevc;
+            coldCfg.refFrameInvalidationActive = coldCfg.refFrameInvalidationHevc;
         }
         else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
             mimeType = "video/av01";
@@ -897,15 +924,15 @@ try {
                 return -2;
             }
 
-            refFrameInvalidationActive = refFrameInvalidationAv1;
+            coldCfg.refFrameInvalidationActive = coldCfg.refFrameInvalidationAv1;
         }
         else {
             // Unknown format
             LimeLog.severe("Unknown format");
             return -3;
         }
-        adaptivePlayback = MediaCodecHelper.decoderSupportsAdaptivePlayback(selectedDecoderInfo, mimeType);
-        fusedIdrFrame = MediaCodecHelper.decoderSupportsFusedIdrFrame(selectedDecoderInfo, mimeType);
+        coldCfg.adaptivePlayback = MediaCodecHelper.decoderSupportsAdaptivePlayback(selectedDecoderInfo, mimeType);
+        coldCfg.fusedIdrFrame = MediaCodecHelper.decoderSupportsFusedIdrFrame(selectedDecoderInfo, mimeType);
 
         for (int tryNumber = 0;; tryNumber++) {
             LimeLog.info("Decoder configuration try: "+tryNumber);
@@ -1205,21 +1232,14 @@ try {
             // first exception. If we are still receiving exceptions 3 seconds later, we will
             // throw the original exception again.
             //
-            if (initialException != null) {
-                // This isn't the first time we've had an exception processing video
-                if (SystemClock.uptimeMillis() - initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
-                    // It's been over 3 seconds and we're still getting exceptions. Throw the original now.
-                    if (!reportedCrash) {
-                        reportedCrash = true;
-                        crashListener.notifyCrash(initialException);
-                    }
-                    throw initialException;
+            if (coldCfg.initialException != null) {
+                if (SystemClock.uptimeMillis() - coldCfg.initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
+                    crashListener.notifyCrash(coldCfg.initialException);
+                    throw coldCfg.initialException;
                 }
-            }
-            else {
-                // This is the first exception we've hit
-                initialException = new RendererException(this, e);
-                initialExceptionTimestamp = SystemClock.uptimeMillis();
+            } else {
+                coldCfg.initialException = new RendererException(this, e);
+                coldCfg.initialExceptionTimestamp = SystemClock.uptimeMillis();
             }
         }
 
@@ -2146,7 +2166,7 @@ boolean isC2Decoder = false;
                         nextInputBufferIndex = -1;
                     }
                 } else {
-                    nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
+                    nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
 
                     // Clear old input data pre-Lollipop
                     nextInputBuffer.clear();
@@ -2394,7 +2414,7 @@ boolean isC2Decoder = false;
         // High Profile which allows the decoder to assume there will be no B-frames and
         // reduce delay and buffering accordingly. Some devices (Marvell, Exynos 4) don't
         // like it so we only set them on devices that are confirmed to benefit from it.
-        if (sps.profileIdc == 100 && constrainedHighProfile) {
+        if (sps.profileIdc == 100 && coldCfg.constrainedHighProfile) {
             LimeLog.info("Setting constraint set flags for constrained high profile");
             sps.constraintSet4Flag = true;
             sps.constraintSet5Flag = true;
@@ -2428,9 +2448,9 @@ boolean isC2Decoder = false;
 
         // Reset CSD data for each IDR frame
         if (lastFrameNumber != frameNumber && frameType == MoonBridge.FRAME_TYPE_IDR) {
-            vpsBuffers.clear();
-            spsBuffers.clear();
-            ppsBuffers.clear();
+            coldCfg.vpsBuffers.clear();
+            coldCfg.spsBuffers.clear();
+            coldCfg.ppsBuffers.clear();
         }
 
         lastFrameNumber = frameNumber;
@@ -2725,7 +2745,7 @@ boolean isC2Decoder = false;
                 // Since we only need one frame buffered, we'll set the level as low as we can
                 // for known resolution combinations. Reference frame invalidation may need
                 // these, so leave them be for those decoders.
-                if (!refFrameInvalidationActive) {
+                if (!coldCfg.refFrameInvalidationActive) {
                     if (initialWidth <= 720 && initialHeight <= 480 && refreshRate <= 60) {
                         // Max 5 buffered frames at 720x480x60
                         LimeLog.info("Patching level_idc to 31");
@@ -2755,7 +2775,7 @@ boolean isC2Decoder = false;
                 //
                 // It does break reference frame invalidation, so we will not do that for decoders
                 // where we've enabled reference frame invalidation.
-                if (!refFrameInvalidationActive) {
+                if (!coldCfg.refFrameInvalidationActive) {
                     LimeLog.info("Patching num_ref_frames in SPS");
                     sps.numRefFrames = 1;
                 }
@@ -2774,7 +2794,7 @@ boolean isC2Decoder = false;
 
                 // Some older devices used to choke on a bitstream restrictions, so we won't provide them
                 // unless explicitly whitelisted. For newer devices, leave the bitstream restrictions present.
-                if (needsSpsBitstreamFixup || isExynos4 || Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (coldCfg.needsSpsBitstreamFixup || coldCfg.isExynos4 || Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     // The SPS that comes in the current H264 bytestream doesn't set bitstream_restriction_flag
                     // or max_dec_frame_buffering which increases decoding latency on Tegra.
 
@@ -2820,10 +2840,10 @@ boolean isC2Decoder = false;
                 }
 
                 // If we need to hack this SPS to say we're baseline, do so now
-                if (needsBaselineSpsHack) {
+                if (coldCfg.needsBaselineSpsHack) {
                     LimeLog.info("Hacking SPS to baseline");
                     sps.profileIdc = 66;
-                    savedSps = sps;
+                    coldCfg.savedSps = sps;
                 }
 
                 // Patch the SPS constraint flags
@@ -2839,7 +2859,7 @@ boolean isC2Decoder = false;
                 escapedNalu.get(naluBuffer, startSeqLen + 1, escapedNalu.limit());
 
                 // Batch this to submit together with other CSD per AOSP docs
-                spsBuffers.add(naluBuffer);
+                coldCfg.spsBuffers.add(naluBuffer);
                 return MoonBridge.DR_OK;
             }
             else if (decodeUnitType == MoonBridge.BUFFER_TYPE_VPS) {
@@ -2848,7 +2868,7 @@ boolean isC2Decoder = false;
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
-                vpsBuffers.add(naluBuffer);
+                coldCfg.vpsBuffers.add(naluBuffer);
                 return MoonBridge.DR_OK;
             }
             // Only the HEVC SPS hits this path (H.264 is handled above)
@@ -2858,7 +2878,7 @@ boolean isC2Decoder = false;
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
-                spsBuffers.add(naluBuffer);
+                coldCfg.spsBuffers.add(naluBuffer);
                 return MoonBridge.DR_OK;
             }
             else if (decodeUnitType == MoonBridge.BUFFER_TYPE_PPS) {
@@ -2867,25 +2887,25 @@ boolean isC2Decoder = false;
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
-                ppsBuffers.add(naluBuffer);
+                coldCfg.ppsBuffers.add(naluBuffer);
                 return MoonBridge.DR_OK;
             }
             else if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) != 0) {
                 // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
                 // submit the CSD blob in a separate input buffer for each IDR frame.
-                if (!submittedCsd || !fusedIdrFrame) {
+                if (!submittedCsd || !coldCfg.fusedIdrFrame) {
                     if (!fetchNextInputBuffer()) {
                         return MoonBridge.DR_NEED_IDR;
                     }
 
                     // Submit all CSD when we receive the first non-CSD blob in an IDR frame
-                    for (byte[] vpsBuffer : vpsBuffers) {
+                    for (byte[] vpsBuffer : coldCfg.vpsBuffers) {
                         nextInputBuffer.put(vpsBuffer);
                     }
-                    for (byte[] spsBuffer : spsBuffers) {
+                    for (byte[] spsBuffer : coldCfg.spsBuffers) {
                         nextInputBuffer.put(spsBuffer);
                     }
-                    for (byte[] ppsBuffer : ppsBuffers) {
+                    for (byte[] ppsBuffer : coldCfg.ppsBuffers) {
                         nextInputBuffer.put(ppsBuffer);
                     }
 
@@ -2900,8 +2920,8 @@ boolean isC2Decoder = false;
                     // Remember that we submitted CSD globally for this MediaCodec instance
                     submittedCsd = true;
 
-                    if (needsBaselineSpsHack) {
-                        needsBaselineSpsHack = false;
+                    if (coldCfg.needsBaselineSpsHack) {
+                        coldCfg.needsBaselineSpsHack = false;
 
                         if (!replaySps()) {
                             return MoonBridge.DR_NEED_IDR;
@@ -2944,14 +2964,14 @@ boolean isC2Decoder = false;
             codecFlags |= MediaCodec.BUFFER_FLAG_SYNC_FRAME;
 
             // If we are using fused IDR frames, submit the CSD with each IDR frame
-            if (fusedIdrFrame && !csdSubmittedForThisFrame) {
-                for (byte[] vpsBuffer : vpsBuffers) {
+            if (coldCfg.fusedIdrFrame && !csdSubmittedForThisFrame) {
+                for (byte[] vpsBuffer : coldCfg.vpsBuffers) {
                     nextInputBuffer.put(vpsBuffer);
                 }
-                for (byte[] spsBuffer : spsBuffers) {
+                for (byte[] spsBuffer : coldCfg.spsBuffers) {
                     nextInputBuffer.put(spsBuffer);
                 }
-                for (byte[] ppsBuffer : ppsBuffers) {
+                for (byte[] ppsBuffer : coldCfg.ppsBuffers) {
                     nextInputBuffer.put(ppsBuffer);
                 }
             }
@@ -2996,18 +3016,18 @@ boolean isC2Decoder = false;
         nextInputBuffer.put(new byte[]{0x00, 0x00, 0x00, 0x01, 0x67});
 
         // Switch the H264 profile back to high
-        savedSps.profileIdc = 100;
+        coldCfg.savedSps.profileIdc = 100;
 
         // Patch the SPS constraint flags
-        doProfileSpecificSpsPatching(savedSps);
+        doProfileSpecificSpsPatching(coldCfg.savedSps);
 
         // The H264Utils.writeSPS function safely handles
         // Annex B NALUs (including NALUs with escape sequences)
-        ByteBuffer escapedNalu = H264Utils.writeSPS(savedSps, 128);
+        ByteBuffer escapedNalu = H264Utils.writeSPS(coldCfg.savedSps, 128);
         nextInputBuffer.put(escapedNalu);
 
         // No need for the SPS anymore
-        savedSps = null;
+        coldCfg.savedSps = null;
 
         // Queue the new SPS
         return queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG);
@@ -3018,21 +3038,21 @@ boolean isC2Decoder = false;
         int capabilities = 0;
 
         // Request the optimal number of slices per frame for this decoder
-        capabilities |= MoonBridge.CAPABILITY_SLICES_PER_FRAME(optimalSlicesPerFrame);
+        capabilities |= MoonBridge.CAPABILITY_SLICES_PER_FRAME(coldCfg.optimalSlicesPerFrame);
 
         // Enable reference frame invalidation on supported hardware
-        if (refFrameInvalidationAvc) {
+        if (coldCfg.refFrameInvalidationAvc) {
             capabilities |= MoonBridge.CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC;
         }
-        if (refFrameInvalidationHevc) {
+        if (coldCfg.refFrameInvalidationHevc) {
             capabilities |= MoonBridge.CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC;
         }
-        if (refFrameInvalidationAv1) {
+        if (coldCfg.refFrameInvalidationAv1) {
             capabilities |= MoonBridge.CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
         }
 
         // Enable direct submit on supported hardware
-        if (directSubmit) {
+        if (coldCfg.directSubmit) {
             capabilities |= MoonBridge.CAPABILITY_DIRECT_SUBMIT;
         }
 
@@ -3165,7 +3185,7 @@ boolean isC2Decoder = false;
             str += "Configured format: "+renderer.configuredFormat+DELIMITER;
             str += "Input format: "+renderer.inputFormat+DELIMITER;
             str += "Output format: "+renderer.outputFormat+DELIMITER;
-            str += "Adaptive playback: "+renderer.adaptivePlayback+DELIMITER;
+            str += "Adaptive playback: "+renderer.coldCfg.adaptivePlayback+DELIMITER;
             str += "GL Renderer: "+renderer.glRenderer+DELIMITER;
             //str += "Build fingerprint: "+Build.FINGERPRINT+DELIMITER;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -3184,9 +3204,9 @@ boolean isC2Decoder = false;
                 str += DELIMITER;*/
             }
             str += "Consecutive crashes: "+renderer.consecutiveCrashCount+DELIMITER;
-            str += "RFI active: "+renderer.refFrameInvalidationActive+DELIMITER;
+            str += "RFI active: "+renderer.coldCfg.refFrameInvalidationActive+DELIMITER;
             str += "Using modern SPS patching: "+(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)+DELIMITER;
-            str += "Fused IDR frames: "+renderer.fusedIdrFrame+DELIMITER;
+            str += "Fused IDR frames: "+renderer.coldCfg.fusedIdrFrame+DELIMITER;
             str += "Video dimensions: "+renderer.initialWidth+"x"+renderer.initialHeight+DELIMITER;
             str += "FPS target: "+renderer.refreshRate+DELIMITER;
             str += "Bitrate: "+renderer.prefs.bitrate+" Kbps"+DELIMITER;
