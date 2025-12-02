@@ -2236,20 +2236,26 @@ boolean isC2Decoder = false;
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // Pick a shorter dequeue timeout for high-FPS streams to avoid throttling the RX path
-            int dequeueTimeoutUs = 10_000; // default = 10 ms
+            // Pick a shorter dequeue timeout for the RX path to avoid throttling input.
+            // We keep a very small timeout for LFR/ULL and 60+ FPS, and a moderately
+            // small timeout for lower FPS streams.
             float wantedFps = (targetFps > 0f) ? targetFps : (prefs != null ? prefs.fps : 60f);
-            boolean ultraLowLatency = (preferLowerDelays || wantedFps >= 100f);
-            if (ultraLowLatency) {
-                // keep RX snappy for 100/120 fps or LFR/ULL
+
+            final int dequeueTimeoutUs;
+            final boolean ultraLowLatencyRx = (preferLowerDelays || wantedFps >= 55f);
+            if (ultraLowLatencyRx) {
+                // LFR/ULL active or 60+ FPS streams: maximum snappiness
                 dequeueTimeoutUs = 2_000; // 2 ms
+            } else {
+                // Lower FPS (e.g. 30–50 FPS): still snappy but not as aggressive
+                dequeueTimeoutUs = 4_000; // 4 ms
             }
 
             // If we don't have an input buffer index yet, fetch one now
             while (nextInputBufferIndex < 0 && !stopping) {
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(dequeueTimeoutUs);
-                if (nextInputBufferIndex < 0 && ultraLowLatency) {
-                    // Don't sit here forever when running at high frame rates
+                if (nextInputBufferIndex < 0 && ultraLowLatencyRx) {
+                    // Don't sit here forever when running at high frame rates / LFR
                     break;
                 }
             }
