@@ -414,6 +414,70 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private int numFramesOut;
 
     private float targetFps = 0f; // 0f = auto
+    /**
+     * Global presentation gating helper shared across all pacing modes.
+     *
+     * Objective:
+     * - When stream FPS ≈ display refresh rate (e.g., 60 fps on 60 Hz),
+     *   target one presentation per VSYNC to avoid 16.7/33.3 ms patterns.
+     * - When stream FPS is significantly higher than refresh (e.g., 90/120 fps on 60 Hz),
+     *   maintain a tighter threshold (~80% of period) for frame decimation without
+     *   double-presenting within the same interval.
+     *
+     * Uses lastRenderedFrameTimeNanos as single state variable.
+     */
+    private boolean shouldPresentNow(long nowNs) {
+        // First frame: always allow presentation
+        if (lastRenderedFrameTimeNanos <= 0L) {
+            return true;
+        }
+
+        long deltaNs = nowNs - lastRenderedFrameTimeNanos;
+        if (deltaNs < 0L) {
+            deltaNs = 0L;
+        }
+
+        // Display cadence: prefer DisplayRefreshManager, fallback to refreshRate
+        float displayHz;
+        long vsyncPeriodNs;
+        try {
+            if (displayRefreshManager != null) {
+                displayHz = displayRefreshManager.getRefreshRateHz();
+                long candidate = displayRefreshManager.getVsyncPeriodNs();
+                if (candidate > 0L) {
+                    vsyncPeriodNs = candidate;
+                } else {
+                    displayHz = (refreshRate > 0 ? (float) refreshRate : 60f);
+                    vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, displayHz));
+                }
+            } else {
+                displayHz = (refreshRate > 0 ? (float) refreshRate : 60f);
+                vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, displayHz));
+            }
+        } catch (Throwable ignored) {
+            displayHz = (refreshRate > 0 ? (float) refreshRate : 60f);
+            vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, displayHz));
+        }
+
+        // Stream cadence (targetFps set in setup(...))
+        final float tfps = (targetFps > 0f ? targetFps : displayHz);
+        final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
+
+        // Consider "near match" if stream period is within ±10% of display period
+        final long diff = Math.abs(streamPeriodNs - vsyncPeriodNs);
+        final boolean fpsNearDisplay = diff <= (vsyncPeriodNs / 10L);
+
+        if (fpsNearDisplay) {
+            // FPS ≈ Hz (e.g., 60/60): target one presentation per VSYNC.
+            // Set threshold at ~90% of period to tolerate minor jitter without stalling.
+            final long thresholdNs = (vsyncPeriodNs * 9L) / 10L;
+            return deltaNs >= thresholdNs;
+        } else {
+            // FPS/Hz mismatch (e.g., 90/120 → 60): maintain historical ~80% threshold.
+            final long thresholdNs = (vsyncPeriodNs * 8L) / 10L;
+            return deltaNs >= thresholdNs;
+        }
+    }
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
         if (decoder == null) {
@@ -1339,37 +1403,30 @@ try {
 
     @Override
     public void doFrame(long frameTimeNanos) {
-        // Do nothing if we're stopping
+        // Exit early if stopping
         if (stopping) {
             return;
         }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        if (actualFrameTimeDeltaNs < 0L) {
-            actualFrameTimeDeltaNs = 0L;
-        }
-// Avoid division by zero if refresh rate is not known yet
-        int rr = (refreshRate > 0) ? refreshRate : 60;
-        final long vsyncPeriodNs = 1_000_000_000L / rr;
-// Soglia a ~80% del periodo
-        long expectedFrameTimeDeltaNs = (vsyncPeriodNs * 8L) / 10L;
-        if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
+        // Use the shared FPS/Hz gate for Choreographer-driven pacing
+        final boolean shouldRender = shouldPresentNow(frameTimeNanos);
+
+        if (shouldRender) {
             // Mark start of CPU work for this frame
             if (MediaCodecDecoderRenderer.this.perfHint != null) {
                 MediaCodecDecoderRenderer.this.phmWorkStartNs = com.limelight.perf.PerfHint.tick();
             }
+
             // Render up to one frame when in frame pacing mode.
             //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
+            // Since the queue limit is 2, we will not starve the decoder of output buffers
+            // by holding onto them for too long. This also ensures we have one extra
+            // buffered frame to smooth over network/decoder jitter.
             Integer nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != null) {
                 try {
                     if (Build.VERSION.SDK_INT >= 21) {
-                        // Timestamped release on L+ to align with vsync
+                        // Timestamped release on L+ to align with VSYNC
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
                     } else {
                         // Very old devices: immediate render
@@ -1378,12 +1435,18 @@ try {
 
                     gpuKickPresentHook();
 
+                    // Track when the last frame was actually presented
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
+
                     if (MediaCodecDecoderRenderer.this.perfHint != null
                             && MediaCodecDecoderRenderer.this.perfHint.isActive()
                             && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
-                        try { MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs); } catch (Throwable ignored) {}
+                        try {
+                            MediaCodecDecoderRenderer.this.perfHint.tockAndReport(
+                                    MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                        } catch (Throwable ignored) {
+                        }
                         MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
                     }
                 } catch (IllegalStateException ignored) {
@@ -1391,19 +1454,30 @@ try {
                         // Try to avoid leaking the output buffer by releasing it without rendering
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
                     } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
+                        // This will leak nextOutputBuffer, but there is nothing else we can do
                         e.printStackTrace();
                         handleDecoderException(e);
                     }
                 }
             }
+        } else {
+            // If we intentionally skip this VSYNC, drain old buffers so we do not build up lag
+            while (outputBufferQueue.size() > 1) {
+                try {
+                    Integer old = outputBufferQueue.poll();
+                    if (old != null) {
+                        videoDecoder.releaseOutputBuffer(old, false);
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
         }
 
-        // Attempt codec recovery even if we have nothing to render right now. Recovery can still
-        // be required even if the codec died before giving any output.
+        // Attempt codec recovery even if we have nothing to render right now.
+        // Recovery can still be required even if the codec died before giving any output.
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
-        // Request another callback for next frame
+        // Request another callback for the next frame
         Choreographer.getInstance().postFrameCallback(this);
     }
 
@@ -1615,11 +1689,32 @@ try {
 
                 // Adaptive period selection to avoid added latency on high-refresh devices
                 final boolean highRefresh = displayHz >= 90f;
-                final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
-                // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
-                final long periodNs = forceTightThresholds
-                        ? vsyncPeriodNs
-                        : ((managedMode && !highRefresh) ? Math.max(vsyncPeriodNs, streamPeriodNs) : vsyncPeriodNs);
+                final boolean managedMode = (prefs != null
+                        && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+
+                // FIX: Always consider the stream period for timing calculations, not only in managedMode.
+                // This ensures proper frame timing for all pacing modes and avoids over-constraining at 60fps/60Hz.
+                final long periodNs;
+                if (forceTightThresholds) {
+                    // Tight mode: always lock to VSYNC period
+                    periodNs = vsyncPeriodNs;
+                } else {
+                    // CRITICAL FIX: For matched FPS/Hz, use the stream period to avoid skipped frames.
+                    // For mismatched rates (for example 120 FPS on 60 Hz), use the larger period so we can
+                    // select a good frame without adding unnecessary latency.
+                    final boolean fpsMatchesDisplay =
+                            Math.abs((double) streamPeriodNs - (double) vsyncPeriodNs)
+                                    < (vsyncPeriodNs * 0.10);
+
+                    if (fpsMatchesDisplay) {
+                        // Perfect or near-perfect match: use the stream period to ensure 1:1 frame presentation.
+                        periodNs = streamPeriodNs;
+                    } else {
+                        // Mismatched: use the larger period to allow better frame selection.
+                        periodNs = Math.max(vsyncPeriodNs, streamPeriodNs);
+                    }
+                }
+
 boolean isC2Decoder = false;
                 try {
                     String decName = videoDecoder.getName();
@@ -1867,12 +1962,20 @@ boolean isC2Decoder = false;
                                     presentationTimeUs = newPtsUs;
                                     lastPtsUs = newPtsUs;
                                 }
-// --- Present policy per profilo di pacing ---
                                 if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Immediate present using frame PTS; no decoder-side pacing
                                     if (lastIndex >= 0) {
                                         try {
-                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
+                                            final long nowNs = System.nanoTime();
+
+                                            if (!shouldPresentNow(nowNs)) {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                frameDropped = true;
+                                                recentDrops = Math.min(10, recentDrops + 1);
+                                                continue;
+                                            }
+
+                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : nowNs;
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                                 gpuKickPresentHook();
@@ -1881,7 +1984,6 @@ boolean isC2Decoder = false;
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
-                                            long nowNs = System.nanoTime();
                                             lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
                                             recentDrops = 0;
@@ -1898,16 +2000,8 @@ boolean isC2Decoder = false;
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
 
-                                        // Base period for thresholds: prefer stream-aware periodNs, fall back to vsync
-                                        long basePeriodNs = periodNs;
-                                        if (basePeriodNs <= 0L) {
-                                            if (vsyncPeriodNs > 0L) {
-                                                basePeriodNs = vsyncPeriodNs;
-                                            } else {
-                                                // Fallback to ~60 Hz if everything else fails
-                                                basePeriodNs = 16_666_667L; // ~60 Hz
-                                            }
-                                        }
+                                        // Base period for thresholds: prefer stream-aligned period for matched FPS/Hz
+                                        long basePeriodNs = periodNs; // Already fixed above
 
                                         // End-to-end frame age (from host PTS to now), clamped to [0, +inf)
                                         long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
@@ -2065,35 +2159,46 @@ boolean isC2Decoder = false;
                                     }
                                 }
                                 else {
-                                // Latency mode (legacy)
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                    try {
-                                        // Present immediately with a monotonic timestamp
-                                        final long tsNs = System.nanoTime();
-                                        videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
-                                        gpuKickPresentHook();
+                                    // Latency mode (legacy)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        try {
+                                            final long nowNs = System.nanoTime();
 
-                                        // Keep timing state consistent with the other paths
-                                        lastPresentNs = tsNs;
-                                        lastRenderedFrameTimeNanos = tsNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-                                        lateStreak = 0;
-                                    } catch (IllegalStateException e) {
-                                        handleDecoderException(e);
-                                        return;
-                                    } catch (Throwable ignored) {
+                                            // Shared timing gate: avoid presenting too early compared to the last rendered frame
+                                            if (!shouldPresentNow(nowNs)) {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                frameDropped = true;
+                                                recentDrops = Math.min(10, recentDrops + 1);
+                                                continue;
+                                            }
+
+                                            // Present immediately with a monotonic timestamp
+                                            final long tsNs = nowNs;
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            gpuKickPresentHook();
+
+                                            // Keep timing state consistent with the other paths
+                                            lastPresentNs = tsNs;
+                                            lastRenderedFrameTimeNanos = tsNs;
+                                            recentDrops = Math.max(0, recentDrops - 1);
+                                            lateStreak = 0;
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) {
+                                        }
+                                    } else {
+                                        // Legacy immediate render
+                                        try {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                            gpuKickPresentHook();
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) {
+                                        }
                                     }
-                                } else {
-                                    // Legacy immediate render
-                                    try {
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                        gpuKickPresentHook();
-                                    } catch (IllegalStateException e) {
-                                        handleDecoderException(e);
-                                        return;
-                                    } catch (Throwable ignored) {}
                                 }
-                            }
 
                                 activeWindowVideoStats.totalFramesRendered++;
                                 if (MediaCodecDecoderRenderer.this.perfHint != null
