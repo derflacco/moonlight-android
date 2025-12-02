@@ -1947,67 +1947,35 @@ boolean isC2Decoder = false;
                                     }
                                 }
                                 else {
-                                    // Latency mode
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
-                                        double backPressure = Math.min(1.0, (double) tryAgainStreak / 6.0);
-                                        double streamHz = Math.max(1.0, (double) tfps);
-                                        double mismatch = Math.abs((1_000_000_000.0 / streamHz)
-                                                - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
-                                        mismatch = Math.min(2.0, mismatch);
-
-                                        double factorLatency = 1.02 + 0.13 * (0.5 * (ewmaJitterNs / vsyncPeriodNs)
-                                                + 0.3 * backPressure
-                                                + 0.2 * mismatch);
-                                        factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
-
-                                        long dropThresholdNs = (long) (periodNs * factorLatency);
-
-                                        final long sinceLastPresent = (lastPresentNs == 0L)
-                                                ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
-                                        final boolean isLate = frameAgeNs > dropThresholdNs;
-                                        lateStreak = isLate ? (lateStreak + 1) : 0;
-
-                                        final boolean shouldDrop =
-                                                isLate &&
-                                                        (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long) (periodNs * 0.5)) &&
-                                                        dropCooldownOk;
-
-                                        if (shouldDrop) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue; // stats already recorded at dequeue for this PTS
-                                        }
-
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                // Latency mode (legacy)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                    try {
+                                        // Present immediately with a monotonic timestamp
+                                        final long tsNs = System.nanoTime();
+                                        videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                         gpuKickPresentHook();
 
-                                        lastPresentNs = nowNs;
-                                        if (!isLate) {
-                                            lateStreak = 0;
-                                        }
+                                        // Keep timing state consistent with the other paths
+                                        lastPresentNs = tsNs;
+                                        lastRenderedFrameTimeNanos = tsNs;
                                         recentDrops = Math.max(0, recentDrops - 1);
-
-                                    } else {
-                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                            long ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, ts);
-                                            gpuKickPresentHook();
-
-                                        } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                            gpuKickPresentHook();
-
-                                        }
+                                        lateStreak = 0;
+                                    } catch (IllegalStateException e) {
+                                        handleDecoderException(e);
+                                        return;
+                                    } catch (Throwable ignored) {
                                     }
+                                } else {
+                                    // Legacy immediate render
+                                    try {
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                        gpuKickPresentHook();
+                                    } catch (IllegalStateException e) {
+                                        handleDecoderException(e);
+                                        return;
+                                    } catch (Throwable ignored) {}
                                 }
+                            }
 
                                 activeWindowVideoStats.totalFramesRendered++;
                                 if (MediaCodecDecoderRenderer.this.perfHint != null
