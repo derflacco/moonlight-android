@@ -3378,6 +3378,7 @@ boolean isC2Decoder = false;
         // Keep references so we can unregister on release
         private Object displayManagerRef;  // android.hardware.display.DisplayManager
         private Object displayListenerRef; // android.hardware.display.DisplayManager.DisplayListener
+        private boolean released = false;
 
         DisplayRefreshManager(Context context) {
             this.appContext = context.getApplicationContext();
@@ -3399,10 +3400,11 @@ boolean isC2Decoder = false;
                         float refresh = display.getRefreshRate();
                         if (refresh > 1f) {
                             hz = refresh;
-                            long candidate = (long) (1_000_000_000L / refresh);
+                            long candidate = Math.round(1_000_000_000.0 / (double) refresh);
                             if (candidate >= MIN_VALID_VSYNC_NS && candidate <= MAX_VALID_VSYNC_NS) {
                                 periodNs = candidate;
                             }
+
                         }
                     }
                 }
@@ -3424,17 +3426,19 @@ boolean isC2Decoder = false;
             }
 
             try {
-                android.hardware.display.DisplayManager dm =
+                final android.hardware.display.DisplayManager dm =
                         (android.hardware.display.DisplayManager) appContext.getSystemService(Context.DISPLAY_SERVICE);
                 if (dm == null) {
                     return;
                 }
 
-                final android.view.Display defaultDisplay =
+                final android.view.Display initialDisplay =
                         dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
-                if (defaultDisplay == null) {
+                if (initialDisplay == null) {
                     return;
                 }
+
+                final int defaultDisplayId = initialDisplay.getDisplayId();
 
                 android.hardware.display.DisplayManager.DisplayListener listener =
                         new android.hardware.display.DisplayManager.DisplayListener() {
@@ -3448,22 +3452,39 @@ boolean isC2Decoder = false;
 
                             @Override
                             public void onDisplayChanged(int displayId) {
-                                if (displayId != defaultDisplay.getDisplayId()) {
+                                if (displayId != defaultDisplayId) {
                                     return;
                                 }
                                 try {
-                                    float refresh = defaultDisplay.getRefreshRate();
-                                    if (refresh > 1f && Math.abs(refresh - refreshRateHz) > 0.5f) {
-                                        long candidate = (long) (1_000_000_000L / refresh);
-                                        if (candidate >= MIN_VALID_VSYNC_NS &&
-                                                candidate <= MAX_VALID_VSYNC_NS) {
-                                            refreshRateHz = refresh;
-                                            vsyncPeriodNs = candidate;
-                                            LimeLog.info("DisplayRefreshManager: refresh changed to "
-                                                    + refresh + " Hz");
-                                        }
+                                    android.view.Display display = dm.getDisplay(displayId);
+                                    if (display == null) {
+                                        return;
                                     }
-                                } catch (Throwable ignored) {
+
+                                    float refresh = display.getRefreshRate();
+                                    if (refresh <= 1f) {
+                                        return;
+                                    }
+
+                                    long candidate = Math.round(1_000_000_000.0 / (double) refresh);
+                                    long currentPeriod = vsyncPeriodNs;
+                                    float currentRate = refreshRateHz;
+
+                                    boolean periodChanged =
+                                            Math.abs(candidate - currentPeriod) > (currentPeriod * 0.01);
+                                    boolean rateChanged =
+                                            Math.abs(refresh - currentRate) > 0.5f;
+
+                                    if ((periodChanged || rateChanged)
+                                            && candidate >= MIN_VALID_VSYNC_NS
+                                            && candidate <= MAX_VALID_VSYNC_NS) {
+                                        vsyncPeriodNs = candidate;
+                                        refreshRateHz = refresh;
+                                        LimeLog.info("DisplayRefreshManager: refresh changed to "
+                                                + refresh + " Hz");
+                                    }
+                                } catch (Throwable t) {
+                                    LimeLog.warning("DisplayRefreshManager: error in onDisplayChanged: " + t);
                                 }
                             }
                         };
@@ -3488,6 +3509,11 @@ boolean isC2Decoder = false;
             if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
                 return;
             }
+            if (released) {
+                return;
+            }
+            released = true;
+
             try {
                 if (displayManagerRef instanceof android.hardware.display.DisplayManager &&
                         displayListenerRef instanceof android.hardware.display.DisplayManager.DisplayListener) {
@@ -3498,6 +3524,9 @@ boolean isC2Decoder = false;
                     dm.unregisterDisplayListener(listener);
                 }
             } catch (Throwable ignored) {
+            } finally {
+                displayManagerRef = null;
+                displayListenerRef = null;
             }
         }
     }
