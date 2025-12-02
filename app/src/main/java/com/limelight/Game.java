@@ -202,7 +202,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
-
+    // Cache for the max supported refresh rate to avoid recomputing
+    private float cachedMaxRefreshHz = 0f;
     private int displayWidth;
     private int displayHeight;
     private int currentOrientation;
@@ -4544,9 +4545,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
     // Returns the highest refresh rate supported by the default display.
     private float getMaxSupportedRefreshHz() {
+        // Avoid recomputing on every call; we only need this once per activity lifetime.
+        if (cachedMaxRefreshHz > 0f) {
+            return cachedMaxRefreshHz;
+        }
+
         float maxHz = 60f;
         try {
-            android.view.WindowManager wm = (android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE);
+            android.view.WindowManager wm =
+                    (android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE);
             if (wm != null) {
                 android.view.Display d = wm.getDefaultDisplay();
                 if (d != null) {
@@ -4564,7 +4571,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     }
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
+
+        cachedMaxRefreshHz = maxHz;
         return maxHz;
     }
 }
