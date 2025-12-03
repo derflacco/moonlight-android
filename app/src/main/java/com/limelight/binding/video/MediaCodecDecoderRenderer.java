@@ -1694,31 +1694,45 @@ try {
                 }
 
 
-                // Adaptive period selection to avoid added latency on high-refresh devices
-                final boolean highRefresh = displayHz >= 90f;
-                final boolean managedMode = (prefs != null
-                        && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+                // Adaptive period selection for AdaptX and EWMA-based timing.
+                // Goal:
+                // - 60/60, 120/120, etc.: thresholds follow the stream cadence.
+                // - FPS > Hz (e.g. 120 FPS on 60 Hz): slightly relaxed base period to avoid over-dropping.
+                // - FPS < Hz (e.g. 45 FPS on 60 Hz): follow the slower stream cadence.
+                final boolean managedMode =
+                        (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
 
-                // FIX: Always consider the stream period for timing calculations, not only in managedMode.
-                // This ensures proper frame timing for all pacing modes and avoids over-constraining at 60fps/60Hz.
                 final long periodNs;
                 if (forceTightThresholds) {
                     // Tight mode: always lock to VSYNC period
                     periodNs = vsyncPeriodNs;
                 } else {
-                    // CRITICAL FIX: For matched FPS/Hz, use the stream period to avoid skipped frames.
-                    // For mismatched rates (for example 120 FPS on 60 Hz), use the larger period so we can
-                    // select a good frame without adding unnecessary latency.
                     final boolean fpsMatchesDisplay =
                             Math.abs((double) streamPeriodNs - (double) vsyncPeriodNs)
                                     < (vsyncPeriodNs * 0.10);
 
+                    final boolean fpsHigherThanDisplay =
+                            (streamPeriodNs > 0L && vsyncPeriodNs > 0L && streamPeriodNs < vsyncPeriodNs);
+                    final boolean fpsLowerThanDisplay =
+                            (streamPeriodNs > 0L && vsyncPeriodNs > 0L && streamPeriodNs > vsyncPeriodNs);
+
                     if (fpsMatchesDisplay) {
-                        // Perfect or near-perfect match: use the stream period to ensure 1:1 frame presentation.
+                        // 60/60, 90/90, 120/120: 1:1 frame-to-vsync mapping
                         periodNs = streamPeriodNs;
-                    } else {
-                        // Mismatched: use the larger period to allow better frame selection.
-                        periodNs = Math.max(vsyncPeriodNs, streamPeriodNs);
+                    }
+                    else if (fpsHigherThanDisplay) {
+                        // FPS > Hz (e.g. 120 FPS on 60 Hz):
+                        // use a slightly larger base period than VSYNC to reduce drop aggressiveness.
+                        final double SCALE = 1.25; // ~25% more than vsync period
+                        periodNs = (long) (vsyncPeriodNs * SCALE);
+                    }
+                    else if (fpsLowerThanDisplay) {
+                        // FPS < Hz (e.g. 45 FPS on 60 Hz): follow the slower stream cadence.
+                        periodNs = streamPeriodNs;
+                    }
+                    else {
+                        // Fallback: keep VSYNC-based period
+                        periodNs = vsyncPeriodNs;
                     }
                 }
 
