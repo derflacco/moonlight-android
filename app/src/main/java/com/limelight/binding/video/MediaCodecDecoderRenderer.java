@@ -2084,6 +2084,15 @@ boolean isC2Decoder = false;
                                                 ? 0L
                                                 : Math.max(0L, nowNs - lastPresentNs);
 
+                                        // Relation between stream FPS and display Hz (±10% ~= match)
+                                        final boolean fpsMatchesDisplay;
+                                        if (streamPeriodNs > 0L && vsyncPeriodNs > 0L) {
+                                            long diff = Math.abs(streamPeriodNs - vsyncPeriodNs);
+                                            fpsMatchesDisplay = diff <= (vsyncPeriodNs / 10L);
+                                        } else {
+                                            fpsMatchesDisplay = false;
+                                        }
+
                                         // Per-profile parameters
                                         final double backlogWindowMul;
                                         final long   cooldownDiv;
@@ -2091,11 +2100,12 @@ boolean isC2Decoder = false;
                                         final long   dropBasePeriodNs;
                                         final long   dropThresholdNs;
 
+
                                         if (modeSmooth) {
-                                            // --- AdaptX Smoothness: jitter-baseline scaling, drop very rarely ---
-                                            backlogWindowMul   = 2.3;  // require strong backlog to consider drops
-                                            cooldownDiv        = 4L;   // slow drop cadence
-                                            requiredLateStreak = 3;    // need multiple late frames in a row
+                                            // --- AdaptX Smoothness: rare corrective drops, bias for continuous motion ---
+                                            backlogWindowMul   = 2.1;  // still require backlog, but a bit less than before
+                                            cooldownDiv        = 3L;   // slow/medium drop cadence
+                                            requiredLateStreak = 2;    // allow drops after 2 late frames in a row
                                             dropBasePeriodNs   = basePeriodNs;
 
                                             // Baseline jitter from inter-arrival EWMA. This tracks typical noise level.
@@ -2113,13 +2123,15 @@ boolean isC2Decoder = false;
                                             if (jitterNorm < 0.0) jitterNorm = 0.0;
                                             if (jitterNorm > 2.0) jitterNorm = 2.0;
 
-                                            // Base threshold: ~1.55 * period, extended when jitter is high.
-                                            // Higher jitter -> higher threshold -> fewer drops and less visible stutter.
-                                            double dropFactorSmooth = 1.55 + 0.25 * jitterNorm;
-                                            if (dropFactorSmooth < 1.40) dropFactorSmooth = 1.40;
-                                            if (dropFactorSmooth > 2.10) dropFactorSmooth = 2.10;
+                                            // New Smoothness threshold:
+                                            // - Slightly closer to Balanced than before, so we can drop occasionally.
+                                            // - Still always higher than Balanced's range (1.45 .. 1.15), so smoother.
+                                            double dropFactorSmooth = 1.50 + 0.15 * jitterNorm; // ≈ 1.50 .. 1.80
+                                            if (dropFactorSmooth < 1.35) dropFactorSmooth = 1.35;
+                                            if (dropFactorSmooth > 1.85) dropFactorSmooth = 1.85;
 
                                             dropThresholdNs = (long) ((double) dropBasePeriodNs * dropFactorSmooth);
+
 
                                         } else if (modeLatency) {
                                             // --- AdaptX Latency: legacy-style low-latency threshold (warp-aware) ---
@@ -2141,13 +2153,15 @@ boolean isC2Decoder = false;
 
                                         } else {
                                             // --- AdaptX Balanced: decode-latency guided threshold (no direct jitter) ---
-                                            // Goal:
-                                            // - Smoother than Latency.
-                                            // - More willing to drop than Smoothness.
-                                            // - No frame-to-frame oscillation driven by jitter spikes.
-                                            backlogWindowMul   = 1.9;  // medium backlog window
-                                            cooldownDiv        = 3L;   // medium drop cadence
-                                            requiredLateStreak = 2;    // need at least 2 late frames
+                                            // Tuning:
+                                            // - FPS ~= Hz (e.g. 60/60): more relaxed, closer to Smoothness.
+                                            // - Other cases: original behaviour.
+
+                                            final boolean matchFpsHz = fpsMatchesDisplay;
+
+                                            backlogWindowMul   = matchFpsHz ? 2.1 : 1.9;  // wider window when FPS~=Hz
+                                            cooldownDiv        = 3L;                     // medium drop cadence
+                                            requiredLateStreak = matchFpsHz ? 3 : 2;     // need 3 late frames at 60/60
                                             dropBasePeriodNs   = basePeriodNs;
 
                                             // Decode-to-present EWMA: proxy for "typical" end-to-end latency.
@@ -2179,17 +2193,18 @@ boolean isC2Decoder = false;
                                             if (drive > 1.0) drive = 1.0;
 
                                             // Map drive into a drop factor range:
-                                            //  drive = 0 -> relaxed (~1.45 * period, close to Smoothness)
-                                            //  drive = 1 -> more aggressive (~1.15 * period, still softer than Latency)
-                                            final double DROP_FACTOR_HIGH = 1.45;
-                                            final double DROP_FACTOR_LOW  = 1.15;
+                                            //  FPS ~= Hz: slightly more relaxed (1.55..1.25)
+                                            //  other    : original range (1.45..1.15)
+                                            final double DROP_FACTOR_HIGH = matchFpsHz ? 1.55 : 1.45;
+                                            final double DROP_FACTOR_LOW  = matchFpsHz ? 1.25 : 1.15;
 
                                             double dropFactorBalanced =
                                                     DROP_FACTOR_HIGH
                                                             - (DROP_FACTOR_HIGH - DROP_FACTOR_LOW) * drive;
 
-                                            dropThresholdNs = (long) ((double) dropBasePeriodNs * dropFactorBalanced);
+                                            dropThresholdNs = (long) (dropBasePeriodNs * dropFactorBalanced);
                                         }
+
 
                                         // Cooldown to avoid spamming drops
                                         final boolean dropCooldownOk =
