@@ -467,16 +467,23 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         final long diff = Math.abs(streamPeriodNs - vsyncPeriodNs);
         final boolean fpsNearDisplay = diff <= (vsyncPeriodNs / 10L);
 
+        // High-FPS on low-Hz (e.g. 90/120 fps on 60 Hz):
+        // keep legacy behavior and do not gate by lastRenderedFrameTimeNanos.
+        if (streamPeriodNs < vsyncPeriodNs) {
+            return true;
+        }
+
         if (fpsNearDisplay) {
-            // FPS ≈ Hz (e.g., 60/60): target one presentation per VSYNC.
-            // Set threshold at ~90% of period to tolerate minor jitter without stalling.
+            // FPS ≈ Hz (e.g. 60/60): target one present per VSYNC (~90% of period)
             final long thresholdNs = (vsyncPeriodNs * 9L) / 10L;
             return deltaNs >= thresholdNs;
         } else {
-            // FPS/Hz mismatch (e.g., 90/120 → 60): maintain historical ~80% threshold.
+            // Other mismatches (e.g. 30 fps on 60 Hz): slightly tighter gate (~80%)
             final long thresholdNs = (vsyncPeriodNs * 8L) / 10L;
             return deltaNs >= thresholdNs;
+
         }
+
     }
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
