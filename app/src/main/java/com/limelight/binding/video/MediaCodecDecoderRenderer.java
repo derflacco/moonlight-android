@@ -1735,9 +1735,16 @@ boolean isC2Decoder = false;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
 
+                // Timing/jitter state:
+                // - ewmaInterArrivalNs    : smoothed PTS inter-arrival (approx. stream period)
+                // - ewmaDecodeToPresentNs: smoothed decode->present delay
+                // - ewmaJitterNs         : baseline jitter magnitude from inter-arrival
+                // - phaseErrorEwmaNs     : smoothed phase error vs target latency (Balanced mode)
                 double ewmaInterArrivalNs    = (1_000_000_000.0 / Math.max(1f, tfps));
                 double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
                 double ewmaJitterNs          = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
+                double phaseErrorEwmaNs      = 0.0;
+
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
 // Reused by latest-only / low-latency drain to avoid per-loop allocations
@@ -1936,12 +1943,31 @@ boolean isC2Decoder = false;
                             try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
                             statsUpdated = true;
 
-                            // update inter-arrival
+                            // Update inter-arrival and jitter baseline
                             if (lastDecoderPtsUs != 0L) {
                                 long interUs = presentationTimeUs - lastDecoderPtsUs;
                                 if (interUs > 0) {
-                                    double sample = interUs * 1000.0;
-                                    ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
+                                    // Inter-arrival sample in ns
+                                    double sampleNs = interUs * 1000.0;
+
+                                    // EWMA of inter-arrival interval (tracks average stream period)
+                                    double prevInterNs = ewmaInterArrivalNs;
+                                    ewmaInterArrivalNs += EWMA_ALPHA * (sampleNs - ewmaInterArrivalNs);
+
+                                    // Instant deviation vs smoothed inter-arrival
+                                    double devNs = Math.abs(sampleNs - prevInterNs);
+
+                                    // Clamp deviation to a small multiple of VSYNC to avoid runaway spikes
+                                    if (vsyncPeriodNs > 0L) {
+                                        double capNs = vsyncPeriodNs * 2.5;
+                                        if (devNs > capNs) {
+                                            devNs = capNs;
+                                        }
+                                    }
+
+                                    // Baseline jitter: slower EWMA so it reflects typical noise level
+                                    final double JITTER_ALPHA = 0.18;
+                                    ewmaJitterNs += JITTER_ALPHA * (devNs - ewmaJitterNs);
                                 }
                             }
                             lastDecoderPtsUs = presentationTimeUs;
@@ -1995,15 +2021,22 @@ boolean isC2Decoder = false;
                                     }
                                 }
                                 else if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
-                                    // AdaptX (EWMA-based): 3 simple profiles with fixed thresholds
-                                    // 0 = Smoothness, 1 = Balanced, 2 = Latency
+                                    // AdaptX: three per-profile heuristics
+                                    // 0 = Smoothness (jitter-baseline scaling, very rare drops)
+                                    // 1 = Balanced   (decode-latency guided threshold, no direct jitter)
+                                    // 2 = Latency    (legacy-style low-latency threshold, warp-aware)
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                         final long nowNs = System.nanoTime();
 
-                                        // Base period for thresholds: prefer stream-aligned period for matched FPS/Hz
-                                        long basePeriodNs = periodNs; // Already fixed above
+                                        // Base period for thresholds: prefer stream-aware period, fall back to VSYNC/60 Hz
+                                        long basePeriodNs = periodNs;
+                                        if (basePeriodNs <= 0L && vsyncPeriodNs > 0L) {
+                                            basePeriodNs = vsyncPeriodNs;
+                                        } else if (basePeriodNs <= 0L) {
+                                            basePeriodNs = 16_666_667L; // ~60 Hz
+                                        }
 
-                                        // End-to-end frame age (from host PTS to now), clamped to [0, +inf)
+                                        // End-to-end frame age (host PTS -> now), clamped to [0, +inf)
                                         long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
                                         if (frameAgeNs < 0L) {
                                             frameAgeNs = 0L;
@@ -2025,60 +2058,123 @@ boolean isC2Decoder = false;
                                                 : 1;
                                         final boolean warpActive = modeLatency && warpFactorRaw > 1;
 
-                                        // --- Per-mode tuning: fixed factors, no complex heuristics ---
-                                        // dropFactor: how "late" a frame may be vs the base period before we drop.
-                                        final double dropFactor;
-                                        final double backlogWindowMul;
-                                        final long   cooldownDiv;
-                                        final int    requiredLateStreak;
-
-                                        if (modeSmooth) {
-                                            // Smoothness: heavily biased toward *not* dropping.
-                                            // Drop only clearly stale frames, and only after a short streak.
-                                            dropFactor         = 1.70;  // ~70% over target period
-                                            backlogWindowMul   = 2.2;   // require recent presents (real backlog)
-                                            cooldownDiv        = 4L;    // slower drop cadence
-                                            requiredLateStreak = 3;     // need multiple late frames in a row
-                                        } else if (modeLatency) {
-                                            // Latency: aggressive, drop quickly when frames are late.
-                                            // Warp-aware: when Warp is active, treat deadlines as if the period were shorter.
-                                            dropFactor         = 1.04;  // base ~4% over target period
-                                            backlogWindowMul   = 0.8;   // small backlog window
-                                            cooldownDiv        = 2L;    // moderately fast drop cadence
-                                            requiredLateStreak = 1;     // drop on first late frame
-                                        } else {
-                                            // Balanced: moderate behavior between Smoothness and Latency.
-                                            // Still drops, but only once lateness is clearly persistent.
-                                            dropFactor         = 1.28;  // ~28% over target period
-                                            backlogWindowMul   = 1.6;   // require a reasonably "busy" queue
-                                            cooldownDiv        = 3L;    // slower than Latency, faster than Smoothness
-                                            requiredLateStreak = 2;     // need at least 2 late frames
-                                        }
-
-                                        // --- Warp-aware drop timing for Latency mode ---
-                                        // For Latency + Warp, we use a shorter "effective" period for:
-                                        //  - lateness threshold (dropThresholdNs)
-                                        //  - cooldown between drops
-                                        final long dropBasePeriodNs;
-                                        if (warpActive) {
-                                            // Example: at 60 Hz with Warp x2, effective period ~ 8.3 ms instead of 16.6 ms
-                                            dropBasePeriodNs = Math.max(1L, basePeriodNs / warpFactorRaw);
-                                        } else {
-                                            dropBasePeriodNs = basePeriodNs;
-                                        }
-
-                                        final long dropThresholdNs = (long) (dropBasePeriodNs * dropFactor);
-
-                                        // Time since last present in this renderer thread
+                                        // Common timing for backlog / cooldown
                                         final long sinceLastPresent = (lastPresentNs == 0L)
                                                 ? 0L
                                                 : Math.max(0L, nowNs - lastPresentNs);
+
+                                        // Per-profile parameters
+                                        final double backlogWindowMul;
+                                        final long   cooldownDiv;
+                                        final int    requiredLateStreak;
+                                        final long   dropBasePeriodNs;
+                                        final long   dropThresholdNs;
+
+                                        if (modeSmooth) {
+                                            // --- AdaptX Smoothness: jitter-baseline scaling, drop very rarely ---
+                                            backlogWindowMul   = 2.3;  // require strong backlog to consider drops
+                                            cooldownDiv        = 4L;   // slow drop cadence
+                                            requiredLateStreak = 3;    // need multiple late frames in a row
+                                            dropBasePeriodNs   = basePeriodNs;
+
+                                            // Baseline jitter from inter-arrival EWMA. This tracks typical noise level.
+                                            double jitterBaselineNs = ewmaJitterNs;
+                                            if (jitterBaselineNs <= 0.0) {
+                                                // Fallback: small fraction of the period
+                                                jitterBaselineNs = (double) basePeriodNs * 0.12;
+                                            }
+
+                                            // Normalized jitter level in [0, 2]:
+                                            //  0   ~ almost clean line
+                                            //  1   ~ moderate jitter
+                                            //  2+  ~ heavy jitter
+                                            double jitterNorm = jitterBaselineNs / ((double) basePeriodNs * 0.25);
+                                            if (jitterNorm < 0.0) jitterNorm = 0.0;
+                                            if (jitterNorm > 2.0) jitterNorm = 2.0;
+
+                                            // Base threshold: ~1.55 * period, extended when jitter is high.
+                                            // Higher jitter -> higher threshold -> fewer drops and less visible stutter.
+                                            double dropFactorSmooth = 1.55 + 0.25 * jitterNorm;
+                                            if (dropFactorSmooth < 1.40) dropFactorSmooth = 1.40;
+                                            if (dropFactorSmooth > 2.10) dropFactorSmooth = 2.10;
+
+                                            dropThresholdNs = (long) ((double) dropBasePeriodNs * dropFactorSmooth);
+
+                                        } else if (modeLatency) {
+                                            // --- AdaptX Latency: legacy-style low-latency threshold (warp-aware) ---
+                                            backlogWindowMul   = 0.8;  // small backlog window
+                                            cooldownDiv        = 2L;   // faster drop cadence
+                                            requiredLateStreak = 1;    // drop on first late frame
+
+                                            // For Latency + Warp, deadlines are based on a shorter effective period
+                                            if (warpActive) {
+                                                dropBasePeriodNs = Math.max(1L, basePeriodNs / warpFactorRaw);
+                                            } else {
+                                                dropBasePeriodNs = basePeriodNs;
+                                            }
+
+                                            // Legacy-style latency threshold: very close to the (possibly warped) period.
+                                            // This keeps end-to-end latency low with behaviour similar to the old Latency path.
+                                            final double LAT_DROP_FACTOR = 1.04; // ~4% over period
+                                            dropThresholdNs = (long) ((double) dropBasePeriodNs * LAT_DROP_FACTOR);
+
+                                        } else {
+                                            // --- AdaptX Balanced: decode-latency guided threshold (no direct jitter) ---
+                                            // Goal:
+                                            // - Smoother than Latency.
+                                            // - More willing to drop than Smoothness.
+                                            // - No frame-to-frame oscillation driven by jitter spikes.
+                                            backlogWindowMul   = 1.9;  // medium backlog window
+                                            cooldownDiv        = 3L;   // medium drop cadence
+                                            requiredLateStreak = 2;    // need at least 2 late frames
+                                            dropBasePeriodNs   = basePeriodNs;
+
+                                            // Decode-to-present EWMA: proxy for "typical" end-to-end latency.
+                                            double latencyRatio;
+                                            if (ewmaDecodeToPresentNs > 0.0 && basePeriodNs > 0L) {
+                                                latencyRatio = ewmaDecodeToPresentNs / (double) basePeriodNs;
+                                            } else {
+                                                // Fallback: assume we want around 0.8 of the period.
+                                                latencyRatio = 0.80;
+                                            }
+
+                                            // Normalize latencyRatio into [0, 1]:
+                                            //  0.0 ~ low latency (<= 0.70 * period)
+                                            //  1.0 ~ high latency (>= 1.00 * period)
+                                            double latNorm = (latencyRatio - 0.70) / 0.30;
+                                            if (latNorm < 0.0) latNorm = 0.0;
+                                            if (latNorm > 1.0) latNorm = 1.0;
+
+                                            // Drop pressure from recent history (0..1):
+                                            //  0.0 ~ no recent drops
+                                            //  1.0 ~ many recent drops
+                                            double dropPressure = Math.min(1.0, (double) recentDrops / 6.0);
+
+                                            // Combined drive:
+                                            //  - latency (latNorm) pushes towards more aggressive dropping
+                                            //  - dropPressure reduces aggressiveness when we already dropped a lot
+                                            double drive = 0.65 * latNorm + 0.35 * dropPressure;
+                                            if (drive < 0.0) drive = 0.0;
+                                            if (drive > 1.0) drive = 1.0;
+
+                                            // Map drive into a drop factor range:
+                                            //  drive = 0 -> relaxed (~1.45 * period, close to Smoothness)
+                                            //  drive = 1 -> more aggressive (~1.15 * period, still softer than Latency)
+                                            final double DROP_FACTOR_HIGH = 1.45;
+                                            final double DROP_FACTOR_LOW  = 1.15;
+
+                                            double dropFactorBalanced =
+                                                    DROP_FACTOR_HIGH
+                                                            - (DROP_FACTOR_HIGH - DROP_FACTOR_LOW) * drive;
+
+                                            dropThresholdNs = (long) ((double) dropBasePeriodNs * dropFactorBalanced);
+                                        }
 
                                         // Cooldown to avoid spamming drops
                                         final boolean dropCooldownOk =
                                                 (nowNs - lastDropNs) >= (dropBasePeriodNs / cooldownDiv);
 
-                                        // Late if the frame is older than our per-mode threshold
+                                        // Late if the frame is older than the per-mode drop threshold
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
                                         if (isLate) {
                                             lateStreak++;
@@ -2106,8 +2202,9 @@ boolean isC2Decoder = false;
                                         }
 
                                         // Present path:
-                                        // - Smoothness / Balanced: vsync-independent but paced via dropThreshold
-                                        // - Latency            : same present timing, but more aggressive dropping above
+                                        // - Smoothness: jitter-baseline scaling, very rare drops
+                                        // - Balanced  : decode-latency-guided threshold, stable behaviour
+                                        // - Latency   : legacy-style low-latency threshold, warp-aware
                                         videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                         gpuKickPresentHook();
 
@@ -2119,6 +2216,7 @@ boolean isC2Decoder = false;
                                         gpuKickPresentHook();
                                     }
                                 }
+
 
 
                                 else if (pNow != null && (pNow.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS
