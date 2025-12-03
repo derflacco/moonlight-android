@@ -427,6 +427,19 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
      * Uses lastRenderedFrameTimeNanos as single state variable.
      */
     private boolean shouldPresentNow(long nowNs) {
+// DEBUG: Timing state log
+        if (BuildConfig.DEBUG) {
+            LimeLog.info("shouldPresentNow: lastRenderedFrameTimeNanos=" + lastRenderedFrameTimeNanos +
+                    ", nowNs=" + nowNs + ", diff=" +
+                    (lastRenderedFrameTimeNanos > 0 ? (nowNs - lastRenderedFrameTimeNanos) / 1_000_000L : 0) + "ms");
+        }
+
+        // IMPORTANT: If lastRenderedFrameTimeNanos is too old (> 1 second), treat it as the first frame
+        if (lastRenderedFrameTimeNanos > 0L && (nowNs - lastRenderedFrameTimeNanos) > 1_000_000_000L) {
+            LimeLog.warning("shouldPresentNow: Stale timing detected! Resetting to first frame.");
+            lastRenderedFrameTimeNanos = 0L;
+        }
+
         // First frame: always allow presentation
         if (lastRenderedFrameTimeNanos <= 0L) {
             return true;
@@ -473,17 +486,25 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             return true;
         }
 
+        long thresholdNs;
         if (fpsNearDisplay) {
             // FPS ≈ Hz (e.g. 60/60): target one present per VSYNC (~90% of period)
-            final long thresholdNs = (vsyncPeriodNs * 9L) / 10L;
-            return deltaNs >= thresholdNs;
+            thresholdNs = (vsyncPeriodNs * 9L) / 10L;
         } else {
             // Other mismatches (e.g. 30 fps on 60 Hz): slightly tighter gate (~80%)
-            final long thresholdNs = (vsyncPeriodNs * 8L) / 10L;
-            return deltaNs >= thresholdNs;
-
+            thresholdNs = (vsyncPeriodNs * 8L) / 10L;
         }
 
+        boolean result = deltaNs >= thresholdNs;
+
+        // DEBUG logging
+        if (BuildConfig.DEBUG) {
+            LimeLog.info("shouldPresentNow: delta=" + (deltaNs/1000000L) + "ms, threshold=" +
+                    (thresholdNs/1000000L) + "ms, streamFPS=" + (1_000_000_000.0/streamPeriodNs) +
+                    ", displayHz=" + displayHz + ", result=" + result);
+        }
+
+        return result;
     }
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -649,25 +670,46 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     }
 
     public void setRenderTarget(Surface renderTarget) {
+        // If surface is changing, reset timing
+        if (this.renderTarget != null && this.renderTarget != renderTarget) {
+            LimeLog.info("Render target changed, resetting timing");
+            lastRenderedFrameTimeNanos = 0L;
+            outputBufferQueue.clear();
+        }
+
         // Tear down previous upscaler if surface changed
         if (this.renderTarget != null && this.renderTarget != renderTarget && glUpscaler != null) {
             try { __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
             glUpscaler = null;
-            if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
+            if (decoderInputSurfaceForUpscale != null) {
+                try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+                decoderInputSurfaceForUpscale = null;
+            }
         }
         this.renderTarget = renderTarget;
 
         // Re-apply presentation hint to upscaler when render target may change
-        try { if (glUpscaler != null) {
-            java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
-            __m.invoke(glUpscaler, context);
-        } } catch (Throwable ignored) {}
-}
+        try {
+            if (glUpscaler != null) {
+                java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
+                __m.invoke(glUpscaler, context);
+            }
+        } catch (Throwable ignored) {}
+    }
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
                                      boolean meteredData, boolean requestedHdr, boolean invertResolution,
                                      String glRenderer, PerfOverlayListener perfListener) {
+        // First, make sure any previous state is cleared
+            if (videoDecoder != null || rendererThread != null || choreographerHandlerThread != null) {
+            LimeLog.warning("MediaCodecDecoderRenderer: Previous instance not fully cleaned up!");
+            try {
+                stop();
+            } catch (Throwable t) {
+                LimeLog.warning("Error during cleanup in constructor: " + t);
+            }
+        }
         //dumpDecoders();
 
         this.context = activity;
@@ -1138,6 +1180,12 @@ try {
 
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
+        LimeLog.info("MediaCodecDecoderRenderer: setup called with format=" + format +
+                ", width=" + width + ", height=" + height + ", redrawRate=" + redrawRate);
+
+        // Reset all timing for new session
+        resetSessionTiming();
+
         this.targetFps = (redrawRate > 0 ? (float) redrawRate : 60f);
         this.coldCfg.initialWidth = coldCfg.invertResolution ? height : width;
         this.coldCfg.initialHeight = coldCfg.invertResolution ? width : height;
@@ -1494,6 +1542,12 @@ try {
             return;
         }
 
+// If there's already an active thread, don't create another one
+        if (choreographerHandlerThread != null && choreographerHandlerThread.isAlive()) {
+            LimeLog.warning("Choreographer thread already exists and is alive!");
+            return;
+        }
+
         // We use a separate thread to avoid any main thread delays from delaying rendering
         choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY);
         choreographerHandlerThread.start();
@@ -1508,8 +1562,13 @@ try {
         });
     }
 
-    private void startRendererThread()
-    {
+    private void startRendererThread() {
+// If there's already an active thread, don't create another one
+        if (rendererThread != null && rendererThread.isAlive()) {
+            LimeLog.warning("Renderer thread already exists and is alive!");
+            return;
+        }
+
         rendererThread = new Thread() {
             @Override
             public void run() {
@@ -1661,11 +1720,22 @@ try {
 //* Pin hot threads to big cluster *//
 
                 // Compute display refresh and vsync period once using DisplayRefreshManager (fallback 60 Hz)
-                if (displayRefreshManager == null && context != null) {
+                // Always recreate display refresh manager for new session
+                if (displayRefreshManager != null) {
+                    try {
+                        displayRefreshManager.release();
+                    } catch (Throwable ignored) {}
+                    displayRefreshManager = null;
+                }
+
+                if (context != null) {
                     try {
                         displayRefreshManager = new DisplayRefreshManager(context);
+                        LimeLog.info("DisplayRefreshManager created for new session, refresh=" +
+                                displayRefreshManager.getRefreshRateHz() + "Hz");
                     } catch (Throwable t) {
                         LimeLog.warning("DisplayRefreshManager: init failed, falling back to defaults: " + t);
+                        displayRefreshManager = null;
                     }
                 }
 
@@ -2554,6 +2624,10 @@ boolean isC2Decoder = false;
 
     @Override
     public void start() {
+        LimeLog.info("MediaCodecDecoderRenderer: start() called, stopping=" + stopping +
+                ", videoDecoder=" + (videoDecoder != null) +
+                ", rendererThread=" + (rendererThread != null));
+
         startRendererThread();
         startChoreographerThread();
         // CPU warm-up (skips if PerfHint reports active unless override=true)
@@ -2581,8 +2655,14 @@ boolean isC2Decoder = false;
     public void prepareForStop() {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
-// Stop CpuWarmUp immediately
+        // Stop CpuWarmUp immediately
         try { cpuWarmUp.stop(); } catch (Throwable ignored) {}
+
+        // Signal codec recovery to abort
+        synchronized (codecRecoveryMonitor) {
+            codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+            codecRecoveryMonitor.notifyAll();
+        }
 
         // Halt the rendering thread
         if (rendererThread != null) {
@@ -2593,94 +2673,126 @@ boolean isC2Decoder = false;
         // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
         try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
         glUpscaler = null;
+
         if (decoderInputSurfaceForUpscale != null) {
             try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
             decoderInputSurfaceForUpscale = null;
         }
-// Stop any active codec recovery operations
-        synchronized (codecRecoveryMonitor) {
-            codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-            codecRecoveryMonitor.notifyAll();
+
+        // Clear GPU kick resources
+        if (gpuKickPbuffer != null) {
+            try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
+            gpuKickPbuffer = null;
         }
 
-        // Post a quit message to the Choreographer looper (if we have one)
-        if (choreographerHandler != null) {
-            choreographerHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    // Don't allow any further messages to be queued
-                    choreographerHandlerThread.quit();
+        // Clear output buffer queue
+        outputBufferQueue.clear();
 
-                    // Deregister the frame callback (if registered)
-                    Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
-                }
-            });
+        // Clear decode latency tracking
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
         }
+
+        LimeLog.info("MediaCodecDecoderRenderer: prepareForStop completed");
     }
 
     @Override
     public void stop() {
+        LimeLog.info("MediaCodecDecoderRenderer: stop() called");
         prepareForStop();
 
-        // Wait for the Choreographer looper to shut down (if we have one)
+        // Wait for the Choreographer looper to shut down
         if (choreographerHandlerThread != null) {
             try {
-                choreographerHandlerThread.join();
+                choreographerHandlerThread.quitSafely();
+                choreographerHandlerThread.join(1000);
             } catch (InterruptedException e) {
-                e.printStackTrace();
-
-                // InterruptedException clears the thread's interrupt status. Since we can't
-                // handle that here, we will re-interrupt the thread to set the interrupt
-                // status back to true.
+                LimeLog.warning("Choreographer thread join interrupted: " + e);
                 Thread.currentThread().interrupt();
+            } finally {
+                choreographerHandlerThread = null;
+                choreographerHandler = null;
+                LimeLog.info("Choreographer thread stopped");
             }
         }
 
         // Wait for the renderer thread to shut down
-        try {
-            rendererThread.join();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-
-            // InterruptedException clears the thread's interrupt status. Since we can't
-            // handle that here, we will re-interrupt the thread to set the interrupt
-            // status back to true.
-            Thread.currentThread().interrupt();
+        if (rendererThread != null) {
+            try {
+                rendererThread.join(1000);
+            } catch (InterruptedException e) {
+                LimeLog.warning("Renderer thread join interrupted: " + e);
+                Thread.currentThread().interrupt();
+            } finally {
+                rendererThread = null;
+                LimeLog.info("Renderer thread stopped");
+            }
         }
 
-        // Final safety: ensure GL upscaler is torn down
+        // Remove any remaining frame callbacks
+        try {
+            Choreographer.getInstance().removeFrameCallback(this);
+        } catch (Throwable ignored) {}
+
+        // Now perform cleanup
+        cleanup();
+
+        // Reset state variables for potential reuse
+        resetState();
+
+        LimeLog.info("MediaCodecDecoderRenderer: stop() completed");
+    }
+
+    @Override
+    public void cleanup() {
+        LimeLog.info("MediaCodecDecoderRenderer: cleanup() called");
+
+        // Stop perf hint if active
+        try {
+            if (this.perfHint != null) {
+                this.perfHint.close();
+                this.perfHint = null;
+            }
+        } catch (Throwable ignored) {}
+
+        // Release decoder if exists
+        if (videoDecoder != null) {
+            try {
+                // Stop decoder first (if not already stopped)
+                try { videoDecoder.stop(); } catch (Throwable ignored) {}
+                // Then release
+                videoDecoder.release();
+                LimeLog.info("MediaCodec released");
+            } catch (Throwable t) {
+                LimeLog.warning("Error releasing decoder: " + t);
+            } finally {
+                videoDecoder = null;
+            }
+        }
+
+        // Final cleanup of GL upscaler (redundant but safe)
         try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
         glUpscaler = null;
+
         if (decoderInputSurfaceForUpscale != null) {
             try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
             decoderInputSurfaceForUpscale = null;
         }
 
-    }
-
-        @Override
-        public void cleanup() {
-            try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
-
-            // Ensure decoder and any GL upscaler resources are released
-            try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-            glUpscaler = null;
-            if (decoderInputSurfaceForUpscale != null) {
-                try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-                decoderInputSurfaceForUpscale = null;
+        // Release display refresh manager
+        if (displayRefreshManager != null) {
+            try {
+                displayRefreshManager.release();
+            } catch (Throwable ignored) {
             }
-
-            // Release display refresh listener/manager
-            if (displayRefreshManager != null) {
-                try {
-                    displayRefreshManager.release();
-                } catch (Throwable ignored) {
-                }
-                displayRefreshManager = null;
-            }
-
-            videoDecoder.release();
+            displayRefreshManager = null;
         }
+
+        // Clear render target reference
+        renderTarget = null;
+
+        LimeLog.info("MediaCodecDecoderRenderer: cleanup() completed");
+    }
 
 
     @Override
@@ -3769,11 +3881,108 @@ boolean isC2Decoder = false;
             }
         }
     }
+    private void resetState() {
+        stopping = false;
+        reportedCrash = false;
+        codecRecoveryAttempts = 0;
+        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+        codecRecoveryThreadQuiescedFlags = 0;
+
+        // Reset timing variables
+        lastRenderedFrameTimeNanos = 0L;
+        lastTimestampUs = 0L;
+        lastFrameNumber = 0;
+
+        // Clear buffers
+        nextInputBufferIndex = -1;
+        nextInputBuffer = null;
+        outputBufferQueue.clear();
+
+        // Reset decode latency tracking
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
+        }
+
+        // Reset stats
+        activeWindowVideoStats.clear();
+        lastWindowVideoStats.clear();
+        numFramesIn = 0;
+        numFramesOut = 0;
+        numSpsIn = 0;
+        numPpsIn = 0;
+        numVpsIn = 0;
+        lastNetDataNum = 0;
+
+        // Reset HDR state
+        hdrActive = false;
+        currentHdrMetadata = null;
+        submittedCsd = false;
+
+        // Reset performance tracking
+        minDecodeTime = Float.MAX_VALUE;
+        minDecodeTimeFullLog = "";
+
+        // Reset affinity tracking
+        affinityPinned = false;
+        lastAllowedMask = null;
+        lastAffinityRefreshNs = 0L;
+
+        // Reset format and configuration
+        inputFormat = null;
+        outputFormat = null;
+        configuredFormat = null;
+        initialException = null;
+        initialExceptionTimestamp = 0;
+
+        // Clear cold configuration
+        coldCfg.vpsBuffers.clear();
+        coldCfg.spsBuffers.clear();
+        coldCfg.ppsBuffers.clear();
+        coldCfg.submittedCsd = false;
+        coldCfg.currentHdrMetadata = null;
+        coldCfg.initialException = null;
+
+        // Reset OLED protection timers
+        liteShiftNextNs = 0L;
+        liteShiftSpaces = 0;
+        liteBlinkNextStartNs = 0L;
+        liteBlinkEndNs = 0L;
+
+        // Reset pacing flags
+        preferLowerDelays = false;
+        preferLowerDelaysTimeoutUs = 0;
+
+        LimeLog.info("MediaCodecDecoderRenderer: state reset complete");
+    }
 
 private boolean isMTKDecoderName(String name) {
     if (name == null) return false;
     String n = name.toLowerCase();
     return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
 }
+    private void resetSessionTiming() {
+        lastRenderedFrameTimeNanos = 0L;
+        lastTimestampUs = 0L;
+        lastFrameNumber = 0;
+        outputBufferQueue.clear();
+
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
+        }
+
+        // Reset display refresh manager
+        if (displayRefreshManager != null) {
+            try {
+                displayRefreshManager.release();
+            } catch (Throwable ignored) {}
+            displayRefreshManager = null;
+        }
+
+        // Reset pacing mode flags
+        preferLowerDelays = false;
+        preferLowerDelaysTimeoutUs = 0;
+
+        LimeLog.info("MediaCodecDecoderRenderer: Session timing reset");
+    }
 
 }
