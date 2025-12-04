@@ -3732,8 +3732,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
 
                 connected = true;
-                // Apply preferred host display if any
-                if (prefConfig != null) applyPreferredDisplayIfAny(prefConfig.displayTarget);
                 connecting = false;
 
                 try {
@@ -4520,29 +4518,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return userLfr && !isBalanced && !isCapFps && !isMaxSmooth && !isAdaptx;
         }
 
-
-
-    // Force host monitor via Sunshine/Apollo hotkey (Ctrl+Alt+Shift+F{N})
-    private void applyPreferredDisplayIfAny(int targetIndex) {
-        if (prefConfig == null) return;
-        if (targetIndex <= 0 || targetIndex > 12) return;
-        try {
-            // Translate Android keycodes to host scancodes
-            short ctrl  = keyboardTranslator.translate(android.view.KeyEvent.KEYCODE_CTRL_LEFT, 0, 0);
-            short alt   = keyboardTranslator.translate(android.view.KeyEvent.KEYCODE_ALT_LEFT, 0, 0);
-            short shift = keyboardTranslator.translate(android.view.KeyEvent.KEYCODE_SHIFT_LEFT, 0, 0);
-            int fKey    = android.view.KeyEvent.KEYCODE_F1 + (targetIndex - 1);
-            short f     = keyboardTranslator.translate(fKey, 0, 0);
-            if (ctrl == 0 || alt == 0 || shift == 0 || f == 0) {
-                com.limelight.LimeLog.warning("DisplaySelect Failed to send display select chord");
-                return;
-            }
-            // Send Ctrl+Alt+Shift+F{N}
-            sendKeys(new short[]{ctrl, alt, shift, f});
-        } catch (Throwable t) {
-            com.limelight.LimeLog.warning("DisplaySelect Failed to send display select chord");
-        }
-    }
+        
     // Returns the highest refresh rate supported by the default display.
     private float getMaxSupportedRefreshHz() {
         // Avoid recomputing on every call; we only need this once per activity lifetime.

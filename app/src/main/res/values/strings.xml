@@ -773,20 +773,7 @@
 		<item>easu_rcas</item>
     </string-array>
 
-    <string name="pref_video_framegen_enable_title">Frame generation (Lite)</string>
-    <string name="pref_video_framegen_enable_summary">Insert a simple blended frame between decoded frames at 90/120 Hz to reduce judder. No optical flow, no motion vectors. Best with Fsr-like set to none.</string>
-    <string name="pref_video_framegen_debug_title">Frame generation debug</string>
-    <string name="pref_video_framegen_debug_summary">Show a tiny on-screen marker when a synthetic FG frame is drawn.</string>
-    <string name="pref_video_framegen_ghost_title">Ghost suppression threshold</string>
-    <string name="pref_video_framegen_ghost_summary">Control sensitivity (0–100). Higher values reduce ghosts but bias towards current frame.</string>
-    <string name="pref_title_display_target">Preferred display (Sunshine/Apollo)</string>
-    <string name="pref_summary_display_target">Select which host monitor to use. Applied on connect by sending Ctrl+Alt+Shift+F#.</string>
-    <string name="pref_entry_display_default">Default (host setting)</string>
-    <string name="pref_entry_display_1">Monitor 1</string>
-    <string name="pref_entry_display_2">Monitor 2</string>
-    <string name="pref_entry_display_3">Monitor 3</string>
-    <string name="pref_entry_display_4">Monitor 4</string>
-    <string name="pref_entry_display_5">Monitor 5</string>
+
 
     <string name="title_checkbox_snappy_input">Snappy Input</string>
     <string name="summary_checkbox_snappy_input">Offload input to a background thread and ignore tiny axis/trigger deltas for a smoother feel. </string>

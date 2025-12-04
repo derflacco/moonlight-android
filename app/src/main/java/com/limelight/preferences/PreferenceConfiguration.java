@@ -1135,8 +1135,7 @@ private static int getFramePacingValue(Context context) {
             config.framePacing = FRAME_PACING_GPU_RAW;
         }
 
-        try { config.displayTarget = Integer.parseInt(prefs.getString("pref_display_target", "0")); } catch (Throwable ignored) { config.displayTarget = 0; }
-        
+
         // Adaptive GPU Kick (tiny per-frame draw to keep GPU clocks)
         try { config.enableGpuKick = prefs.getBoolean(GPU_KICK_ENABLE_PREF_STRING, false); } catch (Throwable ignored) { config.enableGpuKick = false; }
         return config;
