@@ -506,6 +506,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         // ---------------------------------------------------------------------
         boolean isLowLatencyMode = false;
         boolean isAdaptxVsync = false;
+        boolean isAdaptxLatency = false;
         boolean isAdaptxNonVsync = false;
 
         if (prefs != null) {
@@ -516,11 +517,16 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
                     (framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
                             (framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
 
-            // AdaptX: split VSYNC vs non-VSYNC
+            // AdaptX: split VSYNC / LATENCY / other (Smoothness, Balanced)
             if (framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
-                if (prefs.adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC) {
+                final int adaptxMode = prefs.adaptxMode;
+                if (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC) {
                     isAdaptxVsync = true;
+                } else if (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY) {
+                    // AdaptX Latency (with or without Warp) – handled internally
+                    isAdaptxLatency = true;
                 } else {
+                    // Smoothness / Balanced
                     isAdaptxNonVsync = true;
                 }
             }
@@ -556,14 +562,22 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             }
 
             // -----------------------------------------------------------------
-            // MODE 2: AdaptX VSYNC mode
+            // MODE 2: AdaptX Latency (including Warp)
+            // -----------------------------------------------------------------
+            if (isAdaptxLatency) {
+                // Fully handled by AdaptX Latency + warp-aware dropper.
+                // No global gating here to avoid double-pacing.
+                return true;
+            }
+            // -----------------------------------------------------------------
+            // MODE 3: AdaptX VSYNC mode
             // -----------------------------------------------------------------
             if (isAdaptxVsync) {
-                return true; // no gating
+                return true; // no gating, Choreographer drives presents
             }
 
             // -----------------------------------------------------------------
-            // MODE 3: AdaptX non-VSYNC
+            // MODE 4: AdaptX non-VSYNC (Smoothness / Balanced)
             // -----------------------------------------------------------------
             if (isAdaptxNonVsync) {
                 // AdaptX non-VSYNC handles timing internally in the renderer thread.
@@ -2287,17 +2301,22 @@ boolean isC2Decoder = false;
                                             cooldownDiv        = 2L;   // faster drop cadence
                                             requiredLateStreak = 1;    // drop on first late frame
 
-                                            // For Latency + Warp, deadlines are based on a shorter effective period
                                             if (warpActive) {
-                                                dropBasePeriodNs = Math.max(1L, basePeriodNs / warpFactorRaw);
+                                                // Use a shorter base period for cooldown/backlog math,
+                                                // but keep the *effective* drop threshold equivalent to
+                                                // basePeriodNs * 1.04 to avoid heavy FPS mismatch.
+                                                final long warpBase = Math.max(1L, basePeriodNs / warpFactorRaw);
+                                                dropBasePeriodNs = warpBase;
+
+                                                // Example: base/2 * (1.04 * 2) ≈ base * 1.04
+                                                final double LAT_DROP_FACTOR = 1.04 * warpFactorRaw;
+                                                dropThresholdNs = (long) (warpBase * LAT_DROP_FACTOR);
                                             } else {
                                                 dropBasePeriodNs = basePeriodNs;
-                                            }
 
-                                            // Legacy-style latency threshold: very close to the (possibly warped) period.
-                                            // This keeps end-to-end latency low with behaviour similar to the old Latency path.
-                                            final double LAT_DROP_FACTOR = 1.04; // ~4% over period
-                                            dropThresholdNs = (long) ((double) dropBasePeriodNs * LAT_DROP_FACTOR);
+                                                final double LAT_DROP_FACTOR = 1.04; // ~4% over period
+                                                dropThresholdNs = (long) (basePeriodNs * LAT_DROP_FACTOR);
+                                            }
 
                                         } else {
                                             // --- AdaptX Balanced: decode-latency guided threshold (no direct jitter) ---
