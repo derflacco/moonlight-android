@@ -488,6 +488,30 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
 
         long thresholdNs;
 
+// Identify low-latency pacing modes (GPU_RAW and legacy latency)
+        boolean isLowLatencyMode = false;
+        if (prefs != null) {
+            isLowLatencyMode = (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
+                    (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED &&
+                            prefs.framePacing != PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS &&
+                            prefs.framePacing != PreferenceConfiguration.FRAME_PACING_CAP_FPS &&
+                            prefs.framePacing != PreferenceConfiguration.FRAME_PACING_ADAPTX);
+        }
+
+// Complete bypass for high-refresh (≥90Hz) displays in low-latency modes
+// Ensures all frames are presented when stream closely matches display capability
+        if (isLowLatencyMode && displayHz >= 90.0f) {
+            float streamFps = (streamPeriodNs > 0) ? 1_000_000_000.0f / streamPeriodNs : 0f;
+            if (streamFps > 0) {
+                float streamToDisplayRatio = streamFps / displayHz;
+
+                // Bypass when stream reaches ≥90% of display refresh rate
+                if (streamToDisplayRatio >= 0.9f) {
+                     return true;
+                }
+            }
+        }
+
         // Check if we're in AdaptX VSYNC mode
         boolean isAdaptxVsync = false;
         if (prefs != null) {
