@@ -548,15 +548,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
 
                 if (is60_60) {
                     final long lowLatencyThresholdNs = (vsyncPeriodNs * 7L) / 10L; // 70%
-                    boolean result = (deltaNs >= lowLatencyThresholdNs);
-
-                    if (BuildConfig.DEBUG) {
-                        LimeLog.info("shouldPresentNow (low-lat 60/60): delta=" +
-                                (deltaNs / 1_000_000L) + "ms, threshold=" +
-                                (lowLatencyThresholdNs / 1_000_000L) + "ms, displayHz=" +
-                                displayHz + ", streamFps=" + tfps + ", result=" + result);
-                    }
-                    return result;
+                    return deltaNs >= lowLatencyThresholdNs;
                 }
 
                 // Other low-latency combinations will fall through to the default
@@ -567,16 +559,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             // MODE 2: AdaptX VSYNC mode
             // -----------------------------------------------------------------
             if (isAdaptxVsync) {
-                // For AdaptX VSYNC: use 80% threshold for more tolerance
-                final long thresholdNs = (vsyncPeriodNs * 8L) / 10L; // 80%
-                boolean result = (deltaNs >= thresholdNs);
-
-                if (BuildConfig.DEBUG) {
-                    LimeLog.info("AdaptX VSYNC mode: delta=" + (deltaNs / 1_000_000L) +
-                            "ms, threshold=" + (thresholdNs / 1_000_000L) + "ms, displayHz=" +
-                            displayHz + ", streamFps=" + tfps + ", result=" + result);
-                }
-                return result;
+                return true; // no gating
             }
 
             // -----------------------------------------------------------------
