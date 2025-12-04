@@ -54,6 +54,7 @@ import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.DisplaySizer;
 import com.limelight.utils.FSRSizerInstaller;
 import com.limelight.utils.UiHelper;
+import com.limelight.render.GlUpscaleRenderer;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
@@ -143,8 +144,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
     public static Game instance;
 
+    // Track current HDR stream active state (visible to GL renderers)
+    private static volatile boolean sHdrStreamActive = false;
+
+    public static void setHdrStreamActive(boolean active) {
+        sHdrStreamActive = active;
+    }
+
+    public static boolean isHdrStreamActive() {
+        return sHdrStreamActive;
+    }
+
     // === HDR window color mode control ===
     public static void updateHdrWindowMode(final boolean enable) {
+
         try {
             final Game inst = instance;
             if (inst == null) return;
@@ -761,6 +774,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             willStreamHdr = false;
             Toast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
         }
+
+        // Update global HDR stream state for GL renderers
+        Game.setHdrStreamActive(willStreamHdr);
 
         // Display a message to the user if HEVC was forced on but we still didn't find a decoder
         if (prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_HEVC && !decoderRenderer.isHevcSupported()) {
@@ -1744,6 +1760,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // Unbind from the discovery service
             unbindService(usbDriverServiceConnection);
         }
+        // Ensure we leave the system in SDR mode when the activity is destroyed
+        try {
+            Game.updateHdrWindowMode(false);
+        } catch (Throwable ignored) {}
 
         // Destroy the capture provider
         inputCaptureProvider.destroy();

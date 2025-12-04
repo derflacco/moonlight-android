@@ -43,6 +43,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * - A small near-native bypass avoids unnecessary blur when scale≈1x.
  */
 public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableListener {
+    // ===== HDR / Direct Present state =====
+    // These flags are driven from Game/decoder:
+    private volatile boolean hdrActive = false;
+    private volatile boolean hdrDirectPresent = false;
+
     // RCAS_OES health-check state
     private boolean rcasOesChecked = false;
     private boolean rcasOesHealthy = false;
@@ -176,6 +181,20 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         // Precompute whether we can always take the ultra-thin OES->screen path.
         this.fastBypassStatic = computeFastBypassStatic(prefs);
+    }
+
+    /**
+     * Update HDR + Direct Present mode.
+     *
+     * @param hdrActive      true if the current stream is HDR.
+     * @param directPresent  true only when GPU path (prefs.gpuPathMode) is enabled.
+     */
+    @Keep
+    public void setHdrMode(boolean hdrActive, boolean directPresent) {
+        this.hdrActive = hdrActive;
+        this.hdrDirectPresent = directPresent;
+        // Ensure we render at least once with the new mode
+        sizeChangedSinceLastSwap = true;
     }
 
     @Keep
@@ -330,6 +349,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // === FSR path selection + telemetry ===
             final float nearThr = 0.05f;
 
+            // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
+            if (hdrActive && prefs != null && prefs.gpuPathMode) {
+                drawOesToScreen();
+                swapAndContinue();
+                sizeChangedSinceLastSwap = false;
+                continue;
+            }
+
             if (!upscaleEnabled || modeNone) {
                 // BYPASS
                 if (__fsr.enabled) {
@@ -392,26 +419,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     drawOesToScreen();
                 }
             }
-            try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
-            boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
-            if (!__swapped) {
-                int err = EGL14.eglGetError();
-                try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
-                swapFailStreak++;
-                if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= 8) {
-                    running.set(false);
-                }
-                continue;
-            } else {
-                if (swapFailStreak != 0) swapFailStreak = 0;
-                sizeChangedSinceLastSwap = false;
-            }
-        }
-    }
-
-    // ====== Draw operations ======
-    private void drawOesToScreen() {
-        GLES20.glUseProgram(progBlit);
+            swapAndContinue();
         bindQuad(progBlit);
 
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
@@ -422,6 +430,29 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
+            sizeChangedSinceLastSwap = false;
+        }
+    }
+
+    private void swapAndContinue() {
+        try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
+        boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+        if (!__swapped) {
+            int err = EGL14.eglGetError();
+            try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
+            swapFailStreak++;
+            if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= 8) {
+                running.set(false);
+            }
+        } else {
+            if (swapFailStreak != 0) swapFailStreak = 0;
+        }
+    }
+
+    // ====== Draw operations ======
+    private void drawOesToScreen() {
+        GLES20.glUseProgram(progBlit);
+        bindQuad(progBlit);
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
     }
 
@@ -745,6 +776,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         int locPos = 0, locUv = 1;
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glEnableVertexAttribArray(locPos);
+        GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+        GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glVertexAttribPointer(locPos, 2, GLES20.GL_FLOAT, false, 0, 0);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glEnableVertexAttribArray(locUv);
@@ -778,6 +811,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
         float s = clamp01(ui);
+        // In HDR + GPU direct path, we must not alter gamma or sharpness
+        // This check would need to be done at the caller level
+        // For now, we just return the mapped value
+        // The actual HDR bypass happens in renderLoop before calling this function
+        if (ui <= 0.05f) return 0f;
+        s = (s - 0.05f) / 0.95f;
+        s = (float)(1.0 - Math.exp(-3.0 * s));
         if (s <= 0.05f) return 0f;
         s = (s - 0.05f) / 0.95f;
         s = (float)(1.0 - Math.exp(-3.0 * s));
@@ -1103,8 +1143,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
     // Decide once, at construction, if this renderer can use the ultra-thin path.
 // True when GPU direct path is forced or FSR is logically disabled.
-    private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
-        if (prefs == null) return false;
+    private boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
+        if (prefs == null || (hdrActive && prefs.gpuPathMode)) return true;
         if (prefs.gpuPathMode) return true;
         if (!prefs.videoUpscaleEnable) return true;
 
