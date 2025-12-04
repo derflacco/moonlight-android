@@ -420,22 +420,27 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
      * Objective:
      * - When stream FPS ≈ display refresh rate (e.g., 60 fps on 60 Hz),
      *   target one presentation per VSYNC to avoid 16.7/33.3 ms patterns.
-     * - When stream FPS is significantly higher than refresh (e.g., 90/120 fps on 60 Hz),
-     *   maintain a tighter threshold (~80% of period) for frame decimation without
-     *   double-presenting within the same interval.
+     * - For high-refresh low-latency (e.g., 120/120 GPU_RAW),
+     *   preserve the legacy "raw" behavior (no gating).
+     * - For 60/60 low-latency, use a slightly more aggressive threshold (70%)
+     *   to reduce mismatch without adding extra latency.
      *
      * Uses lastRenderedFrameTimeNanos as single state variable.
      */
     private boolean shouldPresentNow(long nowNs) {
-// DEBUG: Timing state log
+        // DEBUG: Timing state log
         if (BuildConfig.DEBUG) {
             LimeLog.info("shouldPresentNow: lastRenderedFrameTimeNanos=" + lastRenderedFrameTimeNanos +
                     ", nowNs=" + nowNs + ", diff=" +
-                    (lastRenderedFrameTimeNanos > 0 ? (nowNs - lastRenderedFrameTimeNanos) / 1_000_000L : 0) + "ms");
+                    (lastRenderedFrameTimeNanos > 0
+                            ? (nowNs - lastRenderedFrameTimeNanos) / 1_000_000L
+                            : 0) + "ms");
         }
 
-        // IMPORTANT: If lastRenderedFrameTimeNanos is too old (> 1 second), treat it as the first frame
-        if (lastRenderedFrameTimeNanos > 0L && (nowNs - lastRenderedFrameTimeNanos) > 1_000_000_000L) {
+        // IMPORTANT: If lastRenderedFrameTimeNanos is too old (> 1 second),
+        // treat it as the first frame
+        if (lastRenderedFrameTimeNanos > 0L &&
+                (nowNs - lastRenderedFrameTimeNanos) > 1_000_000_000L) {
             LimeLog.warning("shouldPresentNow: Stale timing detected! Resetting to first frame.");
             lastRenderedFrameTimeNanos = 0L;
         }
@@ -450,7 +455,9 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             deltaNs = 0L;
         }
 
+        // ---------------------------------------------------------------------
         // Display cadence: prefer DisplayRefreshManager, fallback to refreshRate
+        // ---------------------------------------------------------------------
         float displayHz;
         long vsyncPeriodNs;
         try {
@@ -472,81 +479,144 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             vsyncPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, displayHz));
         }
 
+        // ---------------------------------------------------------------------
         // Stream cadence (targetFps set in setup(...))
+        // ---------------------------------------------------------------------
         final float tfps = (targetFps > 0f ? targetFps : displayHz);
         final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
+
+        // Guard against division by zero in debug logs
+        final double streamFpsForLog =
+                (streamPeriodNs > 0L) ? (1_000_000_000.0 / (double) streamPeriodNs) : 0.0;
 
         // Consider "near match" if stream period is within ±10% of display period
         final long diff = Math.abs(streamPeriodNs - vsyncPeriodNs);
         final boolean fpsNearDisplay = diff <= (vsyncPeriodNs / 10L);
 
+        // ---------------------------------------------------------------------
         // High-FPS on low-Hz (e.g. 90/120 fps on 60 Hz):
         // keep legacy behavior and do not gate by lastRenderedFrameTimeNanos.
-        if (streamPeriodNs < vsyncPeriodNs) {
+        // ---------------------------------------------------------------------
+        if (streamPeriodNs > 0L && vsyncPeriodNs > 0L && streamPeriodNs < vsyncPeriodNs) {
             return true;
         }
 
-        long thresholdNs;
-
-// Identify low-latency pacing modes (GPU_RAW and legacy latency)
+        // ---------------------------------------------------------------------
+        // Mode detection
+        // ---------------------------------------------------------------------
         boolean isLowLatencyMode = false;
+        boolean isAdaptxVsync = false;
+        boolean isAdaptxNonVsync = false;
+
         if (prefs != null) {
-            isLowLatencyMode = (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
-                    (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED &&
-                            prefs.framePacing != PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS &&
-                            prefs.framePacing != PreferenceConfiguration.FRAME_PACING_CAP_FPS &&
-                            prefs.framePacing != PreferenceConfiguration.FRAME_PACING_ADAPTX);
-        }
+            final int framePacing = prefs.framePacing;
 
-// Complete bypass for high-refresh (≥90Hz) displays in low-latency modes
-// Ensures all frames are presented when stream closely matches display capability
-        if (isLowLatencyMode && displayHz >= 90.0f) {
-            float streamFps = (streamPeriodNs > 0) ? 1_000_000_000.0f / streamPeriodNs : 0f;
-            if (streamFps > 0) {
-                float streamToDisplayRatio = streamFps / displayHz;
+            // Low-latency modes: GPU_RAW + legacy MIN_LATENCY
+            isLowLatencyMode =
+                    (framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
+                            (framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
 
-                // Bypass when stream reaches ≥90% of display refresh rate
-                if (streamToDisplayRatio >= 0.9f) {
-                     return true;
+            // AdaptX: split VSYNC vs non-VSYNC
+            if (framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
+                if (prefs.adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC) {
+                    isAdaptxVsync = true;
+                } else {
+                    isAdaptxNonVsync = true;
                 }
             }
-        }
 
-        // Check if we're in AdaptX VSYNC mode
-        boolean isAdaptxVsync = false;
-        if (prefs != null) {
-            isAdaptxVsync = (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX &&
-                    prefs.adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC);
-        }
+            // -----------------------------------------------------------------
+            // MODE 1: Low-latency modes (GPU_RAW, MIN_LATENCY)
+            // -----------------------------------------------------------------
+            if (isLowLatencyMode) {
+                // 1A) High-refresh (>= 90 Hz) and stream ≈ display:
+                //     keep the original "raw" behavior (no gating) for 120/120, 90/90, etc.
+                final boolean highRefresh = displayHz >= 90.0f;
+                final boolean streamNearDisplayHz =
+                        Math.abs(tfps - displayHz) <= (displayHz * 0.10f); // ±10%
 
-        if (fpsNearDisplay) {
-            // FPS ≈ Hz (e.g. 60/60): target one present per VSYNC
+                if (highRefresh && streamNearDisplayHz) {
+                    // This preserves your good behavior at 120 fps / 120 Hz
+                    return true;
+                }
+
+                // 1B) Special handling for 60/60 low-latency:
+                //     use 70% threshold to reduce mismatch but keep low latency.
+                final boolean is60HzDisplay = Math.abs(displayHz - 60.0f) < 5.0f; // 60 Hz ±5
+                final boolean is60FpsStream = Math.abs(tfps - 60.0f) < 5.0f;      // 60 fps ±5
+                final boolean is60_60 = is60HzDisplay && is60FpsStream;
+
+                if (is60_60) {
+                    final long lowLatencyThresholdNs = (vsyncPeriodNs * 7L) / 10L; // 70%
+                    boolean result = (deltaNs >= lowLatencyThresholdNs);
+
+                    if (BuildConfig.DEBUG) {
+                        LimeLog.info("shouldPresentNow (low-lat 60/60): delta=" +
+                                (deltaNs / 1_000_000L) + "ms, threshold=" +
+                                (lowLatencyThresholdNs / 1_000_000L) + "ms, displayHz=" +
+                                displayHz + ", streamFps=" + tfps + ", result=" + result);
+                    }
+                    return result;
+                }
+
+                // Other low-latency combinations will fall through to the default
+                // 90% / 80% thresholds at the end of the function.
+            }
+
+            // -----------------------------------------------------------------
+            // MODE 2: AdaptX VSYNC mode
+            // -----------------------------------------------------------------
             if (isAdaptxVsync) {
                 // For AdaptX VSYNC: use 80% threshold for more tolerance
-                thresholdNs = (vsyncPeriodNs * 8L) / 10L;
+                final long thresholdNs = (vsyncPeriodNs * 8L) / 10L; // 80%
+                boolean result = (deltaNs >= thresholdNs);
+
                 if (BuildConfig.DEBUG) {
-                    LimeLog.info("AdaptX VSYNC mode: using 80% threshold (" + thresholdNs/1000000L + "ms)");
+                    LimeLog.info("AdaptX VSYNC mode: delta=" + (deltaNs / 1_000_000L) +
+                            "ms, threshold=" + (thresholdNs / 1_000_000L) + "ms, displayHz=" +
+                            displayHz + ", streamFps=" + tfps + ", result=" + result);
                 }
-            } else {
-                // For other modes: original 90% threshold
-                thresholdNs = (vsyncPeriodNs * 9L) / 10L;
+                return result;
             }
-        } else {
-            // Other mismatches (e.g. 30 fps on 60 Hz): slightly tighter gate (~80%)
-            thresholdNs = (vsyncPeriodNs * 8L) / 10L;
+
+            // -----------------------------------------------------------------
+            // MODE 3: AdaptX non-VSYNC
+            // -----------------------------------------------------------------
+            if (isAdaptxNonVsync) {
+                // AdaptX non-VSYNC handles timing internally in the renderer thread.
+                // We do not want an extra gate here.
+                return true;
+            }
         }
 
-        boolean result = deltaNs >= thresholdNs;
+        // ---------------------------------------------------------------------
+        // DEFAULT BEHAVIOR for BALANCED, MAX_SMOOTHNESS, CAP_FPS,
+        // and any low-latency combo not specially handled above.
+        // ---------------------------------------------------------------------
+        long thresholdNs;
+        if (fpsNearDisplay) {
+            // FPS ≈ Hz (e.g. 60/60, 120/120): target one present per VSYNC
+            thresholdNs = (vsyncPeriodNs * 9L) / 10L; // 90%
+        } else {
+            // Other mismatches (e.g. 30 fps on 60 Hz): slightly tighter gate (~80%)
+            thresholdNs = (vsyncPeriodNs * 8L) / 10L; // 80%
+        }
+
+        boolean result = (deltaNs >= thresholdNs);
 
         // DEBUG logging
         if (BuildConfig.DEBUG) {
-            LimeLog.info("shouldPresentNow: delta=" + (deltaNs/1000000L) + "ms, threshold=" +
-                    (thresholdNs/1000000L) + "ms, streamFPS=" + (1_000_000_000.0/streamPeriodNs) +
-                    ", displayHz=" + displayHz + ", adaptxVsync=" + isAdaptxVsync + ", result=" + result);
+            LimeLog.info("shouldPresentNow: delta=" + (deltaNs / 1_000_000L) + "ms, threshold=" +
+                    (thresholdNs / 1_000_000L) + "ms, streamFPS=" + streamFpsForLog +
+                    ", displayHz=" + displayHz + ", result=" + result);
         }
 
         return result;
     }
+
+    // -------------------------------------------------//
+
+
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
         if (decoder == null) {
