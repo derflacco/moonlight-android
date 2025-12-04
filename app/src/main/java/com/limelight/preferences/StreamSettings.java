@@ -233,11 +233,26 @@ public class StreamSettings extends AppCompatActivity {
                 warpSeek.setEnabled(enableWarp);
             }
 
-            // AdaptX seekbar: only enabled in AdaptX mode
+            // AdaptX seekbar:
+            // - HIDDEN when Direct Present (gpuPath) is active
+            // - Visible otherwise, but only enabled when pacing = AdaptX
             if (adaptxSeek != null) {
-                adaptxSeek.setEnabled(isAdaptx);
+                final boolean adaptxVisible = !gpuPath; // Direct Present ON => hide selector
+
+                try {
+                    // AndroidX Preference has setVisible()
+                    adaptxSeek.setVisible(adaptxVisible);
+                } catch (Throwable ignored) {
+                    // Fallback: if setVisible() is not available, just enable/disable
+                    adaptxSeek.setEnabled(adaptxVisible && isAdaptx);
+                    return;
+                }
+
+                // If visible, enable only when pacing is AdaptX
+                adaptxSeek.setEnabled(adaptxVisible && isAdaptx);
             }
         }
+
 
 @Override
 public void onResume() {
