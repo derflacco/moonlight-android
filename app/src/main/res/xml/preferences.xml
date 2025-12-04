@@ -65,7 +65,7 @@
             android:dialogMessage="@string/summary_seekbar_adaptx_mode"
             android:text="@string/prefix_seekbar_adaptx_mode"
             android:defaultValue="1"
-            android:max="2"
+            android:max="3"
             app:iconSpaceReserved="false"
             seekbar:min="0"
             seekbar:step="1"

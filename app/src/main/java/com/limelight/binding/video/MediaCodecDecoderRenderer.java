@@ -427,6 +427,19 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
      * Uses lastRenderedFrameTimeNanos as single state variable.
      */
     private boolean shouldPresentNow(long nowNs) {
+// DEBUG: Timing state log
+        if (BuildConfig.DEBUG) {
+            LimeLog.info("shouldPresentNow: lastRenderedFrameTimeNanos=" + lastRenderedFrameTimeNanos +
+                    ", nowNs=" + nowNs + ", diff=" +
+                    (lastRenderedFrameTimeNanos > 0 ? (nowNs - lastRenderedFrameTimeNanos) / 1_000_000L : 0) + "ms");
+        }
+
+        // IMPORTANT: If lastRenderedFrameTimeNanos is too old (> 1 second), treat it as the first frame
+        if (lastRenderedFrameTimeNanos > 0L && (nowNs - lastRenderedFrameTimeNanos) > 1_000_000_000L) {
+            LimeLog.warning("shouldPresentNow: Stale timing detected! Resetting to first frame.");
+            lastRenderedFrameTimeNanos = 0L;
+        }
+
         // First frame: always allow presentation
         if (lastRenderedFrameTimeNanos <= 0L) {
             return true;
@@ -473,17 +486,25 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             return true;
         }
 
+        long thresholdNs;
         if (fpsNearDisplay) {
             // FPS ≈ Hz (e.g. 60/60): target one present per VSYNC (~90% of period)
-            final long thresholdNs = (vsyncPeriodNs * 9L) / 10L;
-            return deltaNs >= thresholdNs;
+            thresholdNs = (vsyncPeriodNs * 9L) / 10L;
         } else {
             // Other mismatches (e.g. 30 fps on 60 Hz): slightly tighter gate (~80%)
-            final long thresholdNs = (vsyncPeriodNs * 8L) / 10L;
-            return deltaNs >= thresholdNs;
-
+            thresholdNs = (vsyncPeriodNs * 8L) / 10L;
         }
 
+        boolean result = deltaNs >= thresholdNs;
+
+        // DEBUG logging
+        if (BuildConfig.DEBUG) {
+            LimeLog.info("shouldPresentNow: delta=" + (deltaNs/1000000L) + "ms, threshold=" +
+                    (thresholdNs/1000000L) + "ms, streamFPS=" + (1_000_000_000.0/streamPeriodNs) +
+                    ", displayHz=" + displayHz + ", result=" + result);
+        }
+
+        return result;
     }
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -1489,7 +1510,7 @@ try {
     }
 
     private void startChoreographerThread() {
-        if (prefs == null || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        if (!isChoreographerPacingEnabled()) {
             // Not using Choreographer in this pacing mode
             return;
         }
@@ -2063,7 +2084,11 @@ boolean isC2Decoder = false;
                                             frameAgeNs = 0L;
                                         }
 
-                                        // Current AdaptX mode from prefs: 0 = Smoothness, 1 = Balanced, 2 = Latency
+                                        // Current AdaptX mode from prefs:
+                                        //  0 = Smoothness (jitter-baseline scaling, very rare drops)
+                                        //  1 = Balanced   (decode-latency guided threshold, no direct jitter)
+                                        //  2 = Latency    (legacy-style low-latency threshold, warp-aware)
+                                        //  3 = Vsync      (VSYNC-locked variant, presented via Choreographer)
                                         final int adaptxMode = (prefs != null)
                                                 ? prefs.adaptxMode
                                                 : PreferenceConfiguration.ADAPTX_MODE_BALANCED;
@@ -2071,6 +2096,9 @@ boolean isC2Decoder = false;
                                                 (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
                                         final boolean modeLatency =
                                                 (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY);
+                                        final boolean modeVsync =
+                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC);
+
 
                                         // Warp factor: used only for Latency mode
                                         // pNow.framePacingWarpFactor comes from config (0 = off, 2 = x2, 4 = x4)
@@ -2237,15 +2265,40 @@ boolean isC2Decoder = false;
                                             continue; // stats already recorded at dequeue for this PTS
                                         }
 
-                                        // Present path:
-                                        // - Smoothness: jitter-baseline scaling, very rare drops
-                                        // - Balanced  : decode-latency-guided threshold, stable behaviour
-                                        // - Latency   : legacy-style low-latency threshold, warp-aware
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                        gpuKickPresentHook();
+                                        if (modeVsync) {
+                                            // AdaptX Vsync: hand the frame to the Choreographer-driven path.
+                                            // We keep the queue depth very small to preserve low latency.
+                                            final int qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_LL;
 
-                                        lastPresentNs = nowNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
+                                            // Enforce queue depth on the producer side
+                                            while (outputBufferQueue.size() >= qLimit) {
+                                                try {
+                                                    Integer old = outputBufferQueue.poll();
+                                                    if (old != null) {
+                                                        videoDecoder.releaseOutputBuffer(old, false);
+                                                    }
+                                                } catch (Throwable ignored) {
+                                                }
+                                            }
+
+                                            // Hand off to Choreographer#doFrame(), which will present with a VSYNC-aligned timestamp.
+                                            outputBufferQueue.add(lastIndex);
+
+                                            // For AdaptX heuristics, treat this as a "present" so backlog logic stays consistent.
+                                            lastPresentNs = nowNs;
+                                            recentDrops = Math.max(0, recentDrops - 1);
+                                        } else {
+                                            // Present path:
+                                            // - Smoothness: jitter-baseline scaling, very rare drops
+                                            // - Balanced  : decode-latency-guided threshold, stable behaviour
+                                            // - Latency   : legacy-style low-latency threshold, warp-aware
+                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                            gpuKickPresentHook();
+
+                                            lastPresentNs = nowNs;
+                                            recentDrops = Math.max(0, recentDrops - 1);
+                                        }
+
                                     } else {
                                         // Legacy path: no fine-grained timestamps available
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
@@ -2342,7 +2395,7 @@ boolean isC2Decoder = false;
 
                                 }
                             }
-                            else {
+                            else if (isChoreographerPacingEnabled()) {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
                                 // We just put all frames into the output buffer queue and let it handle things.
 
@@ -3775,5 +3828,25 @@ private boolean isMTKDecoderName(String name) {
     String n = name.toLowerCase();
     return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
 }
+    // Choreographer-based pacing is used for:
+// - Frame pacing BALANCED
+// - AdaptX with sub-mode VSYNC
+    private boolean isChoreographerPacingEnabled() {
+        final com.limelight.preferences.PreferenceConfiguration p = this.prefs;
+        if (p == null) {
+            return false;
+        }
+
+        if (p.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            return true;
+        }
+
+        if (p.framePacing == com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_ADAPTX &&
+                p.adaptxMode == com.limelight.preferences.PreferenceConfiguration.ADAPTX_MODE_VSYNC) {
+            return true;
+        }
+
+        return false;
+    }
 
 }

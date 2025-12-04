@@ -253,6 +253,7 @@ public class PreferenceConfiguration {
     public static final int ADAPTX_MODE_SMOOTHNESS = 0;
     public static final int ADAPTX_MODE_BALANCED   = 1;
     public static final int ADAPTX_MODE_LATENCY    = 2;
+    public static final int ADAPTX_MODE_VSYNC    = 3;
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";
@@ -909,7 +910,7 @@ private static int getFramePacingValue(Context context) {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
-        // AdaptX sub-mode slider: 0 = Smoothness, 1 = Balanced, 2 = Latency
+        // AdaptX sub-mode slider: 0 = Smoothness, 1 = Balanced, 2 = Latency 3 = Vsync
         config.adaptxMode = prefs.getInt("seekbar_adaptx_mode",
                 com.limelight.preferences.PreferenceConfiguration.ADAPTX_MODE_BALANCED);
         config.preferLowerDelays = getPreferLowerDelays(context);
