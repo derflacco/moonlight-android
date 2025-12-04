@@ -4515,7 +4515,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             // Bypass LFR on Balanced/CapFPS/Max Smoothness and non-latency AdaptX
-            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth && !isAdaptx;
+            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth;
         }
 
         
