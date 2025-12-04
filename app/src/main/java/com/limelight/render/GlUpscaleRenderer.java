@@ -16,7 +16,7 @@ import androidx.annotation.Keep;
 
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.LimeLog;
-
+import com.limelight.Game;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
@@ -79,6 +79,24 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Ensure per-program first-use matrix upload
     private boolean blitMatDirty = true, easuMatDirty = true, rcasOesMatDirty = true;
+
+    // ===== HDR / Direct Present state =====
+    // These flags are driven from Game/decoder:
+    //  - hdrActive:        true when the current stream is HDR10
+    //  - hdrDirectPresent: true when GPU path (direct present) is active
+    private volatile boolean hdrActive = false;
+    private volatile boolean hdrDirectPresent = false;
+
+    /**
+     * Update HDR + Direct Present mode.
+     *
+     * @param hdrActive      true if the current stream is HDR.
+     * @param directPresent  true only when GPU path (prefs.gpuPathMode) is enabled.
+     */
+    public void setHdrMode(boolean hdrActive, boolean directPresent) {
+        this.hdrActive = hdrActive;
+        this.hdrDirectPresent = directPresent;
+    }
 
     // ===== FSR Telemetry (lightweight) =====
     private static final class FsrTelemetry {
@@ -418,10 +436,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     // ====== Render Mode Decision ======
-    // ====== Render Mode Decision ======
-    private enum RenderMode { BYPASS, RCAS_ONLY, EASU_RCAS }
+    private enum RenderMode {
+        BYPASS,
+        RCAS_ONLY,
+        EASU_RCAS,
+        HDR_DIRECT // HDR-friendly direct present path: thin OES -> screen, no FSR/gamma tricks
+    }
+
 
     private RenderMode determineRenderMode(boolean upscaleEnabled, String mode, boolean nearNative) {
+        boolean hdrActive = false;
+        try {
+            hdrActive = Game.isHdrStreamActive();
+        } catch (Throwable ignored) {}
+
+        boolean gpuPath = (prefs != null && prefs.gpuPathMode);
+
+        // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
+        if (hdrActive && gpuPath) {
+            return RenderMode.HDR_DIRECT;
+        }
+
         if (!upscaleEnabled || "none".equals(mode)) {
             return RenderMode.BYPASS;
         } else if ("easu_rcas".equals(mode) && progEasu != 0 && !nearNative) {
@@ -430,6 +465,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return RenderMode.RCAS_ONLY;
         }
     }
+
+
 
     // FSR completely bypassed (no EASU, no RCAS): we can just blit OES -> screen.
     // Used to skip renderFrame() entirely when FSR is logically off.
@@ -631,6 +668,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 actualMode = "BYPASS";
                 break;
 
+            case HDR_DIRECT:
+                // HDR + GPU path: ultra-thin OES -> screen path, no FSR, no gamma tweaks
+                setupTelemetry("HDR_DIRECT", sharpUser, "HDR_OES_BYPASS",
+                        "reason=hdr_gpu_path");
+                drawOesToScreen();
+                success = true;
+                actualMode = "HDR_DIRECT";
+                break;
+
             case EASU_RCAS:
                 success = drawEasuRcasSafe(fbW, fbH, effectiveSharpness);
                 actualMode = "EASU+RCAS";
@@ -654,14 +700,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
                 setupTelemetry("RCAS_ONLY", effectiveSharpness, samplingMode,
                         (success ? reason : "fallback:rcas_only_failed") +
-                                " | nearNative=" + nearNative);
-
-                if (__fsr.enabled) {
-                    __fsr.rcasAvgNs = (__fsr.rcasAvgNs == 0.0) ? duration : (0.2 * duration + 0.8 * __fsr.rcasAvgNs);
-                }
-                actualMode = "RCAS_ONLY";
+                                " | src=" + srcW + "x" + srcH +
+                                " dst=" + fbW + "x" + fbH +
+                                " nearNative=" + nearNative +
+                                " durationMs=" + (duration / 1_000_000.0));
                 break;
         }
+
 
         if (__fsr.enabled) {
             __fsr.frames++;
@@ -1285,12 +1330,29 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
     // Returns gamma compensation factor to apply in final RCAS pass.
     // Only active when FSR is enabled and mode is not "none".
+    //
+    // IMPORTANT:
+    //  - For HDR + Direct Present (GPU path), we MUST NOT touch gamma.
+    //    The decoder + display pipeline already handle the HDR transfer function.
     private float getFsrGammaComp() {
+        boolean hdrActive = false;
+        try {
+            hdrActive = Game.isHdrStreamActive();
+        } catch (Throwable ignored) {}
+
+        boolean gpuPath = (prefs != null && prefs.gpuPathMode);
+
+        // In HDR + GPU direct path, we must not alter gamma.
+        if (hdrActive && gpuPath) {
+            return 1.0f;
+        }
+
         if (prefs == null || !prefs.videoUpscaleEnable) return 1.0f;
         final String m = prefs.videoUpscaleMode;
         if (m == null || "none".equals(m)) return 1.0f;
         return FSR_GAMMA_COMPENSATION;
     }
+
 
 
     // Map UI sharpness (0..1) -> internal RCAS strength.
