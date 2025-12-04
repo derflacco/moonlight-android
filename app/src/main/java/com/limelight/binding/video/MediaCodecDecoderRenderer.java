@@ -49,11 +49,11 @@ import android.view.SurfaceView;
 
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
-    // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
-    // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
-    // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
-    private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
 
+    private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
+    // Adaptx Vsync
+    private volatile long adaptxVsyncDroppedFrames = 0;
+    private volatile long adaptxVsyncDroppedLastLogTime = 0;
     private static final long AFFINITY_REFRESH_NS = 10_000_000_000L; // 10s (was 2s)
     private volatile long lastAffinityRefreshNs = 0L;
     private volatile String lastAllowedMask = null;
@@ -487,9 +487,26 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         }
 
         long thresholdNs;
+
+        // Check if we're in AdaptX VSYNC mode
+        boolean isAdaptxVsync = false;
+        if (prefs != null) {
+            isAdaptxVsync = (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX &&
+                    prefs.adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC);
+        }
+
         if (fpsNearDisplay) {
-            // FPS ≈ Hz (e.g. 60/60): target one present per VSYNC (~90% of period)
-            thresholdNs = (vsyncPeriodNs * 9L) / 10L;
+            // FPS ≈ Hz (e.g. 60/60): target one present per VSYNC
+            if (isAdaptxVsync) {
+                // For AdaptX VSYNC: use 80% threshold for more tolerance
+                thresholdNs = (vsyncPeriodNs * 8L) / 10L;
+                if (BuildConfig.DEBUG) {
+                    LimeLog.info("AdaptX VSYNC mode: using 80% threshold (" + thresholdNs/1000000L + "ms)");
+                }
+            } else {
+                // For other modes: original 90% threshold
+                thresholdNs = (vsyncPeriodNs * 9L) / 10L;
+            }
         } else {
             // Other mismatches (e.g. 30 fps on 60 Hz): slightly tighter gate (~80%)
             thresholdNs = (vsyncPeriodNs * 8L) / 10L;
@@ -501,7 +518,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         if (BuildConfig.DEBUG) {
             LimeLog.info("shouldPresentNow: delta=" + (deltaNs/1000000L) + "ms, threshold=" +
                     (thresholdNs/1000000L) + "ms, streamFPS=" + (1_000_000_000.0/streamPeriodNs) +
-                    ", displayHz=" + displayHz + ", result=" + result);
+                    ", displayHz=" + displayHz + ", adaptxVsync=" + isAdaptxVsync + ", result=" + result);
         }
 
         return result;
@@ -1490,11 +1507,30 @@ try {
             }
         } else {
             // If we intentionally skip this VSYNC, drain old buffers so we do not build up lag
-            while (outputBufferQueue.size() > 1) {
+
+            // Determine queue limit based on mode
+            int queueLimit = 1; // default for most modes
+            boolean isAdaptxVsync = false;
+
+            if (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX &&
+                    prefs.adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC) {
+                queueLimit = 2; // Higher limit for AdaptX VSYNC
+                isAdaptxVsync = true;
+            }
+
+            while (outputBufferQueue.size() > queueLimit) {
                 try {
                     Integer old = outputBufferQueue.poll();
                     if (old != null) {
                         videoDecoder.releaseOutputBuffer(old, false);
+                        if (isAdaptxVsync) {
+                            adaptxVsyncDroppedFrames++;
+                            long now = SystemClock.uptimeMillis();
+                            if (now - adaptxVsyncDroppedLastLogTime > 5000) { // Log every 5 seconds
+                                LimeLog.warning("AdaptX VSYNC: dropped " + adaptxVsyncDroppedFrames + " frames total");
+                                adaptxVsyncDroppedLastLogTime = now;
+                            }
+                        }
                     }
                 } catch (Throwable ignored) {
                 }
@@ -1724,7 +1760,14 @@ try {
                         (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
 
                 final long periodNs;
-                if (forceTightThresholds) {
+// Special case for AdaptX VSYNC mode
+                if (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX &&
+                        prefs.adaptxMode == PreferenceConfiguration.ADAPTX_MODE_VSYNC) {
+                    // For VSYNC mode, use exactly the display refresh rate period
+                    periodNs = vsyncPeriodNs;
+                    LimeLog.info("AdaptX VSYNC mode: using display period " + periodNs + " ns");
+                }
+                else if (forceTightThresholds) {
                     // Tight mode: always lock to VSYNC period
                     periodNs = vsyncPeriodNs;
                 } else {
@@ -2267,8 +2310,7 @@ boolean isC2Decoder = false;
 
                                         if (modeVsync) {
                                             // AdaptX Vsync: hand the frame to the Choreographer-driven path.
-                                            // We keep the queue depth very small to preserve low latency.
-                                            final int qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_LL;
+                                            final int qLimit = OUTPUT_BUFFER_QUEUE_LIMIT_BALANCED; // Use 2 frames queue for AdaptX VSYNC
 
                                             // Enforce queue depth on the producer side
                                             while (outputBufferQueue.size() >= qLimit) {
@@ -2276,28 +2318,30 @@ boolean isC2Decoder = false;
                                                     Integer old = outputBufferQueue.poll();
                                                     if (old != null) {
                                                         videoDecoder.releaseOutputBuffer(old, false);
+                                                        adaptxVsyncDroppedFrames++;
                                                     }
-                                                } catch (Throwable ignored) {
-                                                }
+                                                } catch (Throwable ignored) {}
                                             }
 
-                                            // Hand off to Choreographer#doFrame(), which will present with a VSYNC-aligned timestamp.
+                                            // Hand off to Choreographer#doFrame()
                                             outputBufferQueue.add(lastIndex);
 
-                                            // For AdaptX heuristics, treat this as a "present" so backlog logic stays consistent.
+                                            // Update timing for backlog logic
                                             lastPresentNs = nowNs;
                                             recentDrops = Math.max(0, recentDrops - 1);
-                                        } else {
-                                            // Present path:
-                                            // - Smoothness: jitter-baseline scaling, very rare drops
-                                            // - Balanced  : decode-latency-guided threshold, stable behaviour
-                                            // - Latency   : legacy-style low-latency threshold, warp-aware
-                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                            gpuKickPresentHook();
-
-                                            lastPresentNs = nowNs;
-                                            recentDrops = Math.max(0, recentDrops - 1);
+                                            continue;
                                         }
+
+                                        // Present path:
+                                        // - Smoothness: jitter-baseline scaling, very rare drops
+                                        // - Balanced  : decode-latency-guided threshold, stable behaviour
+                                        // - Latency   : legacy-style low-latency threshold, warp-aware
+                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                        gpuKickPresentHook();
+
+                                        lastPresentNs = nowNs;
+                                        recentDrops = Math.max(0, recentDrops - 1);
+
 
                                     } else {
                                         // Legacy path: no fine-grained timestamps available
