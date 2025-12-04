@@ -44,6 +44,7 @@ import android.view.Choreographer;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import com.limelight.Game;
 
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
@@ -2043,26 +2044,38 @@ boolean isC2Decoder = false;
                                     LimeLog.info("Output format changed");
                                     outputFormat = videoDecoder.getOutputFormat();
                                     try {
-                                        android.media.MediaFormat fmt = outputFormat;
-                                        int std = -1, tr = -1, rng = -1;
-                                        try { std = fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                                        try { tr  = fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                                        try { rng = fmt.getInteger("color-range"); } catch (Throwable ignored) {}
-                                        // BT.2020 + (PQ o HLG) => HDR
-                                        boolean isHdr =
-                                                (std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
-                                                        (tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
-                                                                || tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
-                                        // Update shared flag so overlays/renderer can see it
-                                        hdrActive = isHdr;
-                                        try { com.limelight.Game.updateHdrWindowMode(isHdr); } catch (Throwable ignored) {}
-                                        // Pass HDR static info to GL upscaler if available
-                                        java.nio.ByteBuffer hdr = null;
-                                        try { hdr = fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
-                                        if (hdr != null && hdr.remaining() > 0) {
-                                            byte[] hdrArr = new byte[hdr.remaining()];
-                                            hdr.get(hdrArr);
-                                            // pass to upscaler if needed
+                                        android.media.MediaFormat __fmt = outputFormat;
+                                        int __std = -1, __tr = -1, __rng = -1;
+                                        try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                                        try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+                                        try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+
+                                        // BT.2020 + (PQ or HLG) => HDR
+                                        boolean __isHdr =
+                                                (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
+                                                        (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
+                                                                || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
+
+                                        // Update the local decoder flag (backwards compatible)
+                                        hdrActive = __isHdr;
+
+                                        // Update the global state used by renderer + overlay
+                                        try {
+                                            com.limelight.Game.setHdrStreamActive(__isHdr);
+                                        } catch (Throwable ignored) {}
+
+                                        // Update the Window color mode (no-op < API 26)
+                                        try {
+                                            com.limelight.Game.updateHdrWindowMode(__isHdr);
+                                        } catch (Throwable ignored) {}
+
+                                        // Extract the static HDR metadata if needed
+                                        java.nio.ByteBuffer __hdr = null;
+                                        try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+                                        byte[] __hdrArr = null;
+                                        if (__hdr != null && __hdr.remaining() > 0) {
+                                            __hdrArr = new byte[__hdr.remaining()];
+                                            __hdr.get(__hdrArr);
                                         }
                                     } catch (Throwable ignored) {}
                                     LimeLog.info("New output format: " + outputFormat);
@@ -2571,7 +2584,12 @@ boolean isC2Decoder = false;
                         sb.append("  IN:").append((int) fps.receivedFps);
                         sb.append("  R:").append((int) fps.renderedFps);
                         // HDR/SDR indicator
-                        sb.append("  ").append(hdrActive ? "HDR" : "SDR");
+                        boolean hdr = false;
+                        try {
+                            hdr = Game.isHdrStreamActive();
+                        } catch (Throwable ignored) {}
+                        sb.append("  ").append(hdr ? "HDR" : "SDR");
+
                     }
                     /* ADV_LITE_END */
 
