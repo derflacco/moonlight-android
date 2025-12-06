@@ -112,8 +112,7 @@ public class PreferenceConfiguration {
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String LOW_LATENCY_FRAME_BALANCE_PREF_STRING = "pref_low_latency_frame_balance";
-    private static final String WARP_FACTOR_PREF_STRING = "warp_factor_mode";
-    private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
+     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
     private static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
@@ -923,9 +922,44 @@ private static int getFramePacingValue(Context context) {
         config.cpuWarmUpOverridePerfHint = prefs.getBoolean("pref_cpu_warmup_override", false);
 
 
-        // Global Warp factor from slider:
-        //  slider: 0 = off, 1 = x2, 2 = x4
-        int warpSlider = prefs.getInt("seekbar_warp_factor", 0);
+// --- Warp factor configuration ---
+// Source of truth: seekbar_warp_factor (0 = off, 1 = x2, 2 = x4)
+
+// Read warp slider as int, with safe fallback if it was stored as String in older versions
+        int warpSlider;
+        try {
+            warpSlider = prefs.getInt("seekbar_warp_factor", 0);
+        } catch (ClassCastException e) {
+            int parsed = 0;
+            try {
+                String s = prefs.getString("seekbar_warp_factor", "0");
+                parsed = Integer.parseInt(s);
+            } catch (Throwable ignored) {
+                parsed = 0;
+            }
+
+            // Normalize back to int in prefs
+            try {
+                SharedPreferences.Editor ed = prefs.edit();
+                ed.putInt("seekbar_warp_factor", parsed);
+                ed.apply();
+            } catch (Throwable ignored) {}
+
+            warpSlider = parsed;
+        }
+
+// If the slider was never set, force a safe default (off)
+        if (!prefs.contains("seekbar_warp_factor")) {
+            warpSlider = 0;
+            try {
+                SharedPreferences.Editor ed = prefs.edit();
+                ed.putInt("seekbar_warp_factor", 0);
+                ed.apply();
+            } catch (Throwable ignored) {}
+        }
+
+// Map slider -> internal warp factor:
+// 0 = off, 1 = x2, 2 = x4
         switch (warpSlider) {
             case 1:
                 config.framePacingWarpFactor = 2; // x2

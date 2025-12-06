@@ -858,16 +858,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
 
-        // Apply Warp factor only on latency-oriented pacing profiles
-        final boolean warpEnabledForMode =
-                (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
-                        (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) ||(prefConfig.framePacing == FRAME_PACING_ADAPTX &&
-                                prefConfig.adaptxMode == ADAPTX_MODE_LATENCY);
+// Warp factor handling
+        final int warpFactor = prefConfig.framePacingWarpFactor;
 
-        if (warpEnabledForMode && prefConfig.framePacingWarpFactor > 0) {
-            chosenFrameRate *= prefConfig.framePacingWarpFactor;
-            LimeLog.info("Warp factor x" + prefConfig.framePacingWarpFactor +
-                    " -> target refresh " + chosenFrameRate + " Hz");
+        LimeLog.info("Game: framePacing=" + prefConfig.framePacing +
+                " warpFactor=" + warpFactor);
+
+        if (warpFactor > 0) {
+            final boolean warpEnabledForMode =
+                    (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
+                            (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) ||
+                            (prefConfig.framePacing == FRAME_PACING_ADAPTX &&
+                                    prefConfig.adaptxMode == ADAPTX_MODE_LATENCY);
+
+            if (warpEnabledForMode) {
+                chosenFrameRate *= warpFactor;
+                LimeLog.info("Warp applied: x" + warpFactor +
+                        " -> target refresh " + chosenFrameRate + " Hz");
+            } else {
+                LimeLog.info("Warp NOT applied: mode not latency-oriented");
+            }
+        } else {
+            LimeLog.info("Warp disabled: warpFactor <= 0, chosenFrameRate=" + chosenFrameRate);
         }
 
 
