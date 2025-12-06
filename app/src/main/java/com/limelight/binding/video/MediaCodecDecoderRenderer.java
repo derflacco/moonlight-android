@@ -1752,19 +1752,21 @@ boolean isC2Decoder = false;
                                 }
 // --- Present policy per profilo di pacing ---
                                 if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    // Immediate present using frame PTS; no decoder-side pacing
+                                    // GPU_RAW: Immediate present
                                     if (lastIndex >= 0) {
                                         try {
-                                            long tsNs = (presentationTimeUs > 0) ? (presentationTimeUs * 1000L) : System.nanoTime();
+                                            final long nowNs = System.nanoTime();
+
+                                            // Always use current timestamp for presentation
+                                            long tsNs = nowNs; // Use current time, not PTS
+
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                                 gpuKickPresentHook();
-
                                             } else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
-                                            long nowNs = System.nanoTime();
                                             lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
                                             recentDrops = 0;
