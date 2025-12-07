@@ -957,7 +957,11 @@ private static int getFramePacingValue(Context context) {
                 ed.apply();
             } catch (Throwable ignored) {}
         }
-
+// If GPU Path Mode is active, force warp OFF regardless of slider state
+// This ensures that enabling GPU Path always disables warp at runtime.
+        if (config.gpuPathMode) {
+            warpSlider = 0;
+        }
 // Map slider -> internal warp factor:
 // 0 = off, 1 = x2, 2 = x4
         switch (warpSlider) {
@@ -1166,6 +1170,7 @@ private static int getFramePacingValue(Context context) {
         if (config.gpuPathMode) {
             config.videoUpscaleEnable = false;
             config.videoUpscaleMode = "none";
+            config.framePacingWarpFactor= 0;
             config.framePacing = FRAME_PACING_GPU_RAW;
         }
 
