@@ -182,15 +182,15 @@ public class StreamSettings extends AppCompatActivity {
 
             boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
 
-            // HDR enabled if any HDR toggle is active
+            // HDR is enabled if any HDR toggle is active
             boolean hdrOn =
                     (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
             // Lock rules:
-            // - FSR: disabled when Direct Present or HDR active
-            // - Frame pacing: disabled when Direct Present active
+            // - FSR: disabled when Direct Present or HDR is active
+            // - Frame pacing: disabled when Direct Present is active
             boolean lockPacing = gpuPath;
             boolean lockLfr    = false;
             boolean lockFsrEn  = gpuPath || hdrOn;
@@ -237,19 +237,19 @@ public class StreamSettings extends AppCompatActivity {
             // - HIDDEN when Direct Present (gpuPath) is active
             // - Visible otherwise, but only enabled when pacing = AdaptX
             if (adaptxSeek != null) {
-                final boolean adaptxVisible = !gpuPath; // Direct Present ON => hide selector
+                final boolean adaptxVisible = isAdaptx && !gpuPath;
 
                 try {
                     // AndroidX Preference has setVisible()
                     adaptxSeek.setVisible(adaptxVisible);
                 } catch (Throwable ignored) {
-                    // Fallback: if setVisible() is not available, just enable/disable
-                    adaptxSeek.setEnabled(adaptxVisible && isAdaptx);
+                    // Fallback: if setVisible() is not available, just use enable/disable
+                    adaptxSeek.setEnabled(adaptxVisible);
                     return;
                 }
 
-                // If visible, enable only when pacing is AdaptX
-                adaptxSeek.setEnabled(adaptxVisible && isAdaptx);
+                // If visible, also keep it enabled
+                adaptxSeek.setEnabled(adaptxVisible);
             }
         }
 
