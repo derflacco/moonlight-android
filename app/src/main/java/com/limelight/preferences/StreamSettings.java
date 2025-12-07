@@ -209,11 +209,11 @@ public class StreamSettings extends AppCompatActivity {
             String pacingStr = sp.getString("frame_pacing", "latency");
             if (pacingStr == null) pacingStr = "latency";
 
-            final boolean isMinLatency = "latency".equals(pacingStr);
-            final boolean isGpuRaw     = "gpu-raw".equals(pacingStr);
-            final boolean isAdaptx     = "adaptx".equals(pacingStr);
+            final boolean isMinLatency = "latency".equals(pacingStr);   // classic Latency pacing
+            final boolean isGpuRaw     = "gpu-raw".equals(pacingStr);   // GPU_RAW pacing
+            final boolean isAdaptx     = "adaptx".equals(pacingStr);    // AdaptX pacing
 
-            // AdaptX sub-mode (0=Smoothness, 1=Balanced, 2=Latency)
+            // AdaptX sub-mode (0 = Smoothness, 1 = Balanced, 2 = Latency)
             int adaptxMode = 1;
             try {
                 adaptxMode = sp.getInt("seekbar_adaptx_mode", 1);
@@ -227,20 +227,40 @@ public class StreamSettings extends AppCompatActivity {
             }
             final boolean isAdaptxLatencyMode = isAdaptx && (adaptxMode == 2);
 
-            // Warp factor: enabled for latency-focused modes
+            // Global "Prefer lower delays" toggle (LFR)
+            boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
+
+            // Warp factor:
+            // Visible ONLY when:
+            //   - frame pacing = Latency, OR
+            //   - frame pacing = GPU_RAW, OR
+            //   - AdaptX is in Latency mode, OR
+            //   - LFR ("Prefer lower delays") is enabled
+            // and NEVER when GPU Path is active.
             if (warpSeek != null) {
-                boolean enableWarp = (isMinLatency || isGpuRaw || isAdaptxLatencyMode) && !gpuPath;
-                warpSeek.setEnabled(enableWarp);
+                final boolean warpVisible = !gpuPath &&
+                        (isMinLatency || isGpuRaw || isAdaptxLatencyMode);
+
+                try {
+                    // AndroidX Preference supports setVisible()
+                    warpSeek.setVisible(warpVisible);
+                } catch (Throwable ignored) {
+                    // Fallback: if setVisible() is not available, just use enable/disable
+                    warpSeek.setEnabled(warpVisible);
+                    // No further visibility control available on this platform
+                }
+
+                // If visible, also keep it enabled (extra safety)
+                warpSeek.setEnabled(warpVisible);
             }
 
             // AdaptX seekbar:
-            // - HIDDEN when Direct Present (gpuPath) is active
-            // - Visible otherwise, but only enabled when pacing = AdaptX
+            // - Visible only when pacing = AdaptX and Direct Present (gpuPath) is OFF
             if (adaptxSeek != null) {
                 final boolean adaptxVisible = isAdaptx && !gpuPath;
 
                 try {
-                    // AndroidX Preference has setVisible()
+                    // AndroidX Preference supports setVisible()
                     adaptxSeek.setVisible(adaptxVisible);
                 } catch (Throwable ignored) {
                     // Fallback: if setVisible() is not available, just use enable/disable
