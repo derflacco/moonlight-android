@@ -1597,7 +1597,7 @@ try {
                 // Aggressive/adaptive state
                 final double EWMA_ALPHA = 0.25;
                 final double MIN_FACTOR = 1.00;
-                final double MAX_FACTOR = 1.20;
+                final double MAX_FACTOR = 1.35;
 
                 long   lastDecoderPtsUs  = 0L;
                 long   lastPresentNs     = 0L;
