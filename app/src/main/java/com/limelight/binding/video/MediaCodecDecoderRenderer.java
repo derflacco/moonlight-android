@@ -1469,47 +1469,130 @@ try {
                 }
 //* Pin hot threads to big cluster *//
 
-                // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
-                long vsyncPeriodNs;
+                // Display refresh and VSYNC period (fallback to 60 Hz if unavailable)
                 float displayHz = 60f;
                 try {
                     if (Build.VERSION.SDK_INT >= 17 && context != null) {
-                        android.view.Display d = ((android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay();
-                        if (d != null) displayHz = d.getRefreshRate();
+                        android.view.Display d =
+                                ((android.view.WindowManager) context.getSystemService(
+                                        android.content.Context.WINDOW_SERVICE))
+                                        .getDefaultDisplay();
+                        if (d != null) {
+                            displayHz = d.getRefreshRate();
+                        }
                     }
-                } catch (Throwable ignored) {}
-                if (displayHz <= 0f) displayHz = 60f;
-                vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
+                } catch (Throwable ignored) {
+                }
+                if (displayHz <= 0f) {
+                    displayHz = 60f;
+                }
+                final float safeDisplayHz = displayHz;
 
-                // Stream cadence (targetFps set in setup(...))
-                final float tfps = (targetFps > 0f ? targetFps : 60f);
-                final long streamPeriodNs = (long) (1_000_000_000.0 / Math.max(1f, tfps));
-                /* ADPF: set target based on normalized stream period; single, stable update */
+                final long vsyncPeriodNs =
+                        (long) (1_000_000_000.0 / (double) safeDisplayHz);
+
+                // Stream cadence (canonical stream FPS source):
+                // 1) host nominal targetFps (if > 0)
+                // 2) prefs.fps (if configured)
+                // 3) display refresh rate as fallback
+                final float streamFps;
+                if (targetFps > 0f) {
+                    streamFps = targetFps;
+                } else if (prefs != null && prefs.fps > 0.0f) {
+                    streamFps = prefs.fps;
+                } else {
+                    streamFps = safeDisplayHz;
+                }
+
+                // Stream period derived from streamFps
+                final long streamPeriodNs =
+                        (long) (1_000_000_000.0 / (double) Math.max(1f, streamFps));
+
+                // Legacy alias for code still using tfps
+                final float tfps = streamFps;
+
+                /* ADPF: update target using normalized stream period; single stable update */
                 if (MediaCodecDecoderRenderer.this.perfHint != null
                         && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
                     final boolean gpuRaw = (prefs != null
                             && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+
+                    // GPU_RAW: keep ADPF more latency-oriented to reduce decoder slack
                     final long targetNs = gpuRaw
                             ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
                             : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
-                    try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs); } catch (Throwable ignored) {}
+                    try {
+                        MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs);
+                    } catch (Throwable ignored) {
+                    }
                 }
 
+                // Base period selection for timing-sensitive heuristics (AdaptX, EWMA, etc.).
+                // Unifies behavior for BALANCED, ADAPTX, and GPU_RAW.
+                final int framePacing = (prefs != null)
+                        ? prefs.framePacing
+                        : PreferenceConfiguration.FRAME_PACING_BALANCED;
 
-                // Adaptive period selection to avoid added latency on high-refresh devices
-                final boolean highRefresh = displayHz >= 90f;
-                final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
-                // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
-                final long periodNs = forceTightThresholds
-                        ? vsyncPeriodNs
-                        : ((managedMode && !highRefresh) ? Math.max(vsyncPeriodNs, streamPeriodNs) : vsyncPeriodNs);
-boolean isC2Decoder = false;
-                try {
-                    String decName = videoDecoder.getName();
-                    if (decName != null) {
-                        isC2Decoder = decName.toLowerCase(java.util.Locale.US).startsWith("c2.");
+                final boolean isBalancedPacing =
+                        (framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+                final boolean isAdaptxPacing =
+                        (framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX);
+                final boolean isGpuRawPacing =
+                        (framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+                final boolean highRefresh = (safeDisplayHz >= 90f);
+
+                // Legacy alias kept for callers still using managedMode
+                final boolean managedMode = isBalancedPacing;
+
+                final boolean fpsMatchesDisplay =
+                        Math.abs(streamFps - safeDisplayHz) <= 5.0f;
+
+                // BALANCED: stream-aligned period only on non-high-refresh displays when FPS ≈ Hz
+                // and tight mode is not forced
+                final boolean useStreamAlignedBalanced =
+                        !forceTightThresholds
+                                && isBalancedPacing
+                                && !highRefresh
+                                && fpsMatchesDisplay;
+
+                // ADAPTX: prefer a stream-period-centric base when available, unless tight mode is forced
+                final boolean useStreamAlignedAdaptx =
+                        !forceTightThresholds
+                                && isAdaptxPacing
+                                && (streamPeriodNs > 0L);
+
+                // GPU_RAW: also stream-driven, so use the stream cadence as reference
+                final boolean useStreamAlignedGpuRaw =
+                        !forceTightThresholds
+                                && isGpuRawPacing
+                                && (streamPeriodNs > 0L);
+
+                // Final decision: who wants to operate in "stream domain"?
+                final boolean useStreamAligned =
+                        useStreamAlignedBalanced
+                                || useStreamAlignedAdaptx
+                                || useStreamAlignedGpuRaw;
+
+                // Compute the base period used by timing heuristics
+                final long periodNs;
+                if (useStreamAligned && streamPeriodNs > 0L) {
+                    if (isBalancedPacing && !highRefresh) {
+                        // BALANCED: clamp to VSYNC so we never run faster than the panel
+                        periodNs = (vsyncPeriodNs > 0L)
+                                ? Math.max(vsyncPeriodNs, streamPeriodNs)
+                                : streamPeriodNs;
+                    } else {
+                        // ADAPTX / GPU_RAW (and future stream-based modes): use raw stream cadence
+                        periodNs = streamPeriodNs;
                     }
-                } catch (Throwable ignored) {}
+                } else {
+                    // Fallback: VSYNC-based period or ~60 Hz if unavailable
+                    if (vsyncPeriodNs > 0L) {
+                        periodNs = vsyncPeriodNs;
+                    } else {
+                        periodNs = 16_666_667L; // ~60 Hz
+                    }
+                }
 
                 // Aggressive/adaptive state
                 final double EWMA_ALPHA = 0.25;
@@ -1523,9 +1606,17 @@ boolean isC2Decoder = false;
                 int    tryAgainStreak    = 0;
                 int    recentDrops       = 0;
 
-                double ewmaInterArrivalNs    = (1_000_000_000.0 / Math.max(1f, tfps));
-                double ewmaDecodeToPresentNs = managedMode ? (periodNs * 0.80) : (periodNs * 0.70);
-                double ewmaJitterNs          = managedMode ? (periodNs * 0.15) : (periodNs * 0.10);
+                // Timing/jitter state:
+                // - ewmaInterArrivalNs    : smoothed PTS inter-arrival (approx. stream period)
+                // - ewmaDecodeToPresentNs: smoothed decode->present delay
+                // - ewmaJitterNs         : baseline jitter magnitude from inter-arrival
+                // - phaseErrorEwmaNs     : smoothed phase error vs target latency (Balanced mode)
+                // Seed EWMA state using the canonical stream period and base period
+                double ewmaInterArrivalNs    = (double) streamPeriodNs;
+                double ewmaDecodeToPresentNs = (double) periodNs * 0.70;
+                double ewmaJitterNs          = (double) periodNs * 0.10;
+                double phaseErrorEwmaNs      = 0.0;
+
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
 // Reused by latest-only / low-latency drain to avoid per-loop allocations
