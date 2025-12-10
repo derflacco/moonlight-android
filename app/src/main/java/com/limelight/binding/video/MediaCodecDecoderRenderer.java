@@ -1478,7 +1478,12 @@ try {
                     }
                 }
 //* Pin hot threads to big cluster *//
-
+                long   lastDecoderPtsUs  = 0L;
+                long   lastPresentNs     = 0L;
+                long   lastDropNs        = 0L;
+                int    lateStreak        = 0;
+                int    tryAgainStreak    = 0;
+                int    recentDrops       = 0;
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
 // Reused by latest-only / low-latency drain to avoid per-loop allocations
@@ -1621,15 +1626,21 @@ try {
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, policyUs);
                         final long elapsedUs = (System.nanoTime() - t0) / 1000L;
 
-                        // Simple quick backoff for INFO_TRY_AGAIN_LATER on slower decoders
-                        if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER && policyUs > 0) {
-                            final int quickBackoffUs = 500; // small extra wait within the same loop
-                            final int remainingUs = Math.max(0, policyUs - (int) elapsedUs);
+                        if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                            tryAgainStreak++;
+                            final int quickBackoffUs = (tryAgainStreak <= 2) ? 250 : 500;
+
+                            final int remainingUs = (policyUs > 0) ? Math.max(0, policyUs - (int) elapsedUs) : 0;
                             final int backoffUs = Math.min(remainingUs, quickBackoffUs);
 
                             if (backoffUs > 0) {
                                 outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
                             }
+                            if (outIndex >= 0) {
+                                tryAgainStreak = 0;
+                            }
+                        } else {
+                            tryAgainStreak = 0;
                         }
 
                         if (outIndex >= 0) {
@@ -1637,7 +1648,6 @@ try {
                             boolean statsUpdated = false;
                             boolean frameDropped = false;
 
-                            // Latest decoded buffer
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
 
@@ -2070,24 +2080,36 @@ try {
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // Timeout basato su frame rate target
+            // Timeout based on target frame rate and latency policy
             int dequeueTimeoutUs;
-            float wantedFps = (targetFps > 0f) ? targetFps : (prefs != null ? prefs.fps : 60f);
+            float wantedFps =
+                    (targetFps > 0f)
+                            ? targetFps
+                            : ((prefs != null && prefs.fps > 0f) ? prefs.fps : 60f);
 
             if (preferLowerDelays) {
-                dequeueTimeoutUs = 1_000; // 1ms per ULL
+                // ULL: keep input dequeue very tight
+                dequeueTimeoutUs = 1_000; // 1 ms for ultra low latency
             } else if (wantedFps >= 90f) {
-                dequeueTimeoutUs = 2_000; // 2ms per high FPS
+                // High FPS but not ULL: slightly more relaxed
+                dequeueTimeoutUs = 4_000; // 4 ms
             } else {
-                dequeueTimeoutUs = 5_000; // 5ms per 60fps
+                // 60 Hz / slower decoders: more relaxed to avoid constant TRY_AGAIN
+                dequeueTimeoutUs = 8_000; // 8 ms
             }
 
-            // Single attempt + retry condizionale
+            final long t0 = System.nanoTime();
             nextInputBufferIndex = videoDecoder.dequeueInputBuffer(dequeueTimeoutUs);
+            final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
 
-            if (nextInputBufferIndex < 0 && !preferLowerDelays) {
-                // Solo un retry breve se non in ULL
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(1_000);
+            // Single quick retry for slower decoders (non-ULL) if the codec is not ready yet
+            if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER && !preferLowerDelays) {
+                final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
+                final int quickBackoffUs = Math.min(remainingUs, 2_000); // up to 2 ms extra
+
+                if (quickBackoffUs > 0) {
+                    nextInputBufferIndex = videoDecoder.dequeueInputBuffer(quickBackoffUs);
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
@@ -2105,6 +2127,7 @@ try {
                     nextInputBuffer.clear();
                 }
             }
+
         } catch (IllegalStateException e) {
             handleDecoderException(e);
             return false;
