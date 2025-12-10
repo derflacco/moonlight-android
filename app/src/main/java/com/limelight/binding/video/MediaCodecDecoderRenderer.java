@@ -1469,154 +1469,6 @@ try {
                 }
 //* Pin hot threads to big cluster *//
 
-                // Display refresh and VSYNC period (fallback to 60 Hz if unavailable)
-                float displayHz = 60f;
-                try {
-                    if (Build.VERSION.SDK_INT >= 17 && context != null) {
-                        android.view.Display d =
-                                ((android.view.WindowManager) context.getSystemService(
-                                        android.content.Context.WINDOW_SERVICE))
-                                        .getDefaultDisplay();
-                        if (d != null) {
-                            displayHz = d.getRefreshRate();
-                        }
-                    }
-                } catch (Throwable ignored) {
-                }
-                if (displayHz <= 0f) {
-                    displayHz = 60f;
-                }
-                final float safeDisplayHz = displayHz;
-
-                final long vsyncPeriodNs =
-                        (long) (1_000_000_000.0 / (double) safeDisplayHz);
-
-                // Stream cadence (canonical stream FPS source):
-                // 1) host nominal targetFps (if > 0)
-                // 2) prefs.fps (if configured)
-                // 3) display refresh rate as fallback
-                final float streamFps;
-                if (targetFps > 0f) {
-                    streamFps = targetFps;
-                } else if (prefs != null && prefs.fps > 0.0f) {
-                    streamFps = prefs.fps;
-                } else {
-                    streamFps = safeDisplayHz;
-                }
-
-                // Stream period derived from streamFps
-                final long streamPeriodNs =
-                        (long) (1_000_000_000.0 / (double) Math.max(1f, streamFps));
-
-                // Legacy alias for code still using tfps
-                final float tfps = streamFps;
-
-                /* ADPF: update target using normalized stream period; single stable update */
-                if (MediaCodecDecoderRenderer.this.perfHint != null
-                        && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
-                    final boolean gpuRaw = (prefs != null
-                            && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-
-                    // GPU_RAW: keep ADPF more latency-oriented to reduce decoder slack
-                    final long targetNs = gpuRaw
-                            ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
-                            : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
-                    try {
-                        MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs);
-                    } catch (Throwable ignored) {
-                    }
-                }
-
-                // Base period selection for timing-sensitive heuristics (AdaptX, EWMA, etc.).
-                // Unifies behavior for BALANCED, ADAPTX, and GPU_RAW.
-                final int framePacing = (prefs != null)
-                        ? prefs.framePacing
-                        : PreferenceConfiguration.FRAME_PACING_BALANCED;
-
-                final boolean isBalancedPacing =
-                        (framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
-                final boolean isAdaptxPacing =
-                        (framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX);
-                final boolean isGpuRawPacing =
-                        (framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-                final boolean highRefresh = (safeDisplayHz >= 90f);
-
-                // Legacy alias kept for callers still using managedMode
-                final boolean managedMode = isBalancedPacing;
-
-                final boolean fpsMatchesDisplay =
-                        Math.abs(streamFps - safeDisplayHz) <= 5.0f;
-
-                // BALANCED: stream-aligned period only on non-high-refresh displays when FPS ≈ Hz
-                // and tight mode is not forced
-                final boolean useStreamAlignedBalanced =
-                        !forceTightThresholds
-                                && isBalancedPacing
-                                && !highRefresh
-                                && fpsMatchesDisplay;
-
-                // ADAPTX: prefer a stream-period-centric base when available, unless tight mode is forced
-                final boolean useStreamAlignedAdaptx =
-                        !forceTightThresholds
-                                && isAdaptxPacing
-                                && (streamPeriodNs > 0L);
-
-                // GPU_RAW: also stream-driven, so use the stream cadence as reference
-                final boolean useStreamAlignedGpuRaw =
-                        !forceTightThresholds
-                                && isGpuRawPacing
-                                && (streamPeriodNs > 0L);
-
-                // Final decision: who wants to operate in "stream domain"?
-                final boolean useStreamAligned =
-                        useStreamAlignedBalanced
-                                || useStreamAlignedAdaptx
-                                || useStreamAlignedGpuRaw;
-
-                // Compute the base period used by timing heuristics
-                final long periodNs;
-                if (useStreamAligned && streamPeriodNs > 0L) {
-                    if (isBalancedPacing && !highRefresh) {
-                        // BALANCED: clamp to VSYNC so we never run faster than the panel
-                        periodNs = (vsyncPeriodNs > 0L)
-                                ? Math.max(vsyncPeriodNs, streamPeriodNs)
-                                : streamPeriodNs;
-                    } else {
-                        // ADAPTX / GPU_RAW (and future stream-based modes): use raw stream cadence
-                        periodNs = streamPeriodNs;
-                    }
-                } else {
-                    // Fallback: VSYNC-based period or ~60 Hz if unavailable
-                    if (vsyncPeriodNs > 0L) {
-                        periodNs = vsyncPeriodNs;
-                    } else {
-                        periodNs = 16_666_667L; // ~60 Hz
-                    }
-                }
-
-                // Aggressive/adaptive state
-                final double EWMA_ALPHA = 0.25;
-                final double MIN_FACTOR = 1.00;
-                final double MAX_FACTOR = 1.35;
-
-                long   lastDecoderPtsUs  = 0L;
-                long   lastPresentNs     = 0L;
-                long   lastDropNs        = 0L;
-                int    lateStreak        = 0;
-                int    tryAgainStreak    = 0;
-                int    recentDrops       = 0;
-
-                // Timing/jitter state:
-                // - ewmaInterArrivalNs    : smoothed PTS inter-arrival (approx. stream period)
-                // - ewmaDecodeToPresentNs: smoothed decode->present delay
-                // - ewmaJitterNs         : baseline jitter magnitude from inter-arrival
-                // - phaseErrorEwmaNs     : smoothed phase error vs target latency (Balanced mode)
-                // Seed EWMA state using the canonical stream period and base period
-                double ewmaInterArrivalNs    = (double) streamPeriodNs;
-                double ewmaDecodeToPresentNs = (double) periodNs * 0.70;
-                double ewmaJitterNs          = (double) periodNs * 0.10;
-                double phaseErrorEwmaNs      = 0.0;
-
 
                 final android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
 // Reused by latest-only / low-latency drain to avoid per-loop allocations
@@ -1693,23 +1545,6 @@ try {
                         }
                     }
 
-                    // ADPF retarget when GPU_RAW toggles at runtime
-                    if (MediaCodecDecoderRenderer.this.perfHint != null
-                            && MediaCodecDecoderRenderer.this.perfHint.isActive()) {
-                        final boolean curGpuRaw = (p != null
-                                && p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
-                        if (curGpuRaw != phmGpuRawLast) {
-                            final long targetNs = curGpuRaw
-                                    ? Math.max(6_000_000L, (long) (streamPeriodNs * 0.90))
-                                    : Math.max(1_000_000L, (long) (streamPeriodNs * 0.60));
-                            try { MediaCodecDecoderRenderer.this.perfHint.updateTarget(targetNs); } catch (Throwable ignored) {}
-                            phmGpuRawLast = curGpuRaw;
-                            if (BuildConfig.DEBUG) {
-                                LimeLog.info("PHM: runtime target update (gpuRaw=" + curGpuRaw + ", targetNs=" + targetNs + ")");
-                            }
-                        }
-                    }
-
                     // PURE LFR / ULL path
                     if (preferLowerDelays) {
                         try {
@@ -1719,7 +1554,7 @@ try {
                             int __last = -1;
                             long __lastPtsUs = -1L;
 
-                            // Drain non-blocking; keep only the newest buffer
+// Drain non-blocking; keep only the newest buffer
                             while (__idx >= 0) {
                                 final long ptsUs = __tmpInfo.presentationTimeUs;
 
@@ -1760,14 +1595,7 @@ try {
                                     }
 
                                     numFramesOut++;
-                                    lastDecoderPtsUs = __lastPtsUs;
                                 } catch (Throwable ignored) {}
-
-                                // EWMA decode->present
-                                if (__lastPtsUs >= 0) {
-                                    final long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                                    ewmaDecodeToPresentNs += 0.25 * (__d2pNs - ewmaDecodeToPresentNs);
-                                }
 
                                 continue;
                             }
@@ -1783,22 +1611,8 @@ try {
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, policyUs);
                         final long elapsedUs = (System.nanoTime() - t0) / 1000L;
 
-                        if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                            tryAgainStreak++;
-                            final int quickBackoffUs = (tryAgainStreak <= 2) ? 250 : 500;
 
-                            final int remainingUs = (policyUs > 0) ? Math.max(0, policyUs - (int) elapsedUs) : 0;
-                            final int backoffUs = Math.min(remainingUs, quickBackoffUs);
 
-                            if (backoffUs > 0) {
-                                outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
-                            }
-                            if (outIndex >= 0) {
-                                tryAgainStreak = 0;
-                            }
-                        } else {
-                            tryAgainStreak = 0;
-                        }
 
                         if (outIndex >= 0) {
                             // --- flags to manage statistics in a robust way ---
@@ -1814,16 +1628,6 @@ try {
                             // Measure decode latency AT DEQUEUE
                             try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
                             statsUpdated = true;
-
-                            // update inter-arrival
-                            if (lastDecoderPtsUs != 0L) {
-                                long interUs = presentationTimeUs - lastDecoderPtsUs;
-                                if (interUs > 0) {
-                                    double sample = interUs * 1000.0;
-                                    ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
-                                }
-                            }
-                            lastDecoderPtsUs = presentationTimeUs;
 
                             final PreferenceConfiguration pNow = MediaCodecDecoderRenderer.this.prefs;
 
@@ -1858,186 +1662,12 @@ try {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
-                                            lastPresentNs = nowNs;
                                             lastRenderedFrameTimeNanos = nowNs;
-                                            recentDrops = 0;
                                             // FIX: Do NOT call updateDecodeLatencyStats() here:
                                         } catch (IllegalStateException e) {
                                             handleDecoderException(e);
                                             return;
                                         } catch (Throwable ignored) {}
-                                    }
-                                }
-                                else if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
-                                    // AdaptX (EWMA-based): 3 simple profiles with fixed thresholds
-                                    // 0 = Smoothness, 1 = Balanced, 2 = Latency
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-
-                                        // Base period for thresholds: prefer stream-aware periodNs, fall back to vsync
-                                        long basePeriodNs = periodNs;
-                                        if (basePeriodNs <= 0L) {
-                                            if (vsyncPeriodNs > 0L) {
-                                                basePeriodNs = vsyncPeriodNs;
-                                            } else {
-                                                // Fallback to ~60 Hz if everything else fails
-                                                basePeriodNs = 16_666_667L; // ~60 Hz
-                                            }
-                                        }
-
-                                        // End-to-end frame age (from host PTS to now), clamped to [0, +inf)
-                                        long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-                                        if (frameAgeNs < 0L) {
-                                            frameAgeNs = 0L;
-                                        }
-
-                                        // Current AdaptX mode from prefs: 0 = Smoothness, 1 = Balanced, 2 = Latency
-                                        final int adaptxMode = (prefs != null)
-                                                ? prefs.adaptxMode
-                                                : PreferenceConfiguration.ADAPTX_MODE_BALANCED;
-                                        final boolean modeSmooth =
-                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
-                                        final boolean modeLatency =
-                                                (adaptxMode == PreferenceConfiguration.ADAPTX_MODE_LATENCY);
-
-                                        // Warp factor: used only for Latency mode
-                                        // pNow.framePacingWarpFactor comes from config (0 = off, 2 = x2, 4 = x4)
-                                        final int warpFactorRaw = (pNow.framePacingWarpFactor > 0)
-                                                ? pNow.framePacingWarpFactor
-                                                : 1;
-                                        final boolean warpActive = modeLatency && warpFactorRaw > 1;
-
-                                        // --- Per-mode tuning: fixed factors, no complex heuristics ---
-                                        // dropFactor: how "late" a frame may be vs the base period before we drop.
-                                        final double dropFactor;
-                                        final double backlogWindowMul;
-                                        final long   cooldownDiv;
-                                        final int    requiredLateStreak;
-
-                                        if (modeSmooth) {
-                                            // Smoothness: heavily biased toward *not* dropping.
-                                            // Drop only clearly stale frames, and only after a short streak.
-                                            dropFactor         = 1.70;  // ~70% over target period
-                                            backlogWindowMul   = 2.2;   // require recent presents (real backlog)
-                                            cooldownDiv        = 4L;    // slower drop cadence
-                                            requiredLateStreak = 3;     // need multiple late frames in a row
-                                        } else if (modeLatency) {
-                                            // Latency: aggressive, drop quickly when frames are late.
-                                            // Warp-aware: when Warp is active, treat deadlines as if the period were shorter.
-                                            dropFactor         = 1.04;  // base ~4% over target period
-                                            backlogWindowMul   = 0.8;   // small backlog window
-                                            cooldownDiv        = 2L;    // moderately fast drop cadence
-                                            requiredLateStreak = 1;     // drop on first late frame
-                                        } else {
-                                            // Balanced: moderate behavior between Smoothness and Latency.
-                                            // Still drops, but only once lateness is clearly persistent.
-                                            dropFactor         = 1.28;  // ~28% over target period
-                                            backlogWindowMul   = 1.6;   // require a reasonably "busy" queue
-                                            cooldownDiv        = 3L;    // slower than Latency, faster than Smoothness
-                                            requiredLateStreak = 2;     // need at least 2 late frames
-                                        }
-
-                                        // --- Warp-aware drop timing for Latency mode ---
-                                        // For Latency + Warp, we use a shorter "effective" period for:
-                                        //  - lateness threshold (dropThresholdNs)
-                                        //  - cooldown between drops
-                                        final long dropBasePeriodNs;
-                                        if (warpActive) {
-                                            // Example: at 60 Hz with Warp x2, effective period ~ 8.3 ms instead of 16.6 ms
-                                            dropBasePeriodNs = Math.max(1L, basePeriodNs / warpFactorRaw);
-                                        } else {
-                                            dropBasePeriodNs = basePeriodNs;
-                                        }
-
-                                        final long dropThresholdNs = (long) (dropBasePeriodNs * dropFactor);
-
-                                        // Time since last present in this renderer thread
-                                        final long sinceLastPresent = (lastPresentNs == 0L)
-                                                ? 0L
-                                                : Math.max(0L, nowNs - lastPresentNs);
-
-                                        // Cooldown to avoid spamming drops
-                                        final boolean dropCooldownOk =
-                                                (nowNs - lastDropNs) >= (dropBasePeriodNs / cooldownDiv);
-
-                                        // Late if the frame is older than our per-mode threshold
-                                        final boolean isLate = frameAgeNs > dropThresholdNs;
-                                        if (isLate) {
-                                            lateStreak++;
-                                        } else {
-                                            lateStreak = 0;
-                                        }
-
-                                        // Backlog: we recently presented a frame (queue is not starved)
-                                        final boolean backlog =
-                                                sinceLastPresent < (long) (backlogWindowMul * (double) basePeriodNs);
-
-                                        // Decide whether to drop this frame
-                                        final boolean shouldDrop =
-                                                isLate &&
-                                                        backlog &&
-                                                        dropCooldownOk &&
-                                                        (lateStreak >= requiredLateStreak);
-
-                                        if (shouldDrop) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue; // stats already recorded at dequeue for this PTS
-                                        }
-
-                                        // Present path:
-                                        // - Smoothness / Balanced: vsync-independent but paced via dropThreshold
-                                        // - Latency            : same present timing, but more aggressive dropping above
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                        gpuKickPresentHook();
-
-                                        lastPresentNs = nowNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-                                    } else {
-                                        // Legacy path: no fine-grained timestamps available
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                        gpuKickPresentHook();
-                                    }
-                                }
-
-
-                                else if (pNow != null && (pNow.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS
-                                        || pNow.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS)) {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
-                                        double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
-                                        factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
-
-                                        long dropThresholdSmoothNs = (long) (periodNs * factorSmooth);
-
-                                        if (frameAgeNs >= dropThresholdSmoothNs) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue;
-                                        }
-
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                        gpuKickPresentHook();
-
-                                        lastPresentNs = nowNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
-                                    } else {
-                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                            long ts = System.nanoTime();
-                                            videoDecoder.releaseOutputBuffer(lastIndex, ts);
-                                            gpuKickPresentHook();
-                                        } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                            gpuKickPresentHook();
-                                        }
                                     }
                                 }
                                 else {
@@ -2050,10 +1680,7 @@ try {
                                         gpuKickPresentHook();
 
                                         // Keep timing state consistent with the other paths
-                                        lastPresentNs = tsNs;
                                         lastRenderedFrameTimeNanos = tsNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-                                        lateStreak = 0;
                                     } catch (IllegalStateException e) {
                                         handleDecoderException(e);
                                         return;
@@ -2123,11 +1750,6 @@ try {
                                 outputBufferQueue.add(lastIndex);
                             }
 
-                            // --- Fallback stats update ---
-                            // If we didn't update the stats in-branch and the frame wasn't dropped,
-                            if (!statsUpdated && !frameDropped) {
-                                updateDecodeLatencyStats(presentationTimeUs);
-                            }
 
                         } else {
                             switch (outIndex) {
@@ -2224,22 +1846,24 @@ try {
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // Pick a shorter dequeue timeout for high-FPS streams to avoid throttling the RX path
-            int dequeueTimeoutUs = 10_000; // default = 10 ms
+            // Timeout basato su frame rate target
+            int dequeueTimeoutUs;
             float wantedFps = (targetFps > 0f) ? targetFps : (prefs != null ? prefs.fps : 60f);
-            boolean ultraLowLatency = (preferLowerDelays || wantedFps >= 100f);
-            if (ultraLowLatency) {
-                // keep RX snappy for 100/120 fps or LFR/ULL
-                dequeueTimeoutUs = 2_000; // 2 ms
+
+            if (preferLowerDelays) {
+                dequeueTimeoutUs = 1_000; // 1ms per ULL
+            } else if (wantedFps >= 90f) {
+                dequeueTimeoutUs = 2_000; // 2ms per high FPS
+            } else {
+                dequeueTimeoutUs = 5_000; // 5ms per 60fps
             }
 
-            // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping) {
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(dequeueTimeoutUs);
-                if (nextInputBufferIndex < 0 && ultraLowLatency) {
-                    // Don't sit here forever when running at high frame rates
-                    break;
-                }
+            // Single attempt + retry condizionale
+            nextInputBufferIndex = videoDecoder.dequeueInputBuffer(dequeueTimeoutUs);
+
+            if (nextInputBufferIndex < 0 && !preferLowerDelays) {
+                // Solo un retry breve se non in ULL
+                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(1_000);
             }
 
             // Get the backing ByteBuffer for the input buffer index
