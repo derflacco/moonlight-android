@@ -4472,19 +4472,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             final int fp = prefConfig.framePacing;
 
             final boolean lfrEffective = isLfrEffective(fp, prefConfig.adaptxMode, userLfr);
+            final int requestedMode = prefConfig.lfrMode;
 
             decoderRenderer.setPreferLowerDelays(lfrEffective);
-            decoderRenderer.setLfrMode(prefConfig.lfrMode); // start from pure LFR; renderer may adapt
+            decoderRenderer.setLfrMode(requestedMode); // Start from Pure/Lite; renderer may adapt
             // LFR path uses 0 µs by default; managed path uses per-profile timeouts inside the renderer
             decoderRenderer.setPreferLowerDelaysTimeoutUs(0);
 
             decoderRenderer.setForceTightThresholds(prefConfig.forceTightThresholds);
 
             try {
-                com.limelight.LimeLog.info("Latency policy -> LFR(eff)=" + lfrEffective +
-                        " (user=" + userLfr + ", fp=" + fp + "), tight=" + prefConfig.forceTightThresholds);
-            } catch (Throwable ignored) {}
-        } catch (Throwable ignored) {}
+                // Log the effective LFR policy and the requested LFR mode
+                final String modeLabel = (requestedMode <= 0) ? "Pure" : "Lite";
+                com.limelight.LimeLog.info(
+                        "Latency policy -> LFR(eff)=" + lfrEffective +
+                                " (user=" + userLfr +
+                                ", fp=" + fp +
+                                ", mode=" + requestedMode + " " + modeLabel +
+                                "), tight=" + prefConfig.forceTightThresholds);
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
         private static boolean isLfrEffective(int fp, int adaptxMode, boolean userLfr) {

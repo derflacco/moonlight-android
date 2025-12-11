@@ -127,11 +127,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     /** Update LFR mode from app (0 = Pure, 1 = Lite). */
     public void setLfrMode(int mode) {
         this.lfrMode = (mode <= 0) ? 0 : 1;
+
         // Reset adaptive timeout when switching back to Pure
         if (this.lfrMode == 0) {
             lfrSlowTimeoutUs = 500;
         }
+
+        // Log the active LFR mode for debugging and field reports
+        try {
+            com.limelight.LimeLog.info(
+                    "DecoderRenderer LFR mode set to " + this.lfrMode +
+                            (this.lfrMode == 0 ? " (Pure)" : " (Lite)")
+            );
+        } catch (Throwable ignored) {
+            // Never let logging break playback
+        }
     }
+
 
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
