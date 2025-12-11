@@ -1068,13 +1068,6 @@
             android:summary="@string/summary_prevent_packet_loss"
             android:title="@string/title_prevent_packet_loss"
             app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_enable_android_tv_force_gpu_composition"
-            android:summary="@string/summary_checkbox_enable_android_tv_force_gpu_composition"
-            android:title="@string/title_checkbox_enable_android_tv_force_gpu_composition"
-            app:iconSpaceReserved="false" />
-
 
 <CheckBoxPreference
     android:defaultValue="true"
