@@ -3,7 +3,6 @@ package com.limelight;
 
 import static com.limelight.StartExternalDisplayControlReceiver.requestFocusToExternalDisplayControl;
 import static com.limelight.binding.input.KeyboardTranslator.getModifier;
-import static com.limelight.preferences.PreferenceConfiguration.ADAPTX_MODE_LATENCY;
 import static com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_ADAPTX;
 import static com.limelight.utils.ExternalDisplayControlActivity.SECONDARY_SCREEN_NOTIFICATION_ID;
 import static com.limelight.utils.ExternalDisplayControlActivity.closeExternalDisplayControl;
@@ -863,9 +862,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (warpFactor > 0) {
             final boolean warpEnabledForMode =
                     (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
-                            (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) ||
-                            (prefConfig.framePacing == FRAME_PACING_ADAPTX &&
-                                    prefConfig.adaptxMode == ADAPTX_MODE_LATENCY);
+                            (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
+;
 
             if (warpEnabledForMode) {
                 chosenFrameRate *= warpFactor;
@@ -4525,15 +4523,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             final boolean isMaxSmooth =
                     (fp == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
             final boolean isAdaptx =
-                    (fp == FRAME_PACING_ADAPTX);
-
-            final boolean adaptxLatencyMode =
-                    isAdaptx && (adaptxMode == ADAPTX_MODE_LATENCY);
-
-            // For AdaptX/Latency we force LFR regardless of global toggle.
-            if (adaptxLatencyMode) {
-                return true;
-            }
+            (fp == FRAME_PACING_ADAPTX);
+            final boolean isMinLatency =
+                    (fp == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
 
             // Bypass LFR on Balanced/CapFPS/Max Smoothness and non-latency AdaptX
             return userLfr && !isBalanced && !isCapFps && !isMaxSmooth && !isAdaptx;
