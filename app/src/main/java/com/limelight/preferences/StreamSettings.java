@@ -195,81 +195,125 @@ public class StreamSettings extends AppCompatActivity {
             boolean lockLfr    = false;
             boolean lockFsrEn  = gpuPath || hdrOn;
 
-            Preference pacingPref = findPreference("frame_pacing");
-            Preference lfrBal     = findPreference("pref_low_latency_frame_balance");
-            Preference fsrEn      = findPreference("pref_video_upscale_enable");
-            Preference warpSeek   = findPreference("seekbar_warp_factor");
-            Preference adaptxSeek = findPreference("seekbar_adaptx_mode");
+            Preference pacingPref  = findPreference("frame_pacing");                  // Legacy hidden list preference (kept for compatibility)
+            Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
+            Preference fsrEn       = findPreference("pref_video_upscale_enable");
+            Preference warpSeek    = findPreference("seekbar_warp_factor");
+            Preference profileSeek = findPreference("seekbar_frame_pacing_profile");  // Unified pacing profile slider
 
-            if (pacingPref != null) pacingPref.setEnabled(!lockPacing);
-            if (lfrBal   != null)   lfrBal.setEnabled(!lockLfr);
-            if (fsrEn    != null)   fsrEn.setEnabled(!lockFsrEn);
-
-            // Current frame pacing mode
-            String pacingStr = sp.getString("frame_pacing", "latency");
-            if (pacingStr == null) pacingStr = "latency";
-
-            final boolean isMinLatency = "latency".equals(pacingStr);   // classic Latency pacing
-            final boolean isGpuRaw     = "gpu-raw".equals(pacingStr);   // GPU_RAW pacing
-            final boolean isAdaptx     = "adaptx".equals(pacingStr);    // AdaptX pacing
-
-            // AdaptX sub-mode (0 = Smoothness, 1 = Balanced, 2 = Latency)
-            int adaptxMode = 1;
-            try {
-                adaptxMode = sp.getInt("seekbar_adaptx_mode", 1);
-            } catch (ClassCastException e) {
+            // Hide the legacy "frame_pacing" ListPreference but keep it active in SharedPreferences for compatibility
+            if (pacingPref != null) {
                 try {
-                    String s = sp.getString("seekbar_adaptx_mode", "1");
-                    adaptxMode = Integer.parseInt(s);
+                    pacingPref.setVisible(false);
                 } catch (Throwable ignored) {
-                    adaptxMode = 1;
+                    // Fallback: if setVisible() is not available, at least disable the preference
+                    pacingPref.setEnabled(false);
                 }
             }
-            final boolean isAdaptxLatencyMode = isAdaptx && (adaptxMode == 2);
+
+            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
+            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
+
+            // Legacy pacing state (used as a fallback if the unified slider has never been set)
+            String pacingStr = sp.getString("frame_pacing", "latency");
+            if (pacingStr == null) pacingStr = "latency";
 
             // Global "Prefer lower delays" toggle (LFR)
             boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
 
-            // Warp factor:
+            // Read unified pacing profile slider: 0 = Quality, 1 = Balanced, 2 = Performance, 3 = Raw
+            int framePacingProfile = -1;
+            try {
+                framePacingProfile = sp.getInt("seekbar_frame_pacing_profile", -1);
+            } catch (ClassCastException e) {
+                try {
+                    String s = sp.getString("seekbar_frame_pacing_profile", "-1");
+                    framePacingProfile = Integer.parseInt(s);
+                } catch (Throwable ignored) {
+                    framePacingProfile = -1;
+                }
+            }
+
+            boolean useProfile = framePacingProfile >= 0 && framePacingProfile <= 3;
+
+            boolean isMinLatency        = false;
+            boolean isGpuRaw            = false;
+            boolean isAdaptx            = false;
+            boolean isAdaptxLatencyMode = false;
+
+            if (useProfile) {
+                // Slider mapping:
+                // 0 = Quality      -> AdaptX Smoothness
+                // 1 = Balanced     -> AdaptX Latency (Sync)
+                // 2 = Performance  -> Legacy Latency
+                // 3 = Raw          -> GPU RAW
+                switch (framePacingProfile) {
+                    case 0: // Quality -> AdaptX Smoothness
+                        isAdaptx = true;
+                        isAdaptxLatencyMode = false;
+                        break;
+                    case 1: // Balanced -> AdaptX Latency (Sync)
+                        isAdaptx = true;
+                        isAdaptxLatencyMode = true;
+                        break;
+                    case 2: // Performance -> Legacy Latency
+                        isMinLatency = true;
+                        break;
+                    case 3: // Raw -> GPU_RAW
+                        isGpuRaw = true;
+                        break;
+                    default:
+                        break;
+                }
+            } else {
+                // Legacy fallback: still use the ListPreference + legacy AdaptX sub-mode slider
+                isMinLatency = "latency".equals(pacingStr);   // Classic latency-oriented pacing
+                isGpuRaw     = "gpu-raw".equals(pacingStr);   // GPU_RAW pacing
+                isAdaptx     = "adaptx".equals(pacingStr);    // AdaptX pacing
+
+                // Legacy AdaptX sub-mode (0 = Smoothness, 1 = Balanced, 2 = Latency)
+                int adaptxMode = 1;
+                try {
+                    adaptxMode = sp.getInt("seekbar_adaptx_mode", 1);
+                } catch (ClassCastException e) {
+                    try {
+                        String s = sp.getString("seekbar_adaptx_mode", "1");
+                        adaptxMode = Integer.parseInt(s);
+                    } catch (Throwable ignored) {
+                        adaptxMode = 1;
+                    }
+                }
+                // Only the "Latency" sub-mode of the legacy AdaptX slider is treated as latency-oriented
+                isAdaptxLatencyMode = isAdaptx && (adaptxMode == 2);
+            }
+
+            // Warp factor visibility rules:
             // Visible ONLY when:
-            //   - frame pacing = Latency, OR
-            //   - frame pacing = GPU_RAW, OR
-            //   - AdaptX is in Latency mode, OR
+            //   - a latency-oriented profile is active (Latency / GPU_RAW / AdaptX Latency), OR
             //   - LFR ("Prefer lower delays") is enabled
             // and NEVER when GPU Path is active.
             if (warpSeek != null) {
                 final boolean warpVisible = !gpuPath &&
-                        (isMinLatency || isGpuRaw || isAdaptxLatencyMode);
+                        (isMinLatency || isGpuRaw || isAdaptxLatencyMode || preferLowerDelays);
 
                 try {
                     // AndroidX Preference supports setVisible()
                     warpSeek.setVisible(warpVisible);
                 } catch (Throwable ignored) {
-                    // Fallback: if setVisible() is not available, just use enable/disable
+                    // Fallback: if setVisible() is not available, use enable/disable only
                     warpSeek.setEnabled(warpVisible);
-                    // No further visibility control available on this platform
                 }
 
-                // If visible, also keep it enabled (extra safety)
+                // If visible, also keep it enabled for safety
                 warpSeek.setEnabled(warpVisible);
             }
 
-            // AdaptX seekbar:
-            // - Visible only when pacing = AdaptX and Direct Present (gpuPath) is OFF
-            if (adaptxSeek != null) {
-                final boolean adaptxVisible = isAdaptx && !gpuPath;
-
-                try {
-                    // AndroidX Preference supports setVisible()
-                    adaptxSeek.setVisible(adaptxVisible);
-                } catch (Throwable ignored) {
-                    // Fallback: if setVisible() is not available, just use enable/disable
-                    adaptxSeek.setEnabled(adaptxVisible);
-                    return;
-                }
-
-                // If visible, also keep it enabled
-                adaptxSeek.setEnabled(adaptxVisible);
+            // Unified pacing profile slider:
+            // - Always visible
+            // - Disabled when Direct Present (GPU Path) is active
+            if (profileSeek != null) {
+                boolean enabled = !gpuPath;
+                profileSeek.setEnabled(enabled);
             }
         }
 
@@ -478,6 +522,10 @@ public void onPause() {
                 }
             }
 
+            //Preference framePacingPref = findPreference("frame_pacing");
+            //if (framePacingPref != null) {
+            //    framePacingPref.setVisible(false);
+            //}
             // Hide remote desktop mouse mode on pre-Oreo (which doesn't have pointer capture)
             // and NVIDIA SHIELD devices (which support raw mouse input in pointer capture mode)
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||

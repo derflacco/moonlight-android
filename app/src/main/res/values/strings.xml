@@ -354,6 +354,15 @@
 
     <string name="title_frame_pacing">Video frame pacing</string>
     <string name="summary_frame_pacing">Specify how to balance video latency and smoothness</string>
+    <string name="title_seekbar_frame_pacing_profile">Frame pacing profile</string>
+    <string name="prefix_seekbar_frame_pacing_profile">Preset</string>
+    <string name="summary_seekbar_frame_pacing_profile">
+        0 = Quality
+        1 = Balanced
+        2 = Performance
+        3 = Raw
+    </string>
+
     <string name="pacing_warp">Warp Drive (Experimental)</string>
     <string name="pacing_warp2">Warp 2 (Experimental)</string>
     <string name="pacing_latency">Prefer lowest latency</string>

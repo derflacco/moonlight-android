@@ -241,6 +241,9 @@ public class PreferenceConfiguration {
     private static final float DEFAULT_ZOOM_SCALE = 1.0f;
     private static final float DEFAULT_PAN_OFFSET = 0.0f;
     private static final boolean DEFAULT_FULL_SCREEN = true;
+    // Unified frame pacing profile slider (0–3)
+    private static final String FRAME_PACING_PROFILE_PREF_STRING = "seekbar_frame_pacing_profile";
+    private static final int DEFAULT_FRAME_PACING_PROFILE = 1; // 1 = Balanced (AdaptX Sync)
 
     public static final int FRAME_PACING_MIN_LATENCY = 0;
     public static final int FRAME_PACING_BALANCED = 1;
@@ -906,17 +909,89 @@ private static int getFramePacingValue(Context context) {
 
         config.videoScaleMode = getVideoScaleMode(context);
 
+        // Base values from legacy prefs (for backward compatibility)
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
-        // AdaptX sub-mode slider: 0 = Smoothness, 1 = Balanced, 2 = Latency
-        config.adaptxMode = prefs.getInt("seekbar_adaptx_mode",
+
+        // Legacy AdaptX sub-mode slider as fallback:
+        // 0 = Smoothness, 1 = Sync, 2 = Decoder-safe
+        int legacyAdaptxMode = prefs.getInt("seekbar_adaptx_mode",
                 PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
+        config.adaptxMode = legacyAdaptxMode;
+
+        // New unified frame pacing profile slider:
+        // 0 = Quality      -> AdaptX Smoothness
+        // 1 = Balanced     -> AdaptX Latency (Sync)
+        // 2 = Performance  -> Legacy Latency
+        // 3 = Raw          -> GPU RAW
+        int framePacingProfile = -1;
+        try {
+            framePacingProfile = prefs.getInt(FRAME_PACING_PROFILE_PREF_STRING, -1);
+        } catch (ClassCastException e) {
+            // Handle older forks where SeekBarPreference may store String
+            try {
+                String s = prefs.getString(FRAME_PACING_PROFILE_PREF_STRING,
+                        String.valueOf(DEFAULT_FRAME_PACING_PROFILE));
+                framePacingProfile = Integer.parseInt(s);
+            } catch (Throwable ignored) {
+                framePacingProfile = -1;
+            }
+        }
+
+        if (framePacingProfile < 0 || framePacingProfile > 3) {
+            framePacingProfile = -1;
+        }
+
+        if (framePacingProfile >= 0) {
+            switch (framePacingProfile) {
+                case 0: // Quality: AdaptX Smoothness
+                    config.framePacing = FRAME_PACING_ADAPTX;
+                    config.adaptxMode = ADAPTX_MODE_SMOOTHNESS;
+                    break;
+                case 1: // Balanced: AdaptX Sync
+                    config.framePacing = FRAME_PACING_ADAPTX;
+                    config.adaptxMode = ADAPTX_MODE_SYNC;
+                    break;
+                case 2: // Performance: Legacy latency pacing
+                    config.framePacing = FRAME_PACING_MIN_LATENCY;
+                    // adaptxMode is irrelevant in this profile
+                    break;
+                case 3: // Raw: GPU RAW pacing
+                    config.framePacing = FRAME_PACING_GPU_RAW;
+                    // adaptxMode is irrelevant in this profile
+                    break;
+                default:
+                    break;
+            }
+
+            // Keep the string-based frame pacing preference roughly in sync,
+            // so any UI reading it (getSelectedFramePacingName) isn't totally wrong.
+            try {
+                SharedPreferences.Editor ed = prefs.edit();
+                switch (framePacingProfile) {
+                    case 0:
+                    case 1:
+                        ed.putString(FRAME_PACING_PREF_STRING, "adaptx");
+                        break;
+                    case 2:
+                        ed.putString(FRAME_PACING_PREF_STRING, "latency");
+                        break;
+                    case 3:
+                        ed.putString(FRAME_PACING_PREF_STRING, "gpu-raw");
+                        break;
+                    default:
+                        break;
+                }
+                ed.apply();
+            } catch (Throwable ignored) { }
+        }
+
         config.preferLowerDelays = getPreferLowerDelays(context);
         config.preferLowerDelays = getPreferLowerDelays(context);
+
         // Big cores preference (non-root)
         config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);
-        // Performance Hint Manager (Android 12+)
-        config.enablePerfHints = prefs.getBoolean(ENABLE_PERF_HINTS_PREF_STRING, true);
+
 // CpuWarmUp prefs (UI)
         config.cpuWarmUpEnable = prefs.getBoolean("pref_cpu_warmup_enable", false);
         config.cpuWarmUpOverridePerfHint = prefs.getBoolean("pref_cpu_warmup_override", false);
