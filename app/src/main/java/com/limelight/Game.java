@@ -4528,7 +4528,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     (fp == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
 
             // Bypass LFR on Balanced/CapFPS/Max Smoothness and non-latency AdaptX
-            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth && !isAdaptx;
+            return userLfr && !isBalanced && !isCapFps && !isMaxSmooth;
         }
 
         
