@@ -308,6 +308,19 @@ public class StreamSettings extends AppCompatActivity {
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
             Preference warpSeek    = findPreference("seekbar_warp_factor");
             Preference profileSeek = findPreference("seekbar_frame_pacing_profile");  // Unified pacing profile slider
+            Preference gpuKickPref = findPreference("pref_gpu_kick_enable");          // GPU kick toggle (now hidden)
+
+// GPU Kick preference: permanently hidden, engine now forces GPU kick in Direct Present
+            if (gpuKickPref != null) {
+                try {
+                    gpuKickPref.setVisible(false);
+                } catch (Throwable ignored) {
+                    gpuKickPref.setEnabled(false);
+                }
+                gpuKickPref.setEnabled(false);
+            }
+
+
 
             // Hide the legacy "frame_pacing" ListPreference
             if (pacingPref != null) {
@@ -340,6 +353,7 @@ public class StreamSettings extends AppCompatActivity {
                 profileSeek.setEnabled(enabled);
             }
         }
+
 
 
 @Override

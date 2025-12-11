@@ -205,7 +205,7 @@ public final class GpuKickPbuffer {
 
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
             GLES20.glUseProgram(0);
-            GLES20.glFlush();
+            GLES20.glFinish();
         } catch (Throwable t) {
             if (DEBUG) Log.e(TAG, "kickOnce error", t);
         }

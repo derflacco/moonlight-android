@@ -1337,27 +1337,24 @@ try {
 //* Pin hot threads to big cluster *//
                 // Give the renderer thread a recognizable name for /proc and debugging
                 try { Thread.currentThread().setName("MoonlightRenderer"); } catch (Throwable ignored) {}
-                // --- GPU Kick (adaptive, headless when GL path not used) ---
-                final boolean wantGpuKick = (prefs != null && prefs.enableGpuKick);
+// --- GPU Kick (headless, always enabled in Direct Present) ---
+// force gpu kick when direct present is on
                 boolean usingDirectPresent = false;
                 try {
-                    usingDirectPresent =
-                            (prefs != null && (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW))
-                                    || (prefs != null && prefs.gpuPathMode);
+                    usingDirectPresent = (prefs != null && prefs.gpuPathMode);
                 } catch (Throwable ignored) {}
 
-                if (wantGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
-                    // In Direct Present path the app doesn't render via GL; use a headless pbuffer
-                    if (usingDirectPresent) {
+                if (usingDirectPresent && android.os.Build.VERSION.SDK_INT >= 17) {
+                    try {
+                        gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
+                        gpuKickPbuffer.setEnabled(true);
+                        gpuKickPbuffer.initOnThisThread(); // create EGL pbuffer on this thread
+                        LimeLog.info("GpuKickPbuffer: initialized (Direct Present / gpuPathMode)");
+                    } catch (Throwable t) {
+                        gpuKickPbuffer = null;
                         try {
-                            gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
-                            gpuKickPbuffer.setEnabled(true);
-                            gpuKickPbuffer.initOnThisThread(); // create EGL pbuffer on this thread
-                            LimeLog.info("GpuKickPbuffer: initialized (Direct Present)");
-                        } catch (Throwable t) {
-                            gpuKickPbuffer = null;
-                            try { LimeLog.info("GpuKickPbuffer: init failed, disabled: " + t); } catch (Throwable ignored) {}
-                        }
+                            LimeLog.info("GpuKickPbuffer: init failed, disabled: " + t);
+                        } catch (Throwable ignored) {}
                     }
                 }
 
