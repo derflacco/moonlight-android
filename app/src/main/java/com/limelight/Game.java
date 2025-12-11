@@ -853,28 +853,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
 
-// Warp factor handling
+// Warp factor handling (disabled)
         final int warpFactor = prefConfig.framePacingWarpFactor;
 
         LimeLog.info("Game: framePacing=" + prefConfig.framePacing +
-                " warpFactor=" + warpFactor);
+                " warpFactor=" + warpFactor + " (permanently disabled)");
 
-        if (warpFactor > 0) {
-            final boolean warpEnabledForMode =
-                    (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) ||
-                            (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY);
-;
-
-            if (warpEnabledForMode) {
-                chosenFrameRate *= warpFactor;
-                LimeLog.info("Warp applied: x" + warpFactor +
-                        " -> target refresh " + chosenFrameRate + " Hz");
-            } else {
-                LimeLog.info("Warp NOT applied: mode not latency-oriented");
-            }
-        } else {
-            LimeLog.info("Warp disabled: warpFactor <= 0, chosenFrameRate=" + chosenFrameRate);
-        }
+// Warp factor functionality is disabled
+        LimeLog.info("Warp factor functionality is permanently disabled");
 
 
         StreamConfiguration config = new StreamConfiguration.Builder()

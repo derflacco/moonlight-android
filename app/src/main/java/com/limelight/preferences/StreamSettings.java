@@ -288,24 +288,15 @@ public class StreamSettings extends AppCompatActivity {
             }
 
             // Warp factor visibility rules:
-            // Visible ONLY when:
-            //   - a latency-oriented profile is active (Latency / GPU_RAW / AdaptX Latency), OR
-            //   - LFR ("Prefer lower delays") is enabled
-            // and NEVER when GPU Path is active.
+            // Permanently disabled - warp factor functionality is no longer supported.
             if (warpSeek != null) {
-                final boolean warpVisible = !gpuPath &&
-                        (isMinLatency || isGpuRaw || isAdaptxLatencyMode || preferLowerDelays);
-
+                // Permanently hide and disable the warp factor slider
                 try {
-                    // AndroidX Preference supports setVisible()
-                    warpSeek.setVisible(warpVisible);
+                    warpSeek.setVisible(false);
                 } catch (Throwable ignored) {
-                    // Fallback: if setVisible() is not available, use enable/disable only
-                    warpSeek.setEnabled(warpVisible);
+                    warpSeek.setEnabled(false);
                 }
-
-                // If visible, also keep it enabled for safety
-                warpSeek.setEnabled(warpVisible);
+                warpSeek.setEnabled(false);
             }
 
             // Unified pacing profile slider:
