@@ -1779,8 +1779,13 @@ try {
                                                 (axMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
                                         final boolean modeSlow =
                                                 (axMode == PreferenceConfiguration.ADAPTX_MODE_DECODER_SAFE);
-                                                   final boolean modeSync =
+                                        final boolean modeSync =
                                                 (axMode == PreferenceConfiguration.ADAPTX_MODE_SYNC);
+
+                                        // Pure LFR / ULL: non-blocking dequeue policy (0 µs timeout)
+                                        // In this mode, AdaptX will never drop frames locally and
+                                        // behaves as a pure latest-only low-latency path.
+                                        final boolean pureLfr = (preferLowerDelaysTimeoutUs == 0);
 
                                         if (modeSmooth) {
                                             // Smoothness: no drops, always present the latest frame
@@ -1818,9 +1823,17 @@ try {
                                             final boolean cooldownOk =
                                                     (nowNs - adaptxLastDropNs) >= minDropSpacingNs;
 
-                                            final boolean shouldDrop =
-                                                    isLate && backlogOk && cooldownOk
-                                                            && (adaptxLateStreak >= 4);
+                                            boolean shouldDrop = false;
+
+                                            if (!pureLfr) {
+                                                // Managed mode: allow rare drops when clearly behind.
+                                                shouldDrop =
+                                                        isLate && backlogOk && cooldownOk
+                                                                && (adaptxLateStreak >= 4);
+                                            } else {
+                                                // Pure LFR: never drop locally, keep latest-only semantics.
+                                                shouldDrop = false;
+                                            }
 
                                             if (shouldDrop) {
                                                 // Drop only when we are clearly far behind even
@@ -1868,11 +1881,19 @@ try {
                                             final boolean cooldownOk =
                                                     (nowNs - adaptxLastDropNs) >= minDropSpacingNs;
 
-                                            final boolean shouldDrop =
-                                                    isSeverelyLate
-                                                            && lagging
-                                                            && cooldownOk
-                                                            && (adaptxLateStreak >= 3);
+                                            boolean shouldDrop = false;
+
+                                            if (!pureLfr) {
+                                                // Managed mode: allow extremely rare drops under pathological backlog.
+                                                shouldDrop =
+                                                        isSeverelyLate
+                                                                && lagging
+                                                                && cooldownOk
+                                                                && (adaptxLateStreak >= 3);
+                                            } else {
+                                                // Pure LFR: never drop locally, keep strict latest-only behavior.
+                                                shouldDrop = false;
+                                            }
 
                                             if (shouldDrop) {
                                                 // Drop only under clearly pathological backlog
