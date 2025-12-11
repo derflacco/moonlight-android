@@ -289,6 +289,16 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT_MAX_SMOOTHNESS = 3;
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT_LL = 1;
     private long lastRenderedFrameTimeNanos;
+
+    // AdaptX pacing state
+    private long adaptxLastPtsUs = -1L;
+    private double adaptxEwmaStreamPeriodNs = 0.0;
+    private double adaptxEwmaPresentIntervalNs = 0.0;
+    private long adaptxLastPresentNs = 0L;
+    private long adaptxLastDropNs = 0L;
+    private int adaptxLateStreak = 0;
+    // track last active AdaptX mode to soft-reset state on profile change
+    private int adaptxLastMode = -1;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
 
@@ -1611,21 +1621,45 @@ try {
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, policyUs);
                         final long elapsedUs = (System.nanoTime() - t0) / 1000L;
 
+                        // Simple quick backoff for INFO_TRY_AGAIN_LATER on slower decoders
+                        if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER && policyUs > 0) {
+                            final int quickBackoffUs = 500; // small extra wait within the same loop
+                            final int remainingUs = Math.max(0, policyUs - (int) elapsedUs);
+                            final int backoffUs = Math.min(remainingUs, quickBackoffUs);
 
-
+                            if (backoffUs > 0) {
+                                outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
+                            }
+                        }
 
                         if (outIndex >= 0) {
                             // --- flags to manage statistics in a robust way ---
                             boolean statsUpdated = false;
                             boolean frameDropped = false;
 
+                            // Latest decoded buffer
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
-                            long lastPtsUs = presentationTimeUs;
+
+                            // AdaptX: update stream period estimate from PTS deltas (µs)
+                            if (presentationTimeUs > 0L) {
+                                if (adaptxLastPtsUs > 0L && presentationTimeUs > adaptxLastPtsUs) {
+                                    final double alphaStream = 0.10; // smooth but responsive
+                                    double sampleNs = (presentationTimeUs - adaptxLastPtsUs) * 1000.0;
+                                    if (adaptxEwmaStreamPeriodNs <= 0.0) {
+                                        adaptxEwmaStreamPeriodNs = sampleNs;
+                                    } else {
+                                        adaptxEwmaStreamPeriodNs +=
+                                                alphaStream * (sampleNs - adaptxEwmaStreamPeriodNs);
+                                    }
+                                }
+                                adaptxLastPtsUs = presentationTimeUs;
+                            }
 
                             numFramesOut++;
 
-                            // Measure decode latency AT DEQUEUE
+
+                            // Measure decode latency at dequeue
                             try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
                             statsUpdated = true;
 
@@ -1636,6 +1670,22 @@ try {
 
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
                                     final long newPtsUs = info.presentationTimeUs;
+
+                                    // AdaptX: update stream period estimate for drained buffers
+                                    if (newPtsUs > 0L) {
+                                        if (adaptxLastPtsUs > 0L && newPtsUs > adaptxLastPtsUs) {
+                                            final double alphaStream = 0.10;
+                                            double sampleNs = (newPtsUs - adaptxLastPtsUs) * 1000.0;
+                                            if (adaptxEwmaStreamPeriodNs <= 0.0) {
+                                                adaptxEwmaStreamPeriodNs = sampleNs;
+                                            } else {
+                                                adaptxEwmaStreamPeriodNs +=
+                                                        alphaStream * (sampleNs - adaptxEwmaStreamPeriodNs);
+                                            }
+                                        }
+                                        adaptxLastPtsUs = newPtsUs;
+                                    }
+
                                     try { updateDecodeLatencyStats(newPtsUs); } catch (Throwable ignored) {}
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
                                     frameDropped = true; // we're discarding the oldest one
@@ -1643,60 +1693,234 @@ try {
                                     numFramesOut++;
                                     lastIndex = outIndex;
                                     presentationTimeUs = newPtsUs;
-                                    lastPtsUs = newPtsUs;
                                 }
-// --- Present policy per profilo di pacing ---
-                                if (pNow != null && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    // GPU_RAW: Immediate present
+// --- Present policy for pacing profiles ---
+                                if (pNow != null
+                                        && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+                                    // GPU_RAW: immediate present
                                     if (lastIndex >= 0) {
                                         try {
                                             final long nowNs = System.nanoTime();
 
-                                            // Always use current timestamp for presentation
-                                            long tsNs = nowNs; // Use current time, not PTS
-
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
                                                 gpuKickPresentHook();
                                             } else {
                                                 videoDecoder.releaseOutputBuffer(lastIndex, true);
                                                 gpuKickPresentHook();
                                             }
+
                                             lastRenderedFrameTimeNanos = nowNs;
-                                            // FIX: Do NOT call updateDecodeLatencyStats() here:
                                         } catch (IllegalStateException e) {
                                             handleDecoderException(e);
                                             return;
-                                        } catch (Throwable ignored) {}
+                                        } catch (Throwable ignored) { }
                                     }
                                 }
-                                else {
-                                // Latency mode (legacy)
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                    try {
-                                        // Present immediately with a monotonic timestamp
-                                        final long tsNs = System.nanoTime();
-                                        videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
-                                        gpuKickPresentHook();
+                                else if (pNow != null
+                                        && pNow.framePacing == PreferenceConfiguration.FRAME_PACING_ADAPTX) {
+                                    // AdaptX: Smoothness / Decoder-safe / Sync
+                                    // - Smoothness        : no drops, always present latest frame
+                                    // - Decoder-safe mode : tuned for slower decoders, very rare drops
+                                    // - Sync: adaptive pacing
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        final long nowNs = System.nanoTime();
+                                        final long ptsNs = presentationTimeUs * 1000L;
 
-                                        // Keep timing state consistent with the other paths
-                                        lastRenderedFrameTimeNanos = tsNs;
-                                    } catch (IllegalStateException e) {
-                                        handleDecoderException(e);
-                                        return;
-                                    } catch (Throwable ignored) {
-                                    }
-                                } else {
-                                    // Legacy immediate render
-                                    try {
+                                        long frameAgeNs = nowNs - ptsNs;
+                                        if (frameAgeNs < 0L) {
+                                            frameAgeNs = 0L;
+                                        }
+
+                                        // Base period from stream estimate or display
+                                        double basePeriodNs = adaptxEwmaStreamPeriodNs;
+                                        if (basePeriodNs <= 0.0) {
+                                            double fps = 0.0;
+                                            if (targetFps > 0f) {
+                                                fps = targetFps;
+                                            } else if (refreshRate > 0) {
+                                                fps = refreshRate;
+                                            }
+                                            if (fps > 0.0) {
+                                                basePeriodNs = 1_000_000_000.0 / fps;
+                                            } else {
+                                                basePeriodNs = 16_666_667.0; // ~60 Hz fallback
+                                            }
+                                        }
+
+                                        final long sinceLastPresentNs =
+                                                (adaptxLastPresentNs == 0L)
+                                                        ? Long.MAX_VALUE
+                                                        : (nowNs - adaptxLastPresentNs);
+
+                                        final int axMode = (prefs != null)
+                                                ? prefs.adaptxMode
+                                                : PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS;
+
+                                        // Soft reset of AdaptX state on profile change
+                                        if (axMode != adaptxLastMode) {
+                                            adaptxLateStreak = 0;
+                                            adaptxLastDropNs = 0L;
+                                            // We keep adaptxEwmaPresentIntervalNs to preserve cadence knowledge
+                                            adaptxLastMode = axMode;
+                                        }
+
+                                        final boolean modeSmooth =
+                                                (axMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS);
+                                        final boolean modeSlow =
+                                                (axMode == PreferenceConfiguration.ADAPTX_MODE_DECODER_SAFE);
+                                                   final boolean modeSync =
+                                                (axMode == PreferenceConfiguration.ADAPTX_MODE_SYNC);
+
+                                        if (modeSmooth) {
+                                            // Smoothness: no drops, always present the latest frame
+                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                            gpuKickPresentHook();
+
+                                            // Update AdaptX present stats via helper
+                                            adaptxOnPresent(nowNs);
+
+                                            // Reset drop state for Smoothness
+                                            adaptxLateStreak = 0;
+                                        }
+                                        else if (modeSlow) {
+                                            // Decoder-safe: favor smooth output on slower pipelines.
+                                            // Derive an effective period from what the device can really sustain.
+                                            double effectivePeriodNs = basePeriodNs;
+                                            if (adaptxEwmaPresentIntervalNs > 0.0) {
+                                                // If present interval is already slower than stream,
+                                                // use that as lower bound for pacing.
+                                                effectivePeriodNs = Math.max(effectivePeriodNs, adaptxEwmaPresentIntervalNs);
+                                            }
+
+                                            final long lateNs = (long) (effectivePeriodNs * 1.8);
+                                            final long minDropSpacingNs = (long) (effectivePeriodNs * 3.0);
+
+                                            final boolean isLate = frameAgeNs > lateNs;
+                                            if (isLate) {
+                                                adaptxLateStreak++;
+                                            } else {
+                                                adaptxLateStreak = 0;
+                                            }
+
+                                            final boolean backlogOk =
+                                                    sinceLastPresentNs < (long) (effectivePeriodNs * 3.0);
+                                            final boolean cooldownOk =
+                                                    (nowNs - adaptxLastDropNs) >= minDropSpacingNs;
+
+                                            final boolean shouldDrop =
+                                                    isLate && backlogOk && cooldownOk
+                                                            && (adaptxLateStreak >= 4);
+
+                                            if (shouldDrop) {
+                                                // Drop only when we are clearly far behind even
+                                                // the slower effective cadence.
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                frameDropped = true;
+                                                adaptxLastDropNs = nowNs;
+                                                adaptxLateStreak = 0;
+                                            } else {
+                                                // Normal present path for decoder-safe mode
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                                gpuKickPresentHook();
+
+                                                // Update AdaptX present stats via helper
+                                                adaptxOnPresent(nowNs);
+                                            }
+                                        }
+                                        else if (modeSync) {
+                                            // Adaptive Sync: dynamic pacing with extremely rare drops
+                                            // Blend stream period and present interval to follow real cadence
+                                            double refPeriodNs = basePeriodNs;
+                                            if (adaptxEwmaPresentIntervalNs > 0.0) {
+                                                refPeriodNs = 0.7 * basePeriodNs
+                                                        + 0.3 * adaptxEwmaPresentIntervalNs;
+                                            }
+                                            basePeriodNs = refPeriodNs;
+
+                                            final long severeLateNs = (long) (basePeriodNs * 2.2);
+                                            final long minDropSpacingNs = (long) (basePeriodNs * 2.5);
+
+                                            final boolean isSeverelyLate = frameAgeNs > severeLateNs;
+                                            if (isSeverelyLate) {
+                                                adaptxLateStreak++;
+                                            } else {
+                                                adaptxLateStreak = 0;
+                                            }
+
+                                            boolean lagging = false;
+                                            if (adaptxEwmaPresentIntervalNs > 0.0) {
+                                                // Consider backlog only if present rate is clearly slower than stream rate
+                                                lagging = adaptxEwmaPresentIntervalNs >
+                                                        (basePeriodNs * 1.20);
+                                            }
+
+                                            final boolean cooldownOk =
+                                                    (nowNs - adaptxLastDropNs) >= minDropSpacingNs;
+
+                                            final boolean shouldDrop =
+                                                    isSeverelyLate
+                                                            && lagging
+                                                            && cooldownOk
+                                                            && (adaptxLateStreak >= 3);
+
+                                            if (shouldDrop) {
+                                                // Drop only under clearly pathological backlog
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                frameDropped = true;
+                                                adaptxLastDropNs = nowNs;
+                                                adaptxLateStreak = 0;
+                                            } else {
+                                                // Normal present path for Sync
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                                gpuKickPresentHook();
+
+                                                // Update AdaptX present stats via helper
+                                                adaptxOnPresent(nowNs);
+                                            }
+                                        }
+                                        else {
+                                            // Fallback: treat unknown modes as Smoothness (no drops)
+                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                            gpuKickPresentHook();
+
+                                            // Update AdaptX present stats via helper
+                                            adaptxOnPresent(nowNs);
+
+                                            adaptxLateStreak = 0;
+                                        }
+                                    } else {
+                                        // Legacy path: immediate present without timestamps
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
                                         gpuKickPresentHook();
-                                    } catch (IllegalStateException e) {
-                                        handleDecoderException(e);
-                                        return;
-                                    } catch (Throwable ignored) {}
+                                    }
                                 }
-                            }
+
+                                else {
+                                    // Latency mode (legacy)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        try {
+                                            // Present immediately with a monotonic timestamp
+                                            final long tsNs = System.nanoTime();
+                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                            gpuKickPresentHook();
+
+                                            lastRenderedFrameTimeNanos = tsNs;
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) { }
+                                    } else {
+                                        // Legacy immediate render
+                                        try {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                            gpuKickPresentHook();
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) { }
+                                    }
+                                }
 
                                 activeWindowVideoStats.totalFramesRendered++;
                                 if (MediaCodecDecoderRenderer.this.perfHint != null
@@ -2960,6 +3184,23 @@ try {
                 gpuKickPbuffer.kickOnce();
             }
         } catch (Throwable ignored) {}
+    }
+    // Helper for AdaptX present events: update EWMA present interval + timestamps
+    private void adaptxOnPresent(long nowNs) {
+        if (adaptxLastPresentNs != 0L) {
+            long intervalNs = nowNs - adaptxLastPresentNs;
+            if (intervalNs > 0L) {
+                final double alphaPresent = 0.20;
+                if (adaptxEwmaPresentIntervalNs <= 0.0) {
+                    adaptxEwmaPresentIntervalNs = intervalNs;
+                } else {
+                    adaptxEwmaPresentIntervalNs +=
+                            alphaPresent * (intervalNs - adaptxEwmaPresentIntervalNs);
+                }
+            }
+        }
+        adaptxLastPresentNs = nowNs;
+        lastRenderedFrameTimeNanos = nowNs;
     }
 
 private boolean isMTKDecoderName(String name) {
