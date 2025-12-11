@@ -90,18 +90,17 @@
         android:title="@string/title_low_latency_frame_balance"
         android:summary="@string/summary_low_latency_frame_balance"
         app:iconSpaceReserved="false" />
-
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_ultra_low_latency"
-            android:summary="@string/summary_checkbox_ultra_low_latency"
-            android:title="@string/title_checkbox_ultra_low_latency"
-            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:key="checkbox_gpu_path_mode"
             android:title="@string/gpu_path_mode_title"
             android:summary="@string/gpu_path_mode_summary"
             android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_ultra_low_latency"
+            android:summary="@string/summary_checkbox_ultra_low_latency"
+            android:title="@string/title_checkbox_ultra_low_latency"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"

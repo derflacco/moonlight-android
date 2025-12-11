@@ -170,8 +170,9 @@ public class StreamSettings extends AppCompatActivity {
                             || "pref_video_hdr_enable".equals(key)           // HDR
                             || "pref_hdr_enable".equals(key)                 // HDR
                             || "pref_hdr_pipeline_enable".equals(key)        // HDR
-                            || "frame_pacing".equals(key)                    // Pacing
-                            || "seekbar_adaptx_mode".equals(key)) {          // AdaptX
+                            || "frame_pacing".equals(key)                    // Legacy pacing list
+                            || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
+                            || "seekbar_frame_pacing_profile".equals(key)) { // Unified pacing profile slider
                         updateLocks();
                     }
                 };
@@ -180,39 +181,14 @@ public class StreamSettings extends AppCompatActivity {
             // --- UI state management ---
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-            boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
+            // Persisted GPU Path state (will be sanitized based on current pacing selection)
+            boolean gpuPathStored = sp.getBoolean("checkbox_gpu_path_mode", false);
 
             // HDR is enabled if any HDR toggle is active
             boolean hdrOn =
                     (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
-
-            // Lock rules:
-            // - FSR: disabled when Direct Present or HDR is active
-            // - Frame pacing: disabled when Direct Present is active
-            boolean lockPacing = gpuPath;
-            boolean lockLfr    = false;
-            boolean lockFsrEn  = gpuPath || hdrOn;
-
-            Preference pacingPref  = findPreference("frame_pacing");                  // Legacy hidden list preference (kept for compatibility)
-            Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
-            Preference fsrEn       = findPreference("pref_video_upscale_enable");
-            Preference warpSeek    = findPreference("seekbar_warp_factor");
-            Preference profileSeek = findPreference("seekbar_frame_pacing_profile");  // Unified pacing profile slider
-
-            // Hide the legacy "frame_pacing" ListPreference but keep it active in SharedPreferences for compatibility
-            if (pacingPref != null) {
-                try {
-                    pacingPref.setVisible(false);
-                } catch (Throwable ignored) {
-                    // Fallback: if setVisible() is not available, at least disable the preference
-                    pacingPref.setEnabled(false);
-                }
-            }
-
-            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
-            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
 
             // Legacy pacing state (used as a fallback if the unified slider has never been set)
             String pacingStr = sp.getString("frame_pacing", "latency");
@@ -287,10 +263,67 @@ public class StreamSettings extends AppCompatActivity {
                 isAdaptxLatencyMode = isAdaptx && (adaptxMode == 2);
             }
 
+            // Effective GPU Path flag:
+            // - It is only honored when GPU_RAW pacing is selected
+            // - If we are not in Raw, the stored value is ignored (and will be cleared below)
+            boolean gpuPath = gpuPathStored && isGpuRaw;
+
+            // GPU Path checkbox: visible only when Raw profile is selected
+            Preference gpuPathCheckbox = findPreference("checkbox_gpu_path_mode");
+            if (gpuPathCheckbox != null) {
+                if (isGpuRaw) {
+                    // Show and enable for Raw profile
+                    try {
+                        gpuPathCheckbox.setVisible(true);
+                    } catch (Throwable ignored) {
+                        // Fallback if setVisible() not available
+                    }
+                    gpuPathCheckbox.setEnabled(true);
+                } else {
+                    // Hide and disable for non-Raw profiles
+                    try {
+                        gpuPathCheckbox.setVisible(false);
+                    } catch (Throwable ignored) {
+                        gpuPathCheckbox.setEnabled(false);
+                    }
+                    gpuPathCheckbox.setEnabled(false);
+
+                    // If GPU Path was active in non-Raw mode, automatically disable it
+                    if (gpuPathStored) {
+                        sp.edit().putBoolean("checkbox_gpu_path_mode", false).apply();
+                        gpuPath = false;
+                    }
+                }
+            }
+
+            // Lock rules (recalculated after possibly updating gpuPath):
+            // - FSR: disabled when Direct Present or HDR is active
+            // - Frame pacing: disabled when Direct Present is active
+            boolean lockPacing = gpuPath;
+            boolean lockLfr = false;
+            boolean lockFsrEn = gpuPath || hdrOn;
+
+            Preference pacingPref  = findPreference("frame_pacing");                  // Legacy hidden list preference
+            Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
+            Preference fsrEn       = findPreference("pref_video_upscale_enable");
+            Preference warpSeek    = findPreference("seekbar_warp_factor");
+            Preference profileSeek = findPreference("seekbar_frame_pacing_profile");  // Unified pacing profile slider
+
+            // Hide the legacy "frame_pacing" ListPreference
+            if (pacingPref != null) {
+                try {
+                    pacingPref.setVisible(false);
+                } catch (Throwable ignored) {
+                    pacingPref.setEnabled(false);
+                }
+            }
+
+            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
+            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
+
             // Warp factor visibility rules:
             // Permanently disabled - warp factor functionality is no longer supported.
             if (warpSeek != null) {
-                // Permanently hide and disable the warp factor slider
                 try {
                     warpSeek.setVisible(false);
                 } catch (Throwable ignored) {
