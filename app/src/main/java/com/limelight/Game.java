@@ -598,7 +598,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         performanceOverlayBig = findViewById(R.id.performanceOverlayBig);
 
-        androidTvForceGpuComposition = findViewById(R.id.androidTvForceGpuComposition);
 
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this, this);
 
@@ -734,15 +733,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) performanceOverlayView.getLayoutParams();
                 params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
                 performanceOverlayView.setLayoutParams(params);
-            }
-        }
-
-        // Configure Force GPU Composition for Android TV
-        if (androidTvForceGpuComposition != null) {
-            if (prefConfig.enableAndroidTvForceGpuComposition) {
-                androidTvForceGpuComposition.setVisibility(View.VISIBLE);
-            } else {
-                androidTvForceGpuComposition.setVisibility(View.GONE);
             }
         }
 
@@ -3972,12 +3962,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }else{
                     performanceOverlayBig.setText(text);
                 }
-                
-                // Toggle GPU composition on Android TV by alternating an invisible character
-                if (androidTvForceGpuComposition != null && prefConfig.enableAndroidTvForceGpuComposition) {
-                    gpuCompositionToggle = !gpuCompositionToggle;
-                    androidTvForceGpuComposition.setText(gpuCompositionToggle ? "·" : ".");
-                }
+
             }
         });
     }

@@ -103,23 +103,6 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"/>
 
-        <TextView 
-            android:id="@+id/androidTvForceGpuComposition"
-            tools:text="Force GPU Composition"
-            android:textSize="1sp"
-            android:layout_marginTop="1dp"
-            android:layout_marginStart="1dp"
-            android:background="@android:color/transparent"
-            android:paddingLeft="1dp"
-            android:paddingRight="1dp"
-            android:paddingTop="1dp"
-            android:paddingBottom="1dp"
-            android:visibility="visible"
-            android:textColor="#FFFFFF"
-            android:layout_gravity="start|top"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
-            
     </LinearLayout>
 
     <!-- Floating Menu Button -->

@@ -307,7 +307,6 @@ public boolean snappyInput = true;
 
     public boolean enablePerfOverlayBottom;
 
-    public boolean enableAndroidTvForceGpuComposition;
 
     public boolean enableLatencyToast;
     public boolean enableBackMenu;
@@ -964,7 +963,6 @@ private static int getFramePacingValue(Context context) {
         config.enablePerfOverlayLiteOledShift = prefs.getBoolean("checkbox_enable_perf_overlay_lite_oledshift", true);
         config.enablePerfOverlayMini = prefs.getBoolean("checkbox_enable_perf_overlay_mini",DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfOverlayBottom = prefs.getBoolean("checkbox_enable_perf_overlay_bottom",DEFAULT_PERF_OVERLAY_BOTTOM);
-        config.enableAndroidTvForceGpuComposition = prefs.getBoolean("checkbox_enable_android_tv_force_gpu_composition", false);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
