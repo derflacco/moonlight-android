@@ -96,6 +96,13 @@
             android:summary="@string/gpu_path_mode_summary"
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="pref_gpu_kick_enable"
+            android:title="@string/pref_gpu_kick_enable_title"
+            android:summary="@string/pref_gpu_kick_enable_summary"
+            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_ultra_low_latency"
@@ -274,14 +281,7 @@
             seekbar:min="0"
             seekbar:step="1"
             android:text="%" />
-    
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="pref_gpu_kick_enable"
-            android:title="@string/pref_gpu_kick_enable_title"
-            android:summary="@string/pref_gpu_kick_enable_summary"
-            app:iconSpaceReserved="false" />
-    
+
 </PreferenceCategory>
 
     <PreferenceCategory
@@ -685,7 +685,7 @@
             android:summary="@string/summary_checkbox_disable_warnings"
             android:title="@string/title_checkbox_disable_warnings"
             app:iconSpaceReserved="false" />
-			
+
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_show_overlay_zoom_toggle_button"

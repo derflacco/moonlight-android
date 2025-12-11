@@ -23,6 +23,10 @@ public final class GpuKickPbuffer {
     private volatile boolean enabled = false;
     private volatile boolean inited = false;
 
+    // Simple debug counter to avoid log spam
+    private int debugFrameCounter = 0;
+    private static final int DEBUG_LOG_EVERY_N_FRAMES = 60; // es: 1 log al secondo a 60 FPS
+
     private EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
     private EGLContext eglContext = EGL14.EGL_NO_CONTEXT;
     private EGLSurface eglSurface = EGL14.EGL_NO_SURFACE;
@@ -46,8 +50,8 @@ public final class GpuKickPbuffer {
             -1.0f,  3.0f
     };
 
-    private static final int PBUFFER_WIDTH = 8;
-    private static final int PBUFFER_HEIGHT = 8;
+    private static final int PBUFFER_WIDTH = 32;
+    private static final int PBUFFER_HEIGHT = 32;
 
     public void setEnabled(boolean enabled) {
         boolean was = this.enabled;
@@ -173,6 +177,13 @@ public final class GpuKickPbuffer {
     /** Execute one minimal draw call; call once per presented frame. */
     public void kickOnce() {
         if (!enabled || !inited) return;
+
+        if (DEBUG) {
+            debugFrameCounter++;
+            if (debugFrameCounter % DEBUG_LOG_EVERY_N_FRAMES == 0) {
+                Log.d(TAG, "kickOnce() called, total frames=" + debugFrameCounter);
+            }
+        }
 
         try {
             if (!ensureCurrent()) {
