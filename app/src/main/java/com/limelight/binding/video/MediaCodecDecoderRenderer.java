@@ -1928,105 +1928,116 @@ try {
                                 }
 
                                 else {
-                                        // Latency mode (legacy, EWMA-guided)
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            try {
-                                                final long nowNs = System.nanoTime();
-                                                final long ptsNs = presentationTimeUs * 1000L;
+                                    // Latency mode (legacy, EWMA-guided)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                        try {
+                                            final long nowNs = System.nanoTime();
+                                            final long ptsNs = presentationTimeUs * 1000L;
 
-                                                long frameAgeNs = nowNs - ptsNs;
-                                                if (frameAgeNs < 0L) {
-                                                    frameAgeNs = 0L;
+                                            long frameAgeNs = nowNs - ptsNs;
+                                            if (frameAgeNs < 0L) {
+                                                frameAgeNs = 0L;
+                                            }
+
+                                            // Pure LFR / ULL: non-blocking dequeue (0 µs timeout) means
+                                            // the host is already doing latest-only dropping. In this mode
+                                            // we avoid local drops and always present the latest decoded frame.
+                                            final boolean pureLfr = (preferLowerDelaysTimeoutUs == 0);
+
+                                            // Derive a base period from EWMA, stream FPS, or display refresh
+                                            double basePeriodNs = adaptxEwmaStreamPeriodNs;
+                                            if (basePeriodNs <= 0.0) {
+                                                double fps = 0.0;
+                                                if (targetFps > 0f) {
+                                                    fps = targetFps;
+                                                } else if (refreshRate > 0) {
+                                                    fps = refreshRate;
                                                 }
-
-                                                // Derive a base period from EWMA, stream FPS, or display refresh
-                                                double basePeriodNs = adaptxEwmaStreamPeriodNs;
-                                                if (basePeriodNs <= 0.0) {
-                                                    double fps = 0.0;
-                                                    if (targetFps > 0f) {
-                                                        fps = targetFps;
-                                                    } else if (refreshRate > 0) {
-                                                        fps = refreshRate;
-                                                    }
-                                                    if (fps > 0.0) {
-                                                        basePeriodNs = 1_000_000_000.0 / fps;
-                                                    } else {
-                                                        basePeriodNs = 16_666_667.0; // ~60 Hz fallback
-                                                    }
-                                                }
-
-                                                final long lateNs           = (long) (basePeriodNs * 1.3);
-                                                final long severeLateNs     = (long) (basePeriodNs * 2.5);
-                                                final long minDropSpacingNs = (long) (basePeriodNs * 0.75);
-
-                                                final boolean isLate         = frameAgeNs > lateNs;
-                                                final boolean isSeverelyLate = frameAgeNs > severeLateNs;
-
-                                                if (isLate) {
-                                                    adaptxLateStreak++;
+                                                if (fps > 0.0) {
+                                                    basePeriodNs = 1_000_000_000.0 / fps;
                                                 } else {
-                                                    adaptxLateStreak = 0;
+                                                    basePeriodNs = 16_666_667.0; // ~60 Hz fallback
                                                 }
+                                            }
 
-                                                boolean lagging = false;
-                                                if (adaptxEwmaPresentIntervalNs > 0.0) {
-                                                    // Consider backlog only if present rate is clearly slower than stream rate
-                                                    lagging = adaptxEwmaPresentIntervalNs > (basePeriodNs * 1.20);
-                                                }
+                                            final long lateNs           = (long) (basePeriodNs * 1.3);
+                                            final long severeLateNs     = (long) (basePeriodNs * 2.5);
+                                            final long minDropSpacingNs = (long) (basePeriodNs * 0.75);
 
-                                                final boolean cooldownOk =
-                                                        (adaptxLastDropNs == 0L) ||
-                                                                ((nowNs - adaptxLastDropNs) >= minDropSpacingNs);
+                                            final boolean isLate         = frameAgeNs > lateNs;
+                                            final boolean isSeverelyLate = frameAgeNs > severeLateNs;
 
-                                                final boolean shouldDrop =
+                                            if (isLate) {
+                                                adaptxLateStreak++;
+                                            } else {
+                                                adaptxLateStreak = 0;
+                                            }
+
+                                            boolean lagging = false;
+                                            if (adaptxEwmaPresentIntervalNs > 0.0) {
+                                                // Consider backlog only if present rate is clearly slower than stream rate
+                                                lagging = adaptxEwmaPresentIntervalNs > (basePeriodNs * 1.20);
+                                            }
+
+                                            final boolean cooldownOk =
+                                                    (adaptxLastDropNs == 0L) ||
+                                                            ((nowNs - adaptxLastDropNs) >= minDropSpacingNs);
+
+                                            boolean shouldDrop = false;
+                                            if (!pureLfr) {
+                                                // Managed mode: allow rare drops under severe backlog.
+                                                shouldDrop =
                                                         isSeverelyLate
                                                                 && lagging
                                                                 && cooldownOk
                                                                 && (adaptxLateStreak >= 3);
+                                            } else {
+                                                // Pure LFR: never drop locally, keep strict latest-only semantics.
+                                                shouldDrop = false;
+                                            }
 
-                                                if (shouldDrop) {
-                                                    // Drop obviously stale frame to resync latency
-                                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                                    frameDropped = true;
-                                                    adaptxLastDropNs = nowNs;
-                                                    adaptxLateStreak = 0;
-                                                } else {
-                                                    // Present immediately with a monotonic timestamp
-                                                    videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                                    gpuKickPresentHook();
+                                            if (shouldDrop) {
+                                                // Drop obviously stale frame to resync latency
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                                frameDropped = true;
+                                                adaptxLastDropNs = nowNs;
+                                                adaptxLateStreak = 0;
+                                            } else {
+                                                // Present immediately with a monotonic timestamp
+                                                videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
+                                                gpuKickPresentHook();
 
-                                                    if (adaptxLastPresentNs != 0L) {
-                                                        long intervalNs = nowNs - adaptxLastPresentNs;
-                                                        if (intervalNs > 0L) {
-                                                            final double alphaPresent = 0.20;
-                                                            if (adaptxEwmaPresentIntervalNs <= 0.0) {
-                                                                adaptxEwmaPresentIntervalNs = intervalNs;
-                                                            } else {
-                                                                adaptxEwmaPresentIntervalNs +=
-                                                                        alphaPresent * (intervalNs - adaptxEwmaPresentIntervalNs);
-                                                            }
+                                                if (adaptxLastPresentNs != 0L) {
+                                                    long intervalNs = nowNs - adaptxLastPresentNs;
+                                                    if (intervalNs > 0L) {
+                                                        final double alphaPresent = 0.20;
+                                                        if (adaptxEwmaPresentIntervalNs <= 0.0) {
+                                                            adaptxEwmaPresentIntervalNs = intervalNs;
+                                                        } else {
+                                                            adaptxEwmaPresentIntervalNs +=
+                                                                    alphaPresent * (intervalNs - adaptxEwmaPresentIntervalNs);
                                                         }
                                                     }
-
-                                                    adaptxLastPresentNs = nowNs;
-                                                    lastRenderedFrameTimeNanos = nowNs;
                                                 }
-                                            } catch (IllegalStateException e) {
-                                                handleDecoderException(e);
-                                                return;
-                                            } catch (Throwable ignored) { }
-                                        } else {
-                                            // Legacy immediate render (pre-21): keep old behavior
-                                            try {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                                gpuKickPresentHook();
-                                            } catch (IllegalStateException e) {
-                                                handleDecoderException(e);
-                                                return;
-                                            } catch (Throwable ignored) { }
-                                        }
-                                    }
 
+                                                adaptxLastPresentNs = nowNs;
+                                                lastRenderedFrameTimeNanos = nowNs;
+                                            }
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) { }
+                                    } else {
+                                        // Legacy immediate render (pre-21): keep old behavior
+                                        try {
+                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                            gpuKickPresentHook();
+                                        } catch (IllegalStateException e) {
+                                            handleDecoderException(e);
+                                            return;
+                                        } catch (Throwable ignored) { }
+                                    }
+                                }
 
                                 activeWindowVideoStats.totalFramesRendered++;
                                 if (MediaCodecDecoderRenderer.this.perfHint != null
