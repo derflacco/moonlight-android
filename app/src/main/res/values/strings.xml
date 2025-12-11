@@ -747,6 +747,8 @@
     <string name="save">Save</string>
     <string name="title_low_latency_frame_balance">LFR (Experimental)</string>
     <string name="summary_low_latency_frame_balance">Minimizes delay by dropping queued frames.</string>
+    <string name="pref_lfr_mode_title">LFR modes</string>
+    <string name="pref_lfr_mode_summary">0: Pure (max reactivity), 1: Lite (safer on slower devices)</string>
     <string name="category_perf_monitor_settings">Performance Monitor</string>
 
     <string name="title_checkbox_full_screen">Enable Full Screen</string>

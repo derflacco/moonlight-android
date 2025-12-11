@@ -112,6 +112,8 @@ public class PreferenceConfiguration {
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String LOW_LATENCY_FRAME_BALANCE_PREF_STRING = "pref_low_latency_frame_balance";
+    // LFR mode slider: 0 = Pure, 1 = Lite (slow SoC-friendly)
+    private static final String LFR_MODE_PREF_STRING = "seekbar_lfr_mode";
      private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
@@ -407,7 +409,8 @@ public class PreferenceConfiguration {
     public boolean preferBigCores;
     public boolean enablePerfHints;
     public boolean preferLowerDelays;
-
+    // LFR runtime mode: 0 = Pure, 1 = Lite (slow SoC-friendly)
+    public int lfrMode;
     public boolean vibrateOsc;
     public boolean vibrateFallbackToDevice;
     public int vibrateFallbackToDeviceStrength;
@@ -682,6 +685,32 @@ public class PreferenceConfiguration {
         // default true: favor lower delay unless user opts out
         return prefs.getBoolean(LOW_LATENCY_FRAME_BALANCE_PREF_STRING, false);
     }
+    // LFR mode: 0 = Pure, 1 = Lite (slow SoC-friendly)
+    public static int getLfrMode(Context context) {
+        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        int mode;
+        try {
+            mode = prefs.getInt(LFR_MODE_PREF_STRING, 0);
+        } catch (ClassCastException e) {
+            int parsed = 0;
+            try {
+                String s = prefs.getString(LFR_MODE_PREF_STRING, "0");
+                parsed = Integer.parseInt(s);
+            } catch (Throwable ignored) {
+                parsed = 0;
+            }
+            mode = parsed;
+            try {
+                prefs.edit().putInt(LFR_MODE_PREF_STRING, mode).apply();
+            } catch (Throwable ignored) {}
+        }
+
+        if (mode < 0 || mode > 1) {
+            mode = 0;
+        }
+        return mode;
+    }
+
 private static int getFramePacingValue(Context context) {
         SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
 
@@ -987,6 +1016,9 @@ private static int getFramePacingValue(Context context) {
 
         config.preferLowerDelays = getPreferLowerDelays(context);
         config.preferLowerDelays = getPreferLowerDelays(context);
+        // Global LFR toggle + mode
+        config.preferLowerDelays = getPreferLowerDelays(context);
+        config.lfrMode = getLfrMode(context);
 
         // Big cores preference (non-root)
         config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);

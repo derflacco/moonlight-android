@@ -90,6 +90,15 @@
         android:title="@string/title_low_latency_frame_balance"
         android:summary="@string/summary_low_latency_frame_balance"
         app:iconSpaceReserved="false" />
+        <SeekBarPreference
+            android:key="seekbar_lfr_mode"
+            android:title="@string/pref_lfr_mode_title"
+            android:summary="@string/pref_lfr_mode_summary"
+            android:defaultValue="0"
+            app:min="0"
+            android:max="1"
+            app:showSeekBarValue="true"
+            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:key="checkbox_gpu_path_mode"
             android:title="@string/gpu_path_mode_title"

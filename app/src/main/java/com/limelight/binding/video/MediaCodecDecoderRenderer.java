@@ -48,10 +48,11 @@ import com.limelight.Game;
 
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+ //Gpu kick buffer
+     private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
-    private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
 
     private static final long AFFINITY_REFRESH_NS = 10_000_000_000L; // 10s (was 2s)
     private volatile long lastAffinityRefreshNs = 0L;
@@ -116,6 +117,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
+
+    // LFR mode at runtime: 0 = Pure, 1 = Lite (slow SoC-friendly)
+    private volatile int lfrMode = 0;
+
+    // Adaptive timeout used by LFR Lite (µs), auto-tuned at runtime
+    private volatile int lfrSlowTimeoutUs = 500;
+
+    /** Update LFR mode from app (0 = Pure, 1 = Lite). */
+    public void setLfrMode(int mode) {
+        this.lfrMode = (mode <= 0) ? 0 : 1;
+        // Reset adaptive timeout when switching back to Pure
+        if (this.lfrMode == 0) {
+            lfrSlowTimeoutUs = 500;
+        }
+    }
+
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
     public boolean isHdrActive() { return hdrActive; }
@@ -1556,60 +1573,175 @@ try {
                             lastAffinityRefreshNs = now;
                         }
                     }
-
-                    // PURE LFR / ULL path
+// LFR:
+// - PURE ULL (fast SoC): zero-timeout, non-blocking, latest-only
+// - SLOW_SOC mode: adaptive timeout (250.3000 us), latest-only, reduced decoder load
                     if (preferLowerDelays) {
                         try {
                             // Reuse a single BufferInfo to avoid per-loop allocations
                             final android.media.MediaCodec.BufferInfo __tmpInfo = latestInfo;
-                            int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            int __last = -1;
-                            long __lastPtsUs = -1L;
 
-// Drain non-blocking; keep only the newest buffer
-                            while (__idx >= 0) {
-                                final long ptsUs = __tmpInfo.presentationTimeUs;
+                            if (lfrMode == 1) {
+                                // ---------- LFR SLOW_SOC (adaptive, decoder-friendly) ----------
+                                // Start from current adaptive timeout (clamped to 250.3000 us)
+                                final int minTimeoutUs = 250;
+                                final int maxTimeoutUs = 3000;
+                                final int firstTimeoutUs =
+                                        Math.max(minTimeoutUs, Math.min(maxTimeoutUs, lfrSlowTimeoutUs));
 
-                                // Measure pure decode time at dequeue (for ALL frames, shown or discarded)
-                                try { updateDecodeLatencyStats(ptsUs); } catch (Throwable ignored) {}
+                                int __last = -1;
+                                long __lastPtsUs = -1L;
+                                int drained = 0;
+                                boolean drainedMultiple = false;
 
-                                if (__last >= 0) {
-                                    // Drop older buffer without rendering
-                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                }
+                                // First dequeue with adaptive timeout:
+                                // - On slow SoCs this avoids tight polling when the decoder is often empty
+                                int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, firstTimeoutUs);
 
-                                __last = __idx;
-                                __lastPtsUs = ptsUs;
-                                __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            }
+                                // Drain available buffers; keep only the newest (latest-only LFR)
+                                while (__idx >= 0) {
+                                    final long ptsUs = __tmpInfo.presentationTimeUs;
 
-                            if (__last >= 0) {
-                                final long __nowNs = System.nanoTime();
+                                    // Decode latency stats for ALL frames (even those discarded by LFR)
+                                    try {
+                                        updateDecodeLatencyStats(ptsUs);
+                                    } catch (Throwable ignored) {}
 
-                                // Present the newest buffer ASAP (timestamped)
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                    videoDecoder.releaseOutputBuffer(__last, __nowNs);
-                                    gpuKickPresentHook();
-                                } else {
-                                    videoDecoder.releaseOutputBuffer(__last, true);
-                                    gpuKickPresentHook();
-                                }
-
-                                try {
-                                    activeWindowVideoStats.totalFramesRendered++;
-                                    if (MediaCodecDecoderRenderer.this.perfHint != null
-                                            && MediaCodecDecoderRenderer.this.perfHint.isActive()
-                                            && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                    if (__last >= 0) {
+                                        // Drop older buffer without rendering
                                         try {
-                                            MediaCodecDecoderRenderer.this.perfHint.tockAndReport(MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                                            videoDecoder.releaseOutputBuffer(__last, false);
                                         } catch (Throwable ignored) {}
-                                        MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+                                        drained++;
+                                        drainedMultiple = true;
                                     }
 
-                                    numFramesOut++;
-                                } catch (Throwable ignored) {}
+                                    __last = __idx;
+                                    __lastPtsUs = ptsUs;
 
-                                continue;
+                                    // Soft cap: on slow SoCs we avoid draining too many buffers in one pass
+                                    final int drainSoftCap = (firstTimeoutUs <= 500) ? 4 : 3;
+                                    if (drained >= drainSoftCap) {
+                                        break;
+                                    }
+
+                                    // Follow-ups: non-blocking to chase the newest frame
+                                    __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                }
+
+                                // Adaptive timeout tuning:
+                                // - If we often hit TRY_AGAIN_LATER  -> increase timeout (less polling)
+                                // - If we frequently drain multiple frames -> reduce timeout (more responsive)
+                                if (__idx == android.media.MediaCodec.INFO_TRY_AGAIN_LATER) {
+                                    lfrSlowTimeoutUs = Math.min(maxTimeoutUs, lfrSlowTimeoutUs + 250);
+                                } else if (__idx == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                                    try {
+                                        android.media.MediaFormat __fmt = videoDecoder.getOutputFormat();
+                                    } catch (Throwable ignored) {}
+                                } else if (__idx == android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+                                    // pre-21: ignore
+                                } else {
+                                    if (drainedMultiple) {
+                                        lfrSlowTimeoutUs = Math.max(minTimeoutUs, lfrSlowTimeoutUs - 250);
+                                    }
+                                }
+
+                                // Present only the newest buffer (latest-only)
+                                if (__last >= 0) {
+                                    final long __nowNs = System.nanoTime();
+
+                                    try {
+                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                            videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                                            gpuKickPresentHook();
+                                        } else {
+                                            videoDecoder.releaseOutputBuffer(__last, true);
+                                            gpuKickPresentHook();
+                                        }
+                                    } catch (Throwable ignored) {}
+
+                                    // Stats and performance hint accounting
+                                    try {
+                                        activeWindowVideoStats.totalFramesRendered++;
+
+                                        if (MediaCodecDecoderRenderer.this.perfHint != null
+                                                && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                                                && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                            try {
+                                                MediaCodecDecoderRenderer.this.perfHint.tockAndReport(
+                                                        MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                                            } catch (Throwable ignored) {}
+                                            MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+                                        }
+
+                                        numFramesOut++;
+                                    } catch (Throwable ignored) {}
+
+                                    // We handled this frame via LFR SLOW_SOC; skip the rest of the loop
+                                    continue;
+                                }
+                            } else {
+                                // ---------- PURE LFR / ULL (fast SoC, zero-timeout) ----------
+                                // Non-blocking dequeue: pure ULL, never waits for the decoder
+                                int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                int __last = -1;
+                                long __lastPtsUs = -1L;
+
+                                // Drain non-blocking; keep only the newest buffer
+                                while (__idx >= 0) {
+                                    final long ptsUs = __tmpInfo.presentationTimeUs;
+
+                                    // Measure pure decode time at dequeue (for ALL frames)
+                                    try {
+                                        updateDecodeLatencyStats(ptsUs);
+                                    } catch (Throwable ignored) {}
+
+                                    if (__last >= 0) {
+                                        // Drop older buffer without rendering
+                                        try {
+                                            videoDecoder.releaseOutputBuffer(__last, false);
+                                        } catch (Throwable ignored) {}
+                                    }
+
+                                    __last = __idx;
+                                    __lastPtsUs = ptsUs;
+                                    __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                }
+
+                                if (__last >= 0) {
+                                    final long __nowNs = System.nanoTime();
+
+                                    // Present the newest buffer ASAP (timestamped)
+                                    try {
+                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                            videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                                            gpuKickPresentHook();
+                                        } else {
+                                            videoDecoder.releaseOutputBuffer(__last, true);
+                                            gpuKickPresentHook();
+                                        }
+                                    } catch (Throwable ignored) {}
+
+                                    // Stats and performance hint accounting
+                                    try {
+                                        activeWindowVideoStats.totalFramesRendered++;
+
+                                        if (MediaCodecDecoderRenderer.this.perfHint != null
+                                                && MediaCodecDecoderRenderer.this.perfHint.isActive()
+                                                && MediaCodecDecoderRenderer.this.phmWorkStartNs != 0L) {
+                                            try {
+                                                MediaCodecDecoderRenderer.this.perfHint.tockAndReport(
+                                                        MediaCodecDecoderRenderer.this.phmWorkStartNs);
+                                            } catch (Throwable ignored) {}
+                                            MediaCodecDecoderRenderer.this.phmWorkStartNs = 0L;
+                                        }
+
+                                        numFramesOut++;
+                                    } catch (Throwable ignored) {}
+
+                                    // We handled this frame in pure ULL path; skip the rest of the loop
+                                    continue;
+                                }
                             }
                         } catch (Throwable ignored) {}
                     }

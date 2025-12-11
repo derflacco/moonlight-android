@@ -167,15 +167,19 @@ public class StreamSettings extends AppCompatActivity {
                 (sp, key) -> {
                     if ("checkbox_gpu_path_mode".equals(key)                 // Direct Present
                             || "pref_video_upscale_enable".equals(key)       // FSR
-                            || "pref_video_hdr_enable".equals(key)           // HDR
-                            || "pref_hdr_enable".equals(key)                 // HDR
-                            || "pref_hdr_pipeline_enable".equals(key)        // HDR
+                            || "pref_video_hdr_enable".equals(key)           // HDR (old)
+                            || "pref_hdr_enable".equals(key)                 // HDR (legacy)
+                            || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
                             || "frame_pacing".equals(key)                    // Legacy pacing list
                             || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
-                            || "seekbar_frame_pacing_profile".equals(key)) { // Unified pacing profile slider
+                            || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
+                            || "pref_low_latency_frame_balance".equals(key)  // LFR toggle (Prefer lower delays)
+                    ) {
+                        // Re-evaluate UI locks and dependent visibility (including LFR mode slider)
                         updateLocks();
                     }
                 };
+
 
         private void updateLocks() {
             // --- UI state management ---
@@ -309,7 +313,7 @@ public class StreamSettings extends AppCompatActivity {
             Preference warpSeek    = findPreference("seekbar_warp_factor");
             Preference profileSeek = findPreference("seekbar_frame_pacing_profile");  // Unified pacing profile slider
             Preference gpuKickPref = findPreference("pref_gpu_kick_enable");          // GPU kick toggle (now hidden)
-
+            Preference lfrModeSeek = findPreference("seekbar_lfr_mode");              // LFR mode slider (Pure/Lite)
 // GPU Kick preference: permanently hidden, engine now forces GPU kick in Direct Present
             if (gpuKickPref != null) {
                 try {
@@ -333,6 +337,15 @@ public class StreamSettings extends AppCompatActivity {
 
             if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
             if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
+// LFR mode slider: visible only when "Prefer lower delays" is enabled
+            if (lfrModeSeek != null) {
+                try {
+                    lfrModeSeek.setVisible(preferLowerDelays);
+                } catch (Throwable ignored) {
+                    lfrModeSeek.setEnabled(preferLowerDelays);
+                }
+                lfrModeSeek.setEnabled(preferLowerDelays);
+            }
 
             // Warp factor visibility rules:
             // Permanently disabled - warp factor functionality is no longer supported.
