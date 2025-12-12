@@ -1876,7 +1876,7 @@ try {
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (pNow == null || pNow.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
 
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     final long newPtsUs = info.presentationTimeUs;
 
                                     // AdaptX: update stream period estimate for drained buffers
