@@ -401,6 +401,12 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     }
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
+    // Frame rendered telemetry (API 23+): register callback to track render-time deltas
+    private HandlerThread frameRenderedThread;
+    private Handler frameRenderedHandler;
+    private final java.util.concurrent.atomic.AtomicLong frameRenderedTotalNs =
+            new java.util.concurrent.atomic.AtomicLong(0L);
+    private volatile boolean frameRenderedListenerSet = false;
 
     private int numSpsIn;
     private int numPpsIn;
@@ -915,6 +921,33 @@ try {
         // Start the decoder
         videoDecoder.start();
         MediaCodecHelper.applyFrameworkLowLatencyPostStart(videoDecoder);
+// Telemetry thread: offload frame-render callbacks to a dedicated HandlerThread
+
+        if (USE_FRAME_RENDER_TIME
+                && !frameRenderedListenerSet
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+            frameRenderedThread = new HandlerThread("Video - FrameRendered", Process.THREAD_PRIORITY_DISPLAY);
+            frameRenderedThread.start();
+            frameRenderedHandler = new Handler(frameRenderedThread.getLooper());
+
+            videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
+                @Override
+                public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
+                    // presentationTimeUs is the timestamp we queued (may not share the same timebase).
+                    // Keep this lightweight and thread-safe.
+                    final long ptsNs = presentationTimeUs * 1000L;
+                    final long deltaNs = renderTimeNanos - ptsNs;
+
+                    if (deltaNs >= 0L && deltaNs < 1_000_000_000L) {
+                        frameRenderedTotalNs.addAndGet(deltaNs);
+                    }
+                }
+            }, frameRenderedHandler);
+
+            frameRenderedListenerSet = true;
+        }
+
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
 try {
     MediaFormat __inF = videoDecoder.getInputFormat();
@@ -1060,8 +1093,12 @@ try {
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
                     long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
                     if (delta >= 0 && delta < 1000) {
+                        // Accumulate render delta (keep callback hot-path minimal and lock-free)
                         if (USE_FRAME_RENDER_TIME) {
-                            activeWindowVideoStats.totalTimeMs += delta;
+                            final long deltaNs = frameRenderedTotalNs.getAndSet(0L);
+                            if (deltaNs > 0L) {
+                                activeWindowVideoStats.totalTimeMs += (deltaNs / 1_000_000L);
+                            }
                         }
                     }
                 }
@@ -2539,6 +2576,23 @@ try {
         synchronized (codecRecoveryMonitor) {
             codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
             codecRecoveryMonitor.notifyAll();
+        }
+        // Unregister frame-render callback to stop telemetry and avoid late callbacks
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && videoDecoder != null) {
+                videoDecoder.setOnFrameRenderedListener(null, null);
+            }
+        } catch (Throwable ignored) {}
+
+        frameRenderedListenerSet = false;
+
+        final HandlerThread t = frameRenderedThread;
+        frameRenderedThread = null;
+        frameRenderedHandler = null;
+
+        if (t != null) {
+            try { t.quitSafely(); } catch (Throwable ignored) {}
+            try { t.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
 
         // Post a quit message to the Choreographer looper (if we have one)
