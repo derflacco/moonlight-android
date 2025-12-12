@@ -2313,21 +2313,28 @@ try {
             else if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) != 0) {
                 // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
                 // submit the CSD blob in a separate input buffer for each IDR frame.
-                if (!submittedCsd || !fusedIdrFrame) {
+                if (!submittedCsd || (!fusedIdrFrame && csdDirty)) {
                     if (!fetchNextInputBuffer()) {
                         return MoonBridge.DR_NEED_IDR;
                     }
 
+                    // Start clean (API>=21 clear is also enforced in fetchNextInputBuffer, but keep it explicit here)
+                    nextInputBuffer.clear();
+
+                    int csdBytes = 0;
+                    for (byte[] b : vpsBuffers) csdBytes += b.length;
+                    for (byte[] b : spsBuffers) csdBytes += b.length;
+                    for (byte[] b : ppsBuffers) csdBytes += b.length;
+
+                    if (csdBytes > nextInputBuffer.remaining()) {
+                        LimeLog.info("CSD too large for one input buffer: " + csdBytes + " > " + nextInputBuffer.remaining());
+                        return MoonBridge.DR_NEED_IDR;
+                    }
+
                     // Submit all CSD when we receive the first non-CSD blob in an IDR frame
-                    for (byte[] vpsBuffer : vpsBuffers) {
-                        nextInputBuffer.put(vpsBuffer);
-                    }
-                    for (byte[] spsBuffer : spsBuffers) {
-                        nextInputBuffer.put(spsBuffer);
-                    }
-                    for (byte[] ppsBuffer : ppsBuffers) {
-                        nextInputBuffer.put(ppsBuffer);
-                    }
+                    for (byte[] vpsBuffer : vpsBuffers) nextInputBuffer.put(vpsBuffer);
+                    for (byte[] spsBuffer : spsBuffers) nextInputBuffer.put(spsBuffer);
+                    for (byte[] ppsBuffer : ppsBuffers) nextInputBuffer.put(ppsBuffer);
 
                     if (!queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) {
                         return MoonBridge.DR_NEED_IDR;
@@ -2339,6 +2346,14 @@ try {
 
                     // Remember that we submitted CSD globally for this MediaCodec instance
                     submittedCsd = true;
+                    csdDirty = false;
+
+                    // If we are not using fused IDR frames, we don't need to keep per-IDR CSD around
+                    if (!fusedIdrFrame) {
+                        vpsBuffers.clear();
+                        spsBuffers.clear();
+                        ppsBuffers.clear();
+                    }
 
                     if (needsBaselineSpsHack) {
                         needsBaselineSpsHack = false;
