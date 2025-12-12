@@ -193,7 +193,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
                         return 2000;
                     } else {
                         // ADAPTX_MODE_SYNC
-                        return 1500;
+                        return 1000;
                     }
                 }
 
