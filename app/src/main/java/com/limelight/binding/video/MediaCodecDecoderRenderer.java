@@ -1639,6 +1639,15 @@ try {
                     // Reset all pacing statistics if pacing profile changed
                     // (Affects both ADAPTX and MIN_LATENCY modes)
                     if (p != null && p.framePacing != lastPacingProfile) {
+                        if (lastPacingProfile == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            Integer __idx;
+                            while ((__idx = outputBufferQueue.poll()) != null) {
+                                try { videoDecoder.releaseOutputBuffer(__idx, false); } catch (Throwable ignored) {}
+                            }
+                        } else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            outputBufferQueue.clear();
+                        }
+
                         resetAllPacingStats();
                         lastPacingProfile = p.framePacing;
                     }
