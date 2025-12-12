@@ -50,8 +50,8 @@ public final class GpuKickPbuffer {
             -1.0f,  3.0f
     };
 
-    private static final int PBUFFER_WIDTH = 32;
-    private static final int PBUFFER_HEIGHT = 32;
+    private static final int PBUFFER_WIDTH = 16;
+    private static final int PBUFFER_HEIGHT = 16;
 
     public void setEnabled(boolean enabled) {
         boolean was = this.enabled;
@@ -205,7 +205,7 @@ public final class GpuKickPbuffer {
 
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
             GLES20.glUseProgram(0);
-            GLES20.glFinish();
+            GLES20.glFlush();
         } catch (Throwable t) {
             if (DEBUG) Log.e(TAG, "kickOnce error", t);
         }
