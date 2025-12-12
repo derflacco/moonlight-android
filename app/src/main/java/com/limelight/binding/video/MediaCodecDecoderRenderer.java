@@ -49,7 +49,14 @@ import com.limelight.Game;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
  //Gpu kick buffer
-     private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
+ private volatile com.limelight.gpu.GpuKickPbuffer gpuKickPbuffer;
+    private final Object gpuKickLock = new Object();
+    private HandlerThread gpuKickHandlerThread;
+    private Handler gpuKickHandler;
+    private final java.util.concurrent.atomic.AtomicBoolean gpuKickKickPending =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
@@ -58,6 +65,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile long lastAffinityRefreshNs = 0L;
     private volatile String lastAllowedMask = null;
     private volatile boolean affinityPinned = false;
+    private volatile boolean affinityWatcherStarted = false;
+
+    private static void stopAffinityWatcherBestEffort() {
+        try {
+            Class<?> cls = com.limelight.utils.CpuAffinity.class;
+            String[] names = new String[] {
+                    "stopAffinityWatcher",
+                    "stopAffinityWatcherIfRunning",
+                    "stopWatcher"
+            };
+            for (String n : names) {
+                try {
+                    java.lang.reflect.Method m = cls.getDeclaredMethod(n);
+                    m.setAccessible(true);
+                    m.invoke(null);
+                    return;
+                } catch (NoSuchMethodException ignored) {
+                    // Try next
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
       // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
     // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
@@ -1429,7 +1459,16 @@ try {
                 }
 
 // Track DP state to adapt at runtime
-                boolean dpLast = usingDirectPresent;
+// --- GPU kick (thread-affine EGL) ---
+                boolean dpLast = false;
+                try {
+                    dpLast = shouldUseGpuKick(prefs);
+                    if (dpLast) {
+                        startGpuKickThreadIfNeeded();
+                        LimeLog.info("GpuKickPbuffer: enabled (Direct Present)");
+                    }
+                } catch (Throwable ignored) {}
+
 
                 // Log TID and current affinity
                 try {
@@ -1479,7 +1518,10 @@ try {
                                     try { android.os.Process.setThreadPriority(tid, prio); } catch (Throwable ignored) {}
                                     try { com.limelight.utils.CpuAffinity.setAffinityForTid(tid, big); } catch (Throwable ignored) {}
                                 }
-                                try { com.limelight.utils.CpuAffinity.startAffinityWatcherWithFixedDelay(5000L); } catch (Throwable ignored) {}
+                                try {
+                                    com.limelight.utils.CpuAffinity.startAffinityWatcherWithFixedDelay(5000L);
+                                    MediaCodecDecoderRenderer.this.affinityWatcherStarted = true;
+                                } catch (Throwable ignored) {}
                             }
                         } catch (Throwable ignored) {}
 // Log what we tried to set (native detection) + the kernel result
@@ -1574,63 +1616,32 @@ try {
                         resetAllPacingStats();
                         lastPacingProfile = p.framePacing;
                     }
-                    // Runtime disable -> tear down
-                    if (gpuKickPbuffer != null && p != null && !p.enableGpuKick) {
-                        try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
-                        gpuKickPbuffer = null;
-                    }
-
-                    // Runtime DP change -> reinit / release
-                    if (p != null && p.enableGpuKick && android.os.Build.VERSION.SDK_INT >= 17) {
-                        boolean dpNow =
-                                (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW)
-                                        || p.gpuPathMode;
+                    // Runtime DP change -> start/stop GPU kick thread
+                    try {
+                        final boolean dpNow = shouldUseGpuKick(p);
                         if (dpNow != dpLast) {
-                            try {
-                                if (gpuKickPbuffer != null) {
-                                    gpuKickPbuffer.release();
-                                    gpuKickPbuffer = null;
-                                }
-                            } catch (Throwable ignored) {}
-
                             if (dpNow) {
-                                try {
-                                    gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
-                                    gpuKickPbuffer.setEnabled(true);
-                                    gpuKickPbuffer.initOnThisThread();
-                                    LimeLog.info("GpuKickPbuffer: re-init after DP toggle (now DP=true)");
-                                } catch (Throwable t) {
-                                    gpuKickPbuffer = null;
-                                }
+                                startGpuKickThreadIfNeeded();
+                                LimeLog.info("GpuKickPbuffer: enabled after DP toggle (now DP=true)");
                             } else {
-                                try {
-                                    LimeLog.info("GpuKickPbuffer: disabled after DP toggle (now DP=false)");
-                                } catch (Throwable ignored) {}
+                                stopGpuKickThread();
+                                LimeLog.info("GpuKickPbuffer: disabled after DP toggle (now DP=false)");
                             }
-
                             dpLast = dpNow;
+                        } else if (!dpNow && gpuKickHandlerThread != null) {
+                            // Safety: ensure we don't keep the kick thread alive when not needed
+                            stopGpuKickThread();
                         }
+                    } catch (Throwable ignored) {}
+
+
+                    // Stop watcher if preferBigCores was toggled off at runtime
+                    if (MediaCodecDecoderRenderer.this.affinityWatcherStarted && (p == null || !p.preferBigCores)) {
+                        stopAffinityWatcherBestEffort();
+                        MediaCodecDecoderRenderer.this.affinityWatcherStarted = false;
                     }
 //* Pin hot threads to big cluster *//
-                    // Periodic sticky affinity refresh
-                    if (p != null && p.preferBigCores) {
-                        final long now = android.os.SystemClock.elapsedRealtimeNanos();
-                        if (now - lastAffinityRefreshNs >= AFFINITY_REFRESH_NS) {
-                            try {
-                                String maskBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                                if (lastAllowedMask == null || !maskBefore.equals(lastAllowedMask)) {
-                                    com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
-                                    String maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                                    if (BuildConfig.DEBUG) {
-                                        LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + maskBefore
-                                                + " allowed_after=" + maskAfter);
-                                    }
-                                    lastAllowedMask = maskAfter;
-                                }
-                            } catch (Throwable ignored) {}
-                            lastAffinityRefreshNs = now;
-                        }
-                    }
+
 // LFR:
 // - PURE ULL (fast SoC): zero-timeout, non-blocking, latest-only
 // - SLOW_SOC mode: adaptive timeout (250.3000 us), latest-only, reduced decoder load
@@ -2473,7 +2484,12 @@ try {
         stopping = true;
 // Stop CpuWarmUp immediately
         try { cpuWarmUp.stop(); } catch (Throwable ignored) {}
-
+        // Stop GPU kick and affinity watcher early to avoid work after teardown
+        stopGpuKickThread();
+        if (affinityWatcherStarted) {
+            stopAffinityWatcherBestEffort();
+            affinityWatcherStarted = false;
+        }
         // Halt the rendering thread
         if (rendererThread != null) {
             rendererThread.interrupt();
@@ -3477,13 +3493,128 @@ try {
     }
 
     // Call after presenting a frame to nudge GPU clocks in Direct Present path
+    private boolean shouldUseGpuKick(PreferenceConfiguration p) {
+        if (p == null || !p.enableGpuKick) return false;
+        if (android.os.Build.VERSION.SDK_INT < 17) return false;
+        return p.gpuPathMode || (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
+    }
+
+    private void startGpuKickThreadIfNeeded() {
+        synchronized (gpuKickLock) {
+            if (gpuKickHandlerThread != null) return;
+
+            gpuKickHandlerThread = new HandlerThread("Video - GpuKick", Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            gpuKickHandlerThread.start();
+            gpuKickHandler = new Handler(gpuKickHandlerThread.getLooper());
+
+            // Initialize the EGL-backed kick surface on the owning thread.
+            gpuKickHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (gpuKickPbuffer != null) {
+                            try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
+                            gpuKickPbuffer = null;
+                        }
+
+                        gpuKickPbuffer = new com.limelight.gpu.GpuKickPbuffer();
+                        gpuKickPbuffer.setEnabled(true);
+                        gpuKickPbuffer.initOnThisThread();
+                        if (BuildConfig.DEBUG) {
+                            LimeLog.info("GpuKickPbuffer: initialized (GpuKick thread)");
+                        }
+                    } catch (Throwable t) {
+                        gpuKickPbuffer = null;
+                        try { LimeLog.info("GpuKickPbuffer: init failed, disabled: " + t); } catch (Throwable ignored) {}
+                    }
+                }
+            });
+        }
+    }
+
+    private void stopGpuKickThread() {
+        final HandlerThread t;
+        final Handler h;
+
+        synchronized (gpuKickLock) {
+            t = gpuKickHandlerThread;
+            h = gpuKickHandler;
+            gpuKickHandlerThread = null;
+            gpuKickHandler = null;
+            gpuKickKickPending.set(false);
+        }
+
+        if (t == null) return;
+
+        // If we're already on the kick thread, release directly and quit without joining.
+        if (Thread.currentThread() == t) {
+            try { if (gpuKickPbuffer != null) { gpuKickPbuffer.release(); } } catch (Throwable ignored) {}
+            gpuKickPbuffer = null;
+            try { t.quitSafely(); } catch (Throwable ignored) {}
+            return;
+        }
+
+        try {
+            if (h != null) {
+                h.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (gpuKickPbuffer != null) {
+                                try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
+                                gpuKickPbuffer = null;
+                            }
+                        } finally {
+                            try { t.quitSafely(); } catch (Throwable ignored) {}
+                        }
+                    }
+                });
+            } else {
+                try { if (gpuKickPbuffer != null) { gpuKickPbuffer.release(); } } catch (Throwable ignored) {}
+                gpuKickPbuffer = null;
+                try { t.quitSafely(); } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            t.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // Call after presenting a frame to nudge GPU clocks in Direct Present path.
+    // Note: EGL contexts are thread-affine, so we always execute kicks on the GpuKick thread.
     private void gpuKickPresentHook() {
         try {
-            if (gpuKickPbuffer != null && gpuKickPbuffer.isEnabled()) {
-                gpuKickPbuffer.kickOnce();
+            final PreferenceConfiguration p = this.prefs;
+            if (!shouldUseGpuKick(p)) {
+                return;
+            }
+
+            startGpuKickThreadIfNeeded();
+
+            final Handler h;
+            synchronized (gpuKickLock) { h = gpuKickHandler; }
+            if (h == null) return;
+
+            // Coalesce kicks to avoid growing the Handler queue under load.
+            if (gpuKickKickPending.compareAndSet(false, true)) {
+                h.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        gpuKickKickPending.set(false);
+                        try {
+                            if (gpuKickPbuffer != null && gpuKickPbuffer.isEnabled()) {
+                                gpuKickPbuffer.kickOnce();
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                });
             }
         } catch (Throwable ignored) {}
     }
+
     // Helper for AdaptX present events: update EWMA present interval + timestamps
     private void adaptxOnPresent(long nowNs) {
         if (adaptxLastPresentNs != 0L) {
