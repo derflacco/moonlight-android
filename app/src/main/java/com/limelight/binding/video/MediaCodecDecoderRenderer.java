@@ -1494,14 +1494,15 @@ try {
                 } catch (Throwable ignored) {}
 
 
-                // Log TID and current affinity
-                try {
-                    int tid = android.os.Process.myTid();
-                    String allowedBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                    LimeLog.info("RendererAffinity: tid=" + tid
-                            + " allowed_before=" + allowedBefore
-                            + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
-                } catch (Throwable ignored) {}
+//                  Log TID and current affinity
+//DISABLED: uncomment for logging
+//                try {
+//                    int tid = android.os.Process.myTid();
+//                    String allowedBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+//                    LimeLog.info("RendererAffinity: tid=" + tid
+//                            + " allowed_before=" + allowedBefore
+//                            + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
+//                } catch (Throwable ignored) {}
 
                 // Best-effort pinning to big cores
                 try {
@@ -1548,19 +1549,20 @@ try {
                                 } catch (Throwable ignored) {}
                             }
                         } catch (Throwable ignored) {}
-// Log what we tried to set (native detection) + the kernel result
-                        int[] bigNative = com.limelight.utils.CpuAffinity.detectBigCoresForDebug();
-                        String allowedAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                        LimeLog.info("RendererAffinity: nativeLoaded=" + com.limelight.utils.CpuAffinity.isNativeLoaded()
-                                + " big_native=" + java.util.Arrays.toString(bigNative)
-                                + " allowed_after=" + allowedAfter);
-
-                        MediaCodecDecoderRenderer.this.lastAllowedMask = allowedAfter;
-                        MediaCodecDecoderRenderer.this.affinityPinned = true;
-                        MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
-
-                        int currentCpu = com.limelight.utils.CpuAffinity.getCurrentCpuOrMinus1();
-                        LimeLog.info("RendererAffinity: current_cpu=" + currentCpu);
+//// Log what we tried to set (native detection) + the kernel result
+//DISABLED: uncomment for logging
+//                        int[] bigNative = com.limelight.utils.CpuAffinity.detectBigCoresForDebug();
+//                        String allowedAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+//                        LimeLog.info("RendererAffinity: nativeLoaded=" + com.limelight.utils.CpuAffinity.isNativeLoaded()
+//                                + " big_native=" + java.util.Arrays.toString(bigNative)
+//                                + " allowed_after=" + allowedAfter);
+//
+//                        MediaCodecDecoderRenderer.this.lastAllowedMask = allowedAfter;
+//                        MediaCodecDecoderRenderer.this.affinityPinned = true;
+//                        MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
+//
+//                        int currentCpu = com.limelight.utils.CpuAffinity.getCurrentCpuOrMinus1();
+//                        LimeLog.info("RendererAffinity: current_cpu=" + currentCpu);
                     }
                 } catch (Throwable ignored) {}
 
@@ -2368,9 +2370,10 @@ try {
                     MediaCodecDecoderRenderer.this.affinityPinned = false;
                     MediaCodecDecoderRenderer.this.lastAllowedMask = null;
                     MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
-                    LimeLog.info("RendererAffinity: cleared to all online CPUs");
-                    String cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                    LimeLog.info("RendererAffinity: cleared_mask=" + cleared);
+//DISABLED: uncomment for logging
+//                    LimeLog.info("RendererAffinity: cleared to all online CPUs");
+//                    String cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+//                    LimeLog.info("RendererAffinity: cleared_mask=" + cleared);
                 } catch (Throwable ignored) {}
                 //* Pin hot threads to big cluster *//
             }
