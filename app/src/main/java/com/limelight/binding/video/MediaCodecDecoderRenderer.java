@@ -2479,6 +2479,9 @@ try {
                     if (nextInputBuffer == null) {
                         // Not a valid dequeued buffer, try again next frame
                         nextInputBufferIndex = -1;
+                    } else {
+                        // Always start from a clean buffer position/limit
+                        nextInputBuffer.clear();
                     }
                 } else {
                     nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
@@ -3758,9 +3761,14 @@ try {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
                         nextInputBufferIndex = -1;
+                    } else {
+                        // Always start from a clean buffer position/limit
+                        nextInputBuffer.clear();
                     }
                 } else {
                     nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
+
+                    // Always start from a clean buffer position/limit
                     nextInputBuffer.clear();
                 }
             }
