@@ -264,17 +264,4 @@ public final class InputSender implements Closeable {
     public void close() {
         shutdown();
     }
-
-    /** Finalizer as backup for resource cleanup */
-    @Override
-    protected void finalize() throws Throwable {
-        try {
-            if (!stopped.get()) {
-                Log.w(TAG, "InputSender was not properly shutdown before finalization");
-                shutdown();
-            }
-        } finally {
-            super.finalize();
-        }
-    }
 }
