@@ -169,24 +169,52 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     }
 
     private int getOutputDequeueTimeoutUs() {
-        // PURE LFR (latest-only): use configured timeout (0 µs)
-        if (preferLowerDelays) return preferLowerDelaysTimeoutUs;
+        // Pure LFR / ULL: use configured timeout (typically 0 µs).
+        if (preferLowerDelays) {
+            return preferLowerDelaysTimeoutUs;
+        }
 
         if (prefs != null) {
-            switch (prefs.framePacing) {
+            final int pacing = prefs.framePacing;
+
+            switch (pacing) {
+                case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
+                    // GPU_RAW: low-latency, short timeout to avoid long decoder stalls.
+                    return 500;
+                case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
+                    // Min latency: low-latency EWMA, short timeout to avoid long decoder stalls.
+                    return 500;
+                case PreferenceConfiguration.FRAME_PACING_ADAPTX: {
+                    // AdaptX: per-mode timeouts.
+                    final int axMode = prefs.adaptxMode;
+                    if (axMode == PreferenceConfiguration.ADAPTX_MODE_DECODER_SAFE) {
+                        return 2500;
+                    } else if (axMode == PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS) {
+                        return 2000;
+                    } else {
+                        // ADAPTX_MODE_SYNC
+                        return 1500;
+                    }
+                }
+
                 case PreferenceConfiguration.FRAME_PACING_BALANCED:
                     return 1000;
+
                 case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                     return 2000;
+
                 case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
                     return 1500;
+
                 default:
                     break;
             }
         }
-        // Default: small wait to avoid spin on buggy codecs
+
+        // Default: small wait to avoid busy spin on buggy codecs.
         return 500;
     }
+
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
