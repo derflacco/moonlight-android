@@ -2673,6 +2673,8 @@ try {
         // If codec recovery is required, always return false to ensure the caller will request
         // an IDR frame to complete the codec recovery.
         if (codecRecovered) {
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
             return false;
         }
 
@@ -2682,7 +2684,7 @@ try {
         // We must propagate the return value here in order to properly handle
         // codec recovery happening in fetchNextInputBuffer(). If we don't, we'll
         // never get an IDR frame to complete the recovery process.
-        return fetchNextInputBuffer();
+        return prefetchNextInputBuffer();
     }
 
     private void doProfileSpecificSpsPatching(SeqParameterSet sps) {
@@ -3686,7 +3688,44 @@ try {
 
         return basePeriodNs;
     }
+    // Non-blocking best-effort prefetch to avoid stalling the decode thread after queueing input.
+// Returns false only when codec recovery is required, so the caller can request an IDR frame.
+    private boolean prefetchNextInputBuffer() {
+        boolean codecRecovered;
 
+        if (nextInputBuffer != null) {
+            return true;
+        }
+
+        try {
+            nextInputBufferIndex = videoDecoder.dequeueInputBuffer(0);
+            if (nextInputBufferIndex >= 0) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                    if (nextInputBuffer == null) {
+                        nextInputBufferIndex = -1;
+                    }
+                } else {
+                    nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
+                    nextInputBuffer.clear();
+                }
+            }
+        } catch (IllegalStateException e) {
+            handleDecoderException(e);
+            return false;
+        } finally {
+            codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+        }
+
+        if (codecRecovered) {
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
+            return false;
+        }
+
+        // Best-effort: it's OK if no buffer is available right now.
+        return true;
+    }
 private boolean isMTKDecoderName(String name) {
     if (name == null) return false;
     String n = name.toLowerCase();
