@@ -572,20 +572,26 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     }
 
     public void setRenderTarget(Surface renderTarget) {
-        // Tear down previous upscaler if surface changed
-        if (this.renderTarget != null && this.renderTarget != renderTarget && glUpscaler != null) {
-            try { __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
-            glUpscaler = null;
-            if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
-        }
-        this.renderTarget = renderTarget;
+        synchronized (upscalerLock) {
+            // Tear down previous upscaler if surface changed
+            if (this.renderTarget != null && this.renderTarget != renderTarget) {
+                releaseUpscalerLocked();
+            }
 
-        // Re-apply presentation hint to upscaler when render target may change
-        try { if (glUpscaler != null) {
-            java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
-            __m.invoke(glUpscaler, context);
-        } } catch (Throwable ignored) {}
-}
+            this.renderTarget = renderTarget;
+
+            // Re-apply presentation hint to upscaler when render target may change
+            try {
+                if (glUpscaler != null) {
+                    java.lang.reflect.Method __m = glUpscaler.getClass().getMethod(
+                            "setPresentationSizeHintFromContext",
+                            android.content.Context.class);
+                    __m.invoke(glUpscaler, context);
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
@@ -834,44 +840,50 @@ return videoFormat;
         // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
         Surface __codecSurface = renderTarget;
         if (prefs != null && prefs.videoUpscaleEnable) {
-            try {
-                if (glUpscaler == null) {
-                    glUpscaler = __fsrMaybeCreate((Object) glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
-                    decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
-                    // Provide presentation-size hint from Context if available
-                    try {
-                        java.lang.reflect.Method m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
-                        m.invoke(glUpscaler, context);
-                    } catch (Throwable ignored) {}
-}
-                __codecSurface = decoderInputSurfaceForUpscale;
-                if (__codecSurface == null) {
+            synchronized (upscalerLock) {
+                try {
+                    if (glUpscaler == null) {
+                        glUpscaler = __fsrMaybeCreate((Object) glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
+                        decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
+                        // Provide presentation-size hint from Context if available
+                        try {
+                            java.lang.reflect.Method m = glUpscaler.getClass().getMethod(
+                                    "setPresentationSizeHintFromContext",
+                                    android.content.Context.class);
+                            m.invoke(glUpscaler, context);
+                        } catch (Throwable ignored) {}
+                    }
+
+                    __codecSurface = decoderInputSurfaceForUpscale;
+                    if (__codecSurface == null) {
+                        __codecSurface = renderTarget;
+                    }
+                } catch (Throwable t) {
+                    LimeLog.warning("GL upscaler init failed; falling back: " + t);
+                    releaseUpscalerLocked();
                     __codecSurface = renderTarget;
                 }
-            } catch (Throwable t) {
-                LimeLog.warning("GL upscaler init failed; falling back: " + t);
-                try { if (glUpscaler != null) __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
-                glUpscaler = null;
-                decoderInputSurfaceForUpscale = null;
-                __codecSurface = renderTarget;
             }
         }
         videoDecoder.configure(format, __codecSurface, null, 0);
 
         // Start GL upscaler loop if present
-        try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
-        try {
-            if (glUpscaler != null) {
-                boolean dbg = false;
-                if (prefs != null) {
-                    dbg = prefs.enablePerfOverlayLite
-                            && prefs.enablePerfOverlayLiteAdvanced
-                            && prefs.videoUpscaleEnable
-                            && !prefs.gpuPathMode;
+        synchronized (upscalerLock) {
+            try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
+            try {
+                if (glUpscaler != null) {
+                    boolean dbg = false;
+                    if (prefs != null) {
+                        dbg = prefs.enablePerfOverlayLite
+                                && prefs.enablePerfOverlayLiteAdvanced
+                                && prefs.videoUpscaleEnable
+                                && !prefs.gpuPathMode;
+                    }
+                    __fsrSetDebugEnabled(glUpscaler, dbg);
                 }
-                __fsrSetDebugEnabled(glUpscaler, dbg);
-            }
-        } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
+        }
+
 
 
 
@@ -1069,8 +1081,20 @@ try {
 
         return initializeDecoder(false);
     }
+    private final Object upscalerLock = new Object();
     private Object glUpscaler; // usato via reflection
     private android.view.Surface decoderInputSurfaceForUpscale;
+
+    private void releaseUpscalerLocked() {
+        // Caller must hold upscalerLock
+        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
+        glUpscaler = null;
+        if (decoderInputSurfaceForUpscale != null) {
+            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+            decoderInputSurfaceForUpscale = null;
+        }
+    }
+
 
 
     // All threads that interact with the MediaCodec instance must call this function regularly!
@@ -2495,13 +2519,9 @@ try {
             rendererThread.interrupt();
         }
 
-
         // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+        synchronized (upscalerLock) {
+            releaseUpscalerLocked();
         }
 // Stop any active codec recovery operations
         synchronized (codecRecoveryMonitor) {
@@ -2555,12 +2575,10 @@ try {
         }
 
         // Final safety: ensure GL upscaler is torn down
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+        synchronized (upscalerLock) {
+            releaseUpscalerLocked();
         }
+
 
     }
 
@@ -2569,12 +2587,10 @@ try {
         try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
 
         // Ensure decoder and any GL upscaler resources are released
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+        synchronized (upscalerLock) {
+            releaseUpscalerLocked();
         }
+
         videoDecoder.release();
     }
 
@@ -2928,10 +2944,12 @@ try {
 
                 // Append FSR overlay line if available
                 try {
-                    String __fsr = __fsrGetOverlayLine(glUpscaler);
-                    if (__fsr != null && !__fsr.isEmpty()) {
-                        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
-                        sb.append(__fsr).append('\n');
+                    synchronized (upscalerLock) {
+                        String __fsr = __fsrGetOverlayLine(glUpscaler);
+                        if (__fsr != null && !__fsr.isEmpty()) {
+                            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
+                            sb.append(__fsr).append('\n');
+                        }
                     }
                 } catch (Throwable ignored) {}
 
