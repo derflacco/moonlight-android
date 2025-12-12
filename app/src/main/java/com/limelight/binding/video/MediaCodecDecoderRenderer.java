@@ -173,7 +173,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Never let logging break playback
         }
     }
-
+    // True when new VPS/SPS/PPS has been received since last submission
+    private boolean csdDirty = false;
 
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
@@ -3201,8 +3202,11 @@ try {
                 escapedNalu.get(naluBuffer, startSeqLen + 1, escapedNalu.limit());
 
                 // Batch this to submit together with other CSD per AOSP docs
+                spsBuffers.clear();
                 spsBuffers.add(naluBuffer);
+                csdDirty = true;
                 return MoonBridge.DR_OK;
+
             }
             else if (decodeUnitType == MoonBridge.BUFFER_TYPE_VPS) {
                 numVpsIn++;
@@ -3210,7 +3214,9 @@ try {
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
+                vpsBuffers.clear();
                 vpsBuffers.add(naluBuffer);
+                csdDirty = true;
                 return MoonBridge.DR_OK;
             }
             // Only the HEVC SPS hits this path (H.264 is handled above)
@@ -3220,7 +3226,9 @@ try {
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
+                spsBuffers.clear();
                 spsBuffers.add(naluBuffer);
+                csdDirty = true;
                 return MoonBridge.DR_OK;
             }
             else if (decodeUnitType == MoonBridge.BUFFER_TYPE_PPS) {
@@ -3229,8 +3237,11 @@ try {
                 // Batch this to submit together with other CSD per AOSP docs
                 byte[] naluBuffer = new byte[decodeUnitLength];
                 System.arraycopy(decodeUnitData, 0, naluBuffer, 0, decodeUnitLength);
+                ppsBuffers.clear();
                 ppsBuffers.add(naluBuffer);
+                csdDirty = true;
                 return MoonBridge.DR_OK;
+
             }
             else if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) != 0) {
                 // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
