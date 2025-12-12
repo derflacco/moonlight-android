@@ -3333,14 +3333,41 @@ try {
 
             // If we are using fused IDR frames, submit the CSD with each IDR frame
             if (fusedIdrFrame && !csdSubmittedForThisFrame) {
-                for (byte[] vpsBuffer : vpsBuffers) {
-                    nextInputBuffer.put(vpsBuffer);
-                }
-                for (byte[] spsBuffer : spsBuffers) {
-                    nextInputBuffer.put(spsBuffer);
-                }
-                for (byte[] ppsBuffer : ppsBuffers) {
-                    nextInputBuffer.put(ppsBuffer);
+                int csdBytes = 0;
+                for (byte[] b : vpsBuffers) csdBytes += b.length;
+                for (byte[] b : spsBuffers) csdBytes += b.length;
+                for (byte[] b : ppsBuffers) csdBytes += b.length;
+
+                // Ensure there is room for CSD + this decode unit in the same input buffer
+                if (csdBytes + decodeUnitLength > nextInputBuffer.remaining()) {
+                    // Fallback: submit CSD as codec-config first, then fetch a fresh buffer for the IDR payload
+                    nextInputBuffer.clear();
+
+                    if (csdBytes > nextInputBuffer.remaining()) {
+                        LimeLog.info("Fused CSD too large for input buffer: " + csdBytes + " > " + nextInputBuffer.remaining());
+                        return MoonBridge.DR_NEED_IDR;
+                    }
+
+                    for (byte[] vpsBuffer : vpsBuffers) nextInputBuffer.put(vpsBuffer);
+                    for (byte[] spsBuffer : spsBuffers) nextInputBuffer.put(spsBuffer);
+                    for (byte[] ppsBuffer : ppsBuffers) nextInputBuffer.put(ppsBuffer);
+
+                    if (!queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) {
+                        return MoonBridge.DR_NEED_IDR;
+                    }
+
+                    csdSubmittedForThisFrame = true;
+                    submittedCsd = true;
+                    csdDirty = false;
+
+                    if (!fetchNextInputBuffer()) {
+                        return MoonBridge.DR_NEED_IDR;
+                    }
+                } else {
+                    for (byte[] vpsBuffer : vpsBuffers) nextInputBuffer.put(vpsBuffer);
+                    for (byte[] spsBuffer : spsBuffers) nextInputBuffer.put(spsBuffer);
+                    for (byte[] ppsBuffer : ppsBuffers) nextInputBuffer.put(ppsBuffer);
+                    csdDirty = false;
                 }
             }
         }
