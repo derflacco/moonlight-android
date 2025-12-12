@@ -356,6 +356,19 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private int adaptxLateStreak = 0;
     // track last active AdaptX mode to soft-reset state on profile change
     private int adaptxLastMode = -1;
+    // Track last pacing profile to reset AdaptX stats on change
+    private int lastPacingProfile = -1;
+    // Reset all pacing statistics completely (used by ADAPTX and MIN_LATENCY)
+    private void resetAllPacingStats() {
+        adaptxLastPtsUs = -1L;
+        adaptxEwmaStreamPeriodNs = 0.0;
+        adaptxEwmaPresentIntervalNs = 0.0;
+        adaptxLastPresentNs = 0L;
+        adaptxLastDropNs = 0L;
+        adaptxLateStreak = 0;
+        adaptxLastMode = -1;
+
+    }
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
 
@@ -1555,7 +1568,12 @@ try {
 
                     // Snapshot prefs once per loop (correct outer reference)
                     final PreferenceConfiguration p = MediaCodecDecoderRenderer.this.prefs;
-
+                    // Reset all pacing statistics if pacing profile changed
+                    // (Affects both ADAPTX and MIN_LATENCY modes)
+                    if (p != null && p.framePacing != lastPacingProfile) {
+                        resetAllPacingStats();
+                        lastPacingProfile = p.framePacing;
+                    }
                     // Runtime disable -> tear down
                     if (gpuKickPbuffer != null && p != null && !p.enableGpuKick) {
                         try { gpuKickPbuffer.release(); } catch (Throwable ignored) {}
@@ -1926,11 +1944,13 @@ try {
                                                 ? prefs.adaptxMode
                                                 : PreferenceConfiguration.ADAPTX_MODE_SMOOTHNESS;
 
-                                        // Soft reset of AdaptX state on profile change
+                                        // Soft reset of AdaptX state on mode change
                                         if (axMode != adaptxLastMode) {
                                             adaptxLateStreak = 0;
                                             adaptxLastDropNs = 0L;
-                                            // We keep adaptxEwmaPresentIntervalNs to preserve cadence knowledge
+                                            // Reset EWMA intervals for cleaner transition
+                                            adaptxEwmaStreamPeriodNs = 0.0;
+                                            adaptxEwmaPresentIntervalNs = 0.0;
                                             adaptxLastMode = axMode;
                                         }
 
@@ -3505,7 +3525,6 @@ try {
 
         return basePeriodNs;
     }
-
 
 private boolean isMTKDecoderName(String name) {
     if (name == null) return false;
