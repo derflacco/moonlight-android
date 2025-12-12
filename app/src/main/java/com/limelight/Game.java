@@ -3733,11 +3733,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 connected = true;
                 connecting = false;
-
-                try {
-                    com.limelight.utils.RxBoost.boostRxThreads(Game.this, /*preferBigCores=*/ prefConfig != null && prefConfig.preferBigCores);
-                    com.limelight.utils.RxBoost.scheduleRxRefresh(Game.this, /*preferBigCores=*/ prefConfig != null && prefConfig.preferBigCores);
-                } catch (Throwable ignored) {}
                 updatePipAutoEnter();
 
                 // Hide the mouse cursor now after a short delay.

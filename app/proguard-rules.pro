@@ -55,8 +55,6 @@
 # --- Moonlight: keep thread/affinity helpers & RX boost (used via reflection/JNI) ---
 -keep class com.limelight.perf.PerfHint { *; }
 -keep class com.limelight.perf.CpuWarmUp { *; }
-#
--keep class com.limelight.utils.RxBoost { *; }
 
 # FSR renderer (auto-hint)
 -keep class com.limelight.render.GlUpscaleRenderer { *; }
