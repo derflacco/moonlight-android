@@ -1884,20 +1884,10 @@ try {
                                         }
 
                                         // Base period from stream estimate or display
-                                        double basePeriodNs = adaptxEwmaStreamPeriodNs;
-                                        if (basePeriodNs <= 0.0) {
-                                            double fps = 0.0;
-                                            if (targetFps > 0f) {
-                                                fps = targetFps;
-                                            } else if (refreshRate > 0) {
-                                                fps = refreshRate;
-                                            }
-                                            if (fps > 0.0) {
-                                                basePeriodNs = 1_000_000_000.0 / fps;
-                                            } else {
-                                                basePeriodNs = 16_666_667.0; // ~60 Hz fallback
-                                            }
-                                        }
+                                        double basePeriodNs = getBasePeriodNs(
+                                                adaptxEwmaStreamPeriodNs,
+                                                targetFps,
+                                                refreshRate);
 
                                         final long sinceLastPresentNs =
                                                 (adaptxLastPresentNs == 0L)
@@ -2086,20 +2076,10 @@ try {
                                             final boolean pureLfr = (preferLowerDelaysTimeoutUs == 0);
 
                                             // Derive a base period from EWMA, stream FPS, or display refresh
-                                            double basePeriodNs = adaptxEwmaStreamPeriodNs;
-                                            if (basePeriodNs <= 0.0) {
-                                                double fps = 0.0;
-                                                if (targetFps > 0f) {
-                                                    fps = targetFps;
-                                                } else if (refreshRate > 0) {
-                                                    fps = refreshRate;
-                                                }
-                                                if (fps > 0.0) {
-                                                    basePeriodNs = 1_000_000_000.0 / fps;
-                                                } else {
-                                                    basePeriodNs = 16_666_667.0; // ~60 Hz fallback
-                                                }
-                                            }
+                                            double basePeriodNs = getBasePeriodNs(
+                                                    adaptxEwmaStreamPeriodNs,
+                                                    targetFps,
+                                                    refreshRate);
 
                                             final long lateNs           = (long) (basePeriodNs * 1.3);
                                             final long severeLateNs     = (long) (basePeriodNs * 2.5);
@@ -3473,6 +3453,31 @@ try {
         adaptxLastPresentNs = nowNs;
         lastRenderedFrameTimeNanos = nowNs;
     }
+
+    // Base period helper for pacing decisions.
+    private double getBasePeriodNs(double ewmaStreamPeriodNs,
+                                   float targetFps,
+                                   float refreshRate) {
+        double basePeriodNs = ewmaStreamPeriodNs;
+
+        if (basePeriodNs <= 0.0) {
+            double fps = 0.0;
+            if (targetFps > 0f) {
+                fps = targetFps;
+            } else if (refreshRate > 0f) {
+                fps = refreshRate;
+            }
+
+            if (fps > 0.0) {
+                basePeriodNs = 1_000_000_000.0 / fps;
+            } else {
+                basePeriodNs = 16_666_667.0; // ~60 Hz fallback
+            }
+        }
+
+        return basePeriodNs;
+    }
+
 
 private boolean isMTKDecoderName(String name) {
     if (name == null) return false;
