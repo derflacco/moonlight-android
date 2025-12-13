@@ -938,7 +938,6 @@ try {
 
         // Start the decoder
         videoDecoder.start();
-        MediaCodecHelper.applyFrameworkLowLatencyPostStart(videoDecoder);
 // Telemetry thread: offload frame-render callbacks to a dedicated HandlerThread
 
         if (USE_FRAME_RENDER_TIME
