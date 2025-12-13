@@ -2442,7 +2442,7 @@ try {
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // Timeout based on target frame rate and latency policy
+// Timeout based on target frame rate and latency policy
             int dequeueTimeoutUs;
             float wantedFps =
                     (targetFps > 0f)
@@ -2450,11 +2450,25 @@ try {
                             : ((prefs != null && prefs.fps > 0f) ? prefs.fps : 60f);
 
             if (preferLowerDelays) {
-                // ULL: keep input dequeue very tight
-                dequeueTimeoutUs = 0; // 0 ms for ultra low latency
+                // LFR:
+                // - PURE ULL (fast SoC, lfrMode == 0): non-blocking input, zero-timeout
+                // - SLOW_SOC mode (lfrMode == 1): small adaptive timeout, aligned with output LFR_SLOW_SOC
+                if (lfrMode == 1) {
+                    // Reuse the same adaptive window used on the output side (clamped 250–3000 us)
+                    final int minTimeoutUs = 250;
+                    final int maxTimeoutUs = 3000;
+                    int t = lfrSlowTimeoutUs;
+                    if (t <= 0) {
+                        t = minTimeoutUs;
+                    }
+                    dequeueTimeoutUs = Math.max(minTimeoutUs, Math.min(maxTimeoutUs, t));
+                } else {
+                    // PURE LFR / ULL: non-blocking input
+                    dequeueTimeoutUs = 0; // 0 us for ultra low latency
+                }
             } else if (wantedFps >= 90f) {
                 // High FPS but not ULL: slightly more relaxed
-                dequeueTimeoutUs = 2_000; // 4 ms
+                dequeueTimeoutUs = 2_000; // 2 ms
             } else {
                 // 60 Hz / slower decoders: more relaxed to avoid constant TRY_AGAIN
                 dequeueTimeoutUs = 6_000; // 6 ms
