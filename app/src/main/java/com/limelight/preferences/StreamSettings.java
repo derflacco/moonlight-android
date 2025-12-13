@@ -335,16 +335,28 @@ public class StreamSettings extends AppCompatActivity {
                 }
             }
 
-            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
-            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
-// LFR mode slider: visible only when "Prefer lower delays" is enabled
-            if (lfrModeSeek != null) {
+            // LFR toggle visibility: only show for GPU Raw or MinLatency pacing modes
+            boolean showLfrToggle = isGpuRaw || isMinLatency;
+            if (lfrBal != null) {
                 try {
-                    lfrModeSeek.setVisible(preferLowerDelays);
+                    lfrBal.setVisible(showLfrToggle);
                 } catch (Throwable ignored) {
-                    lfrModeSeek.setEnabled(preferLowerDelays);
+                    lfrBal.setEnabled(showLfrToggle);
                 }
-                lfrModeSeek.setEnabled(preferLowerDelays);
+                lfrBal.setEnabled(showLfrToggle && !lockLfr);
+            }
+
+            if (fsrEn != null) fsrEn.setEnabled(!lockFsrEn);
+
+            // LFR mode slider: visible only when "Prefer lower delays" is enabled AND LFR toggle is shown
+            if (lfrModeSeek != null) {
+                boolean lfrModeVisible = showLfrToggle && preferLowerDelays;
+                try {
+                    lfrModeSeek.setVisible(lfrModeVisible);
+                } catch (Throwable ignored) {
+                    lfrModeSeek.setEnabled(lfrModeVisible);
+                }
+                lfrModeSeek.setEnabled(lfrModeVisible);
             }
 
             // Warp factor visibility rules:
