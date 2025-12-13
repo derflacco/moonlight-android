@@ -1072,10 +1072,10 @@ private static int getFramePacingValue(Context context) {
 // 0 = off, 1 = x2, 2 = x4
         switch (warpSlider) {
             case 1:
-                config.framePacingWarpFactor = 2; // x2
+                config.framePacingWarpFactor = 0; // x2
                 break;
             case 2:
-                config.framePacingWarpFactor = 4; // x4
+                config.framePacingWarpFactor = 0; // x4
                 break;
             default:
                 config.framePacingWarpFactor = 0; // off

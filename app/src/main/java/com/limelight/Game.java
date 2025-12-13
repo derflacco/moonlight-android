@@ -843,13 +843,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
 
-// Warp factor handling (disabled)
-        final int warpFactor = prefConfig.framePacingWarpFactor;
+// Warp factor handling (permanently disabled)
+        final int warpFactor = 0;
 
         LimeLog.info("Game: framePacing=" + prefConfig.framePacing +
-                " warpFactor=" + warpFactor + " (permanently disabled)");
-
-// Warp factor functionality is disabled
+                " warpFactor=" + prefConfig.framePacingWarpFactor + " (ignored, feature disabled)");
         LimeLog.info("Warp factor functionality is permanently disabled");
 
 
