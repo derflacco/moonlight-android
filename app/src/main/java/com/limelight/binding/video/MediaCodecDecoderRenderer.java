@@ -796,6 +796,8 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
         ppsBuffers.clear();
 // Clear decode latency tracking when decoder is reconfigured
         enqueueNsByPtsUs.clear();
+        csdDirty = false;
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             // This will contain the actual accepted input format attributes
             inputFormat = videoDecoder.getInputFormat();
