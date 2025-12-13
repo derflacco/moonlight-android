@@ -268,6 +268,16 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
             }
         }
     }
+    private void drainFrameRenderedTelemetryToStats() {
+        if (!USE_FRAME_RENDER_TIME) {
+            return;
+        }
+
+        final long deltaNs = frameRenderedTotalNs.getAndSet(0L);
+        if (deltaNs > 0L && activeWindowVideoStats != null) {
+            activeWindowVideoStats.totalTimeMs += (deltaNs / 1_000_000L);
+        }
+    }
 
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
 
@@ -411,6 +421,8 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private Handler frameRenderedHandler;
     private final java.util.concurrent.atomic.AtomicLong frameRenderedTotalNs =
             new java.util.concurrent.atomic.AtomicLong(0L);
+    // Offset to convert uptime-based PTS (enqueueTimeMs) into the System.nanoTime() timebase.
+    private volatile long frameRenderedUptimeToNanoOffsetNs = 0L;
     private volatile boolean frameRenderedListenerSet = false;
 
     private int numSpsIn;
@@ -937,14 +949,28 @@ try {
             frameRenderedThread.start();
             frameRenderedHandler = new Handler(frameRenderedThread.getLooper());
 
+            // Cache initial timebase conversion (uptime -> nanoTime).
+            frameRenderedUptimeToNanoOffsetNs =
+                    System.nanoTime() - (SystemClock.uptimeMillis() * 1_000_000L);
+
             videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
-                    // presentationTimeUs is the timestamp we queued (may not share the same timebase).
-                    // Keep this lightweight and thread-safe.
-                    final long ptsNs = presentationTimeUs * 1000L;
-                    final long deltaNs = renderTimeNanos - ptsNs;
+                    // presentationTimeUs is derived from enqueueTimeMs (uptime). renderTimeNanos uses System.nanoTime().
+                    long ptsNs = (presentationTimeUs * 1000L) + frameRenderedUptimeToNanoOffsetNs;
+                    long deltaNs = renderTimeNanos - ptsNs;
 
+                    // Recalibrate if we detect a timebase mismatch (sleep/resume or drift).
+                    if (deltaNs < 0L || deltaNs >= 1_000_000_000L) {
+                        final long newOffset =
+                                System.nanoTime() - (SystemClock.uptimeMillis() * 1_000_000L);
+                        frameRenderedUptimeToNanoOffsetNs = newOffset;
+
+                        ptsNs = (presentationTimeUs * 1000L) + newOffset;
+                        deltaNs = renderTimeNanos - ptsNs;
+                    }
+
+                    // Accept only plausible render latencies; keep callback lock-free.
                     if (deltaNs >= 0L && deltaNs < 1_000_000_000L) {
                         frameRenderedTotalNs.addAndGet(deltaNs);
                     }
@@ -953,6 +979,7 @@ try {
 
             frameRenderedListenerSet = true;
         }
+
 
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
 try {
@@ -1091,24 +1118,6 @@ try {
                 // We couldn't even configure a decoder without any low latency options
                 return -5;
             }
-        }
-
-        if (USE_FRAME_RENDER_TIME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
-                @Override
-                public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
-                    long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
-                    if (delta >= 0 && delta < 1000) {
-                        // Accumulate render delta (keep callback hot-path minimal and lock-free)
-                        if (USE_FRAME_RENDER_TIME) {
-                            final long deltaNs = frameRenderedTotalNs.getAndSet(0L);
-                            if (deltaNs > 0L) {
-                                activeWindowVideoStats.totalTimeMs += (deltaNs / 1_000_000L);
-                            }
-                        }
-                    }
-                }
-            }, null);
         }
 
         return 0;
@@ -1823,7 +1832,8 @@ try {
 
                                         numFramesOut++;
                                     } catch (Throwable ignored) {}
-
+                                    // Pull render-time telemetry (if enabled) for previously rendered frames.
+                                    drainFrameRenderedTelemetryToStats();
                                     // We handled this frame via LFR SLOW_SOC; skip the rest of the loop
                                     continue;
                                 }
@@ -1887,6 +1897,9 @@ try {
                                     } catch (Throwable ignored) {}
 
                                     // We handled this frame in pure ULL path; skip the rest of the loop
+                                    // Pull render-time telemetry (if enabled) for previously rendered frames.
+                                    drainFrameRenderedTelemetryToStats();
+
                                     continue;
                                 }
                             }
@@ -1947,6 +1960,9 @@ try {
 
                             // Measure decode latency at dequeue
                             try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
+                            // Pull render-time telemetry (if enabled) for previously rendered frames.
+                            drainFrameRenderedTelemetryToStats();
+
                             statsUpdated = true;
 
                             final PreferenceConfiguration pNow = MediaCodecDecoderRenderer.this.prefs;
