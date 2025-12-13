@@ -2670,6 +2670,9 @@ try {
     @Override
     public void cleanup() {
         try { if (this.perfHint != null) { this.perfHint.close(); this.perfHint = null; } } catch (Throwable ignored) {}
+        // Reset pacing state so that the next stream starts from a clean baseline
+        resetAllPacingStats();
+        lfrSlowTimeoutUs = 500;   // Restore default LFR Lite timeout
 
         // Ensure decoder and any GL upscaler resources are released
         synchronized (upscalerLock) {
