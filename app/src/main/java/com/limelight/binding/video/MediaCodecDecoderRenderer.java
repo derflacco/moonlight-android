@@ -910,6 +910,7 @@ try {
         vpsBuffers.clear();
         spsBuffers.clear();
         ppsBuffers.clear();
+        csdDirty = false;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             // This will contain the actual accepted input format attributes
@@ -2450,13 +2451,13 @@ try {
 
             if (preferLowerDelays) {
                 // ULL: keep input dequeue very tight
-                dequeueTimeoutUs = 1_000; // 1 ms for ultra low latency
+                dequeueTimeoutUs = 0; // 0 ms for ultra low latency
             } else if (wantedFps >= 90f) {
                 // High FPS but not ULL: slightly more relaxed
-                dequeueTimeoutUs = 4_000; // 4 ms
+                dequeueTimeoutUs = 2_000; // 4 ms
             } else {
                 // 60 Hz / slower decoders: more relaxed to avoid constant TRY_AGAIN
-                dequeueTimeoutUs = 8_000; // 8 ms
+                dequeueTimeoutUs = 6_000; // 6 ms
             }
 
             final long t0 = System.nanoTime();
@@ -2466,7 +2467,7 @@ try {
             // Single quick retry for slower decoders (non-ULL) if the codec is not ready yet
             if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER && !preferLowerDelays) {
                 final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
-                final int quickBackoffUs = Math.min(remainingUs, 2_000); // up to 2 ms extra
+                final int quickBackoffUs = Math.min(remainingUs, 1_000); // up to 1 ms extra
 
                 if (quickBackoffUs > 0) {
                     nextInputBufferIndex = videoDecoder.dequeueInputBuffer(quickBackoffUs);
@@ -3359,6 +3360,7 @@ try {
                     csdSubmittedForThisFrame = true;
                     submittedCsd = true;
                     csdDirty = false;
+                    csdSubmittedForThisFrame = true;
 
                     if (!fetchNextInputBuffer()) {
                         return MoonBridge.DR_NEED_IDR;
