@@ -789,9 +789,30 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
     private MediaFormat createBaseMediaFormat(String mimeType) {
         MediaFormat videoFormat = MediaFormat.createVideoFormat(mimeType, initialWidth, initialHeight);
 
-        // Avoid setting KEY_FRAME_RATE on Lollipop and earlier to reduce compatibility risk
+// Hint decoder frame rate (stream FPS nominal). This does not affect pacing.
+// It can help some codecs choose better buffering/perf points.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, refreshRate);
+            float fps = 0f;
+
+            // Prefer explicit stream target FPS if available
+            if (targetFps > 0f) {
+                fps = targetFps;
+            } else if (prefs != null && prefs.fps > 0f) {
+                fps = prefs.fps;
+            } else if (refreshRate > 0) {
+                // Fallback to display refresh if stream FPS is unknown
+                fps = refreshRate;
+            }
+
+            if (fps > 0f) {
+                // Clamp to a reasonable range to avoid buggy codecs
+                int frInt = Math.round(Math.max(24f, Math.min(240f, fps)));
+                try {
+                    videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frInt);
+                } catch (Throwable ignored) {
+                    // Some decoders may ignore or reject this key; safe to skip
+                }
+            }
         }
 
         // Populate keys for adaptive playback
