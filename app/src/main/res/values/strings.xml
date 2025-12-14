@@ -774,4 +774,7 @@
     <string name="title_checkbox_enable_perf_overlay_lite_oledshift">OLED burn-in protection (pixel shift)</string>
     <string name="summary_checkbox_enable_perf_overlay_lite_oledshift">Occasionally nudges the Lite overlay horizontally to reduce image retention on OLED screens.</string>
 
+    <string name="pref_suggested_resolution_title">Lower Suggested resolutions</string>
+    <string name="pref_suggested_resolution_summary">Auto-detected from your display</string>
+
 </resources>
