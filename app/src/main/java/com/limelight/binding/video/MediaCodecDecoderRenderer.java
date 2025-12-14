@@ -1559,10 +1559,8 @@ try {
                 try {
                     if (prefs != null && prefs.preferBigCores) {
                         try {
+                            // Keep current thread on big cores
                             com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
-                        } catch (Throwable ignored) {}
-                        try {
-                            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
                         } catch (Throwable ignored) {}
 
                         try {
@@ -1573,25 +1571,23 @@ try {
                                     String name = com.limelight.utils.CpuAffinity.readThreadName(tid);
                                     if (name == null) name = "";
 
-                                    // Do not touch Binder/HwBinder
-                                    if (name.startsWith("Binder:") || name.startsWith("HwBinder:")) {
+                                    final boolean isCodec =
+                                            name.contains("CodecCb") || name.contains("MediaCodec") ||
+                                                    name.contains("CCodec") || name.contains("CodecLooper");
+
+                                    final boolean isGL =
+                                            name.contains("GLThread") || name.contains("RenderThread") ||
+                                                    name.contains("Renderer") || name.contains("GL");
+
+                                    final boolean isBinder =
+                                            name.startsWith("Binder:") || name.startsWith("HwBinder:");
+
+                                    // Intentionally exclude Choreographer
+                                    final boolean isHot = isCodec || isGL || isBinder;
+                                    if (!isHot) {
                                         continue;
                                     }
 
-                                    boolean isCodec = name.contains("CodecCb") || name.contains("MediaCodec")
-                                            || name.contains("CCodec") || name.contains("CodecLooper");
-                                    boolean isGL = name.contains("GLThread") || name.contains("RenderThread") || name.contains("Renderer");
-                                    boolean isChor = name.contains("Choreographer");
-
-                                    if (!(isCodec || isGL || isChor)) {
-                                        continue;
-                                    }
-
-                                    int prio = isChor
-                                            ? android.os.Process.THREAD_PRIORITY_DISPLAY
-                                            : android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY;
-
-                                    try { android.os.Process.setThreadPriority(tid, prio); } catch (Throwable ignored) {}
                                     try { com.limelight.utils.CpuAffinity.setAffinityForTid(tid, big); } catch (Throwable ignored) {}
                                 }
                                 try {
