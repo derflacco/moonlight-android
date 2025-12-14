@@ -169,6 +169,14 @@
             android:summary="@string/summary_video_scale_mode"
             android:title="@string/title_video_scale_mode"
             app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue=""
+            android:entries="@array/resolution_names"
+            android:entryValues="@array/resolution_values"
+            android:key="list_resolution_suggested"
+            android:title="@string/pref_suggested_resolution_title"
+            android:summary="@string/pref_suggested_resolution_summary"
+            app:iconSpaceReserved="false" />
 
         <EditTextPreference
             android:defaultValue="1920x1080"

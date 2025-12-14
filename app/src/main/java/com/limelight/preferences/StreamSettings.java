@@ -64,7 +64,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
-
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 public class StreamSettings extends AppCompatActivity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
@@ -498,6 +500,282 @@ public void onPause() {
             appendPreferenceEntry(pref, fpsName, fpsValue);
             nativeFramerateShown = true;
         }
+        // --- Suggested resolution selector (aspect-matched, up to 5 lower-than-display options) ---
+        private static final int MAX_SUGGESTED_RESOLUTIONS = 5;
+        private static final int MIN_SUGGESTED_HEIGHT = 360;
+
+        // Common widths (descending) used as "nice" candidates when generating aspect-matched resolutions.
+        private static final int[] COMMON_SUGGESTED_WIDTHS = new int[] {
+                3840, 3440, 3200, 2560, 2400, 2160, 2048, 1920, 1680, 1600, 1536, 1440, 1366, 1280,
+                1200, 1080, 1024, 960, 854, 800, 720, 640, 540
+        };
+
+        // Fallback scaling factors if COMMON_SUGGESTED_WIDTHS doesn't yield enough unique entries.
+        private static final double[] FALLBACK_SCALES = new double[] {
+                0.90, 0.83, 0.75, 0.66, 0.50, 0.40, 0.33
+        };
+
+        private void updateSuggestedResolutionSelector(Display display) {
+            ListPreference suggestedPref = findPreference(PreferenceConfiguration.SUGGESTED_RESOLUTION_PREF_STRING);
+            if (suggestedPref == null || display == null) {
+                return;
+            }
+
+            int[] wh = getDisplayLandscapeSize(display);
+            int displayW = wh[0];
+            int displayH = wh[1];
+            if (displayW <= 0 || displayH <= 0) {
+                hidePreferenceBestEffort(suggestedPref);
+                return;
+            }
+
+            List<String> suggestions = buildSuggestedResolutions(displayW, displayH, MAX_SUGGESTED_RESOLUTIONS);
+            if (suggestions.isEmpty()) {
+                hidePreferenceBestEffort(suggestedPref);
+                return;
+            }
+
+            CharSequence[] entries = new CharSequence[suggestions.size()];
+            CharSequence[] values  = new CharSequence[suggestions.size()];
+
+            for (int i = 0; i < suggestions.size(); i++) {
+                String v = suggestions.get(i);
+                entries[i] = buildSuggestedEntryLabel(v, displayW, displayH);
+                values[i]  = v;
+            }
+
+            suggestedPref.setEntries(entries);
+            suggestedPref.setEntryValues(values);
+
+            // Ensure the currently stored value is still valid (display mode changes can invalidate it).
+            String cur = suggestedPref.getValue();
+            if (cur != null && !cur.isEmpty()) {
+                boolean valid = false;
+                for (String v : suggestions) {
+                    if (v.equals(cur)) {
+                        valid = true;
+                        break;
+                    }
+                }
+                if (!valid) {
+                    suggestedPref.setValueIndex(0);
+                }
+            }
+
+            suggestedPref.setOnPreferenceChangeListener((preference, newValue) -> {
+                if (!(newValue instanceof String)) {
+                    return false;
+                }
+
+                String res = (String) newValue;
+                int[] parsed = parseResolutionWxH(res);
+                if (parsed == null) {
+                    return false;
+                }
+
+                applySuggestedResolution(res);
+                Toast.makeText(getActivity(), getString(R.string.pref_set_success), Toast.LENGTH_SHORT).show();
+                return true;
+            });
+        }
+
+        private void hidePreferenceBestEffort(Preference pref) {
+            try {
+                pref.setVisible(false);
+            } catch (Throwable ignored) {
+                pref.setEnabled(false);
+            }
+        }
+
+        private List<String> buildSuggestedResolutions(int displayW, int displayH, int maxCount) {
+            double aspect = (double) displayW / (double) displayH;
+            LinkedHashSet<String> out = new LinkedHashSet<>();
+
+            // 0) Prefer standard-looking presets when the display aspect ratio is close to a common ratio.
+            String[] preset = getPresetResolutionsForAspect(aspect);
+            if (preset != null && preset.length > 0) {
+                for (String v : preset) {
+                    int[] wh = parseResolutionWxH(v);
+                    if (wh == null) {
+                        continue;
+                    }
+
+                    int w = wh[0];
+                    int h = wh[1];
+
+                    if (w >= displayW || h >= displayH) {
+                        continue;
+                    }
+
+                    if (h < MIN_SUGGESTED_HEIGHT) {
+                        continue;
+                    }
+
+                    out.add(w + "x" + h);
+                    if (out.size() >= maxCount) {
+                        return new ArrayList<>(out);
+                    }
+                }
+            }
+
+            // 1) Nice widths list
+            for (int wCandidate : COMMON_SUGGESTED_WIDTHS) {
+                if (wCandidate >= displayW) {
+                    continue;
+                }
+
+                int hCandidate = (int) Math.round((double) wCandidate / aspect);
+
+                // Keep it strictly smaller than the active display
+                if (hCandidate >= displayH) {
+                    continue;
+                }
+
+                if (hCandidate < MIN_SUGGESTED_HEIGHT) {
+                    continue;
+                }
+
+                int wEven = (wCandidate / 2) * 2;
+                int hEven = (hCandidate / 2) * 2;
+                out.add(wEven + "x" + hEven);
+
+                if (out.size() >= maxCount) {
+                    return new ArrayList<>(out);
+                }
+            }
+
+            // 2) Fallback: scale down from display size
+            for (double s : FALLBACK_SCALES) {
+                int wCandidate = (int) Math.round(displayW * s);
+                int hCandidate = (int) Math.round((double) wCandidate / aspect);
+
+                if (wCandidate >= displayW || hCandidate >= displayH) {
+                    continue;
+                }
+
+                if (hCandidate < MIN_SUGGESTED_HEIGHT) {
+                    continue;
+                }
+
+                int wEven = (wCandidate / 2) * 2;
+                int hEven = (hCandidate / 2) * 2;
+                out.add(wEven + "x" + hEven);
+
+                if (out.size() >= maxCount) {
+                    break;
+                }
+            }
+
+            return new ArrayList<>(out);
+        }
+
+        private static final double ASPECT_TOLERANCE = 0.03;
+
+        private static boolean isAspectNear(double aspect, int num, int den) {
+            double target = (double) num / (double) den;
+            double relErr = Math.abs(aspect - target) / target;
+            return relErr <= ASPECT_TOLERANCE;
+        }
+
+        private static String[] getPresetResolutionsForAspect(double aspect) {
+            if (isAspectNear(aspect, 16, 9)) {
+                return new String[] { "3840x2160", "2560x1440", "1920x1080", "1600x900", "1280x720", "960x540", "854x480", "640x360" };
+            }
+            if (isAspectNear(aspect, 16, 10)) {
+                return new String[] { "2560x1600", "1920x1200", "1680x1050", "1440x900", "1280x800", "960x600", "800x500" };
+            }
+            if (isAspectNear(aspect, 4, 3)) {
+                return new String[] { "2048x1536", "1600x1200", "1440x1080", "1280x960", "1024x768", "800x600", "640x480" };
+            }
+            // Common ultrawide: ~21:9 (64:27)
+            if (isAspectNear(aspect, 64, 27)) {
+                return new String[] { "3440x1440", "2560x1080", "1920x810", "1600x675", "1280x540", "960x405" };
+            }
+            // Common phones: 20:9 and 18:9
+            if (isAspectNear(aspect, 20, 9)) {
+                return new String[] { "2400x1080", "2160x972", "1920x864", "1600x720", "1280x576", "960x432", "800x360" };
+            }
+            if (isAspectNear(aspect, 18, 9)) {
+                return new String[] { "2160x1080", "1920x960", "1600x800", "1280x640", "960x480", "800x400" };
+            }
+
+            return null;
+        }
+
+        private static int[] getDisplayLandscapeSize(Display display) {
+            int w;
+            int h;
+
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Display.Mode mode = display.getMode();
+                    w = mode.getPhysicalWidth();
+                    h = mode.getPhysicalHeight();
+                } else {
+                    DisplayMetrics metrics = new DisplayMetrics();
+                    display.getRealMetrics(metrics);
+                    w = metrics.widthPixels;
+                    h = metrics.heightPixels;
+                }
+            } catch (Throwable t) {
+                w = 0;
+                h = 0;
+            }
+
+            int ww = Math.max(w, h);
+            int hh = Math.min(w, h);
+            return new int[] { ww, hh };
+        }
+
+        private static int[] parseResolutionWxH(String value) {
+            if (value == null) {
+                return null;
+            }
+
+            String[] parts = value.split("x");
+            if (parts.length != 2) {
+                return null;
+            }
+
+            try {
+                int w = Integer.parseInt(parts[0]);
+                int h = Integer.parseInt(parts[1]);
+                if (w <= 0 || h <= 0) {
+                    return null;
+                }
+                return new int[] { w, h };
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
+        private static String buildSuggestedEntryLabel(String value, int displayW, int displayH) {
+            int[] wh = parseResolutionWxH(value);
+            if (wh == null) {
+                return value;
+            }
+
+            long area = (long) wh[0] * (long) wh[1];
+            long base = (long) displayW * (long) displayH;
+
+            int pct = 0;
+            if (base > 0L) {
+                pct = (int) Math.round((area * 100.0) / (double) base);
+            }
+
+            return wh[0] + "x" + wh[1] + " (" + pct + "%)";
+        }
+
+        private void applySuggestedResolution(String resolution) {
+            SharedPreferences prefs = getPrefs();
+            prefs.edit()
+                    .putString(PreferenceConfiguration.CUSTOM_RESOLUTION_PREF_STRING, resolution)
+                    .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, resolution)
+                    .apply();
+
+            resetBitrateToDefault(prefs, resolution, null);
+            reloadSettings();
+        }
 
         private void removeValue(String preferenceKey, String value, Runnable onMatched) {
             int matchingCount = 0;
@@ -692,6 +970,7 @@ public void onPause() {
             }
 
             Display display = activity.getWindowManager().getDefaultDisplay();
+            updateSuggestedResolutionSelector(display);
             float maxSupportedFps = display.getRefreshRate();
 
             // Hide non-supported resolution/FPS combinations

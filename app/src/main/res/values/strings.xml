@@ -796,5 +796,7 @@
 <string name="pref_cpu_warmup_enable_summary">Boost the CPU. Increases power/thermals. Use at your own risk..</string>
 <string name="pref_cpu_warmup_override_title">Force warm-up even with PerfHint</string>
 <string name="pref_cpu_warmup_override_summary">Ignore ADPF/PerfHint and run warm-up anyway (A/B testing). Use with care.</string>
+    <string name="pref_suggested_resolution_title">Lower Suggested resolutions</string>
+    <string name="pref_suggested_resolution_summary">Auto-detected from your display</string>
 
 </resources>
