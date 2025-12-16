@@ -2072,6 +2072,7 @@ try {
                                             // Reset EWMA intervals for cleaner transition
                                             adaptxEwmaStreamPeriodNs = 0.0;
                                             adaptxEwmaPresentIntervalNs = 0.0;
+                                            adaptxLastPresentNs = 0L;
                                             adaptxLastMode = axMode;
                                         }
 
