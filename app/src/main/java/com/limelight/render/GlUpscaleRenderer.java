@@ -86,7 +86,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     //  - hdrDirectPresent: true when GPU path (direct present) is active
     private volatile boolean hdrActive = false;
     private volatile boolean hdrDirectPresent = false;
-
+    // ===== Direct Present logging =====
+    private boolean dpLoggedOn = false;
+    private boolean dpLoggedOff = true;
     /**
      * Update HDR + Direct Present mode.
      *
@@ -486,8 +488,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void renderLoop() {
         try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY); } catch (Throwable ignored) {}
 
-        // If the user fully disabled FSR, stop this renderer thread early.
-        if (prefs != null && !prefs.videoUpscaleEnable) {
+// If upscaling is disabled AND GPU Path is not active, we can stop early.
+// GPU Path (Direct Present) still needs the GL pipeline even with scaling disabled.
+        if (prefs != null && !prefs.gpuPathMode && !prefs.videoUpscaleEnable) {
             running.set(false);
             return;
         }
@@ -532,6 +535,29 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (!didUpdateTex && !sizeChangedSinceLastSwap) continue;
 
             ensureViewport(fbW, fbH);
+// Direct Present (GPU Path): bypass ALL scaling (FSR/HDR filters/etc), but keep GL pipeline.
+            final boolean gpuPathNow = (prefs != null && prefs.gpuPathMode);
+            if (gpuPathNow) {
+                if (!dpLoggedOn) {
+                    dpLoggedOn = true;
+                    dpLoggedOff = false;
+                    try { LimeLog.info("Direct Present: ON (gpuPathMode=true) -> bypass ALL upscaling"); } catch (Throwable ignored) {}
+                }
+
+                drawOesToScreen();
+                if (!presentFrame()) break;
+
+                texMatrixDirty = false;
+                sizeChangedSinceLastSwap = false;
+                lastFrameNs = System.nanoTime();
+                continue;
+            } else {
+                if (!dpLoggedOff) {
+                    dpLoggedOff = true;
+                    dpLoggedOn = false;
+                    try { LimeLog.info("Direct Present: OFF (gpuPathMode=false)"); } catch (Throwable ignored) {}
+                }
+            }
 
             // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
             if (fastBypassStatic) {
