@@ -136,6 +136,7 @@ import java.util.Map;
 import java.util.Set;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 
 public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
@@ -269,9 +270,60 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private TextView performanceOverlayMini;
 
     private TextView performanceOverlayBig;
+    // === Perf overlay throttling (reduces UI-thread load and GC) ===
+// Stats don't need per-frame UI updates; coalesce and update at a fixed rate.
+    private static final long PERF_OVERLAY_UPDATE_INTERVAL_MS = 100L; // 10 Hz
 
-    private TextView androidTvForceGpuComposition;
-    private boolean gpuCompositionToggle = false;
+    private volatile String pendingPerfOverlayText = null;
+    private String lastAppliedPerfOverlayText = null;
+    private final AtomicBoolean perfOverlayUpdateScheduled = new AtomicBoolean(false);
+
+    private final Runnable perfOverlayApplyRunnable = new Runnable() {
+        @Override
+        public void run() {
+            perfOverlayUpdateScheduled.set(false);
+
+            // Avoid any UI work when we are not in an active stream or overlay is disabled
+            if (!connected || prefConfig == null || !prefConfig.enablePerfOverlay) {
+                pendingPerfOverlayText = null;
+                lastAppliedPerfOverlayText = null;
+                return;
+            }
+
+            if (performanceOverlayView == null || performanceOverlayView.getVisibility() != View.VISIBLE) {
+                return;
+            }
+
+            final String text = pendingPerfOverlayText;
+            if (text == null) {
+                return;
+            }
+
+            // Avoid redundant setText() (forces layout work)
+            if (text.equals(lastAppliedPerfOverlayText)) {
+                return;
+            }
+            lastAppliedPerfOverlayText = text;
+
+            try {
+                if (prefConfig.enablePerfOverlayLite) {
+                    if (performanceOverlayLite != null && performanceOverlayLite.getVisibility() == View.VISIBLE) {
+                        performanceOverlayLite.setText(text);
+                    }
+                } else if (prefConfig.enablePerfOverlayMini) {
+                    if (performanceOverlayMini != null && performanceOverlayMini.getVisibility() == View.VISIBLE) {
+                        performanceOverlayMini.setText(text);
+                    }
+                } else {
+                    if (performanceOverlayBig != null && performanceOverlayBig.getVisibility() == View.VISIBLE) {
+                        performanceOverlayBig.setText(text);
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -1734,6 +1786,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         instance = null;
         timerHandler.removeCallbacksAndMessages(null);
+        try {
+            if (timerHandler != null) {
+                timerHandler.removeCallbacks(perfOverlayApplyRunnable);
+            }
+            pendingPerfOverlayText = null;
+            lastAppliedPerfOverlayText = null;
+            perfOverlayUpdateScheduled.set(false);
+        } catch (Throwable ignored) {}
 
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
 
@@ -4031,19 +4091,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void onPerfUpdate(final String text) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if(prefConfig.enablePerfOverlayLite){
-                    performanceOverlayLite.setText(text);
-                }else if(prefConfig.enablePerfOverlayMini){
-                    performanceOverlayMini.setText(text);
-                }else{
-                    performanceOverlayBig.setText(text);
-                }
+        // Fast reject: no overlay work when disabled or not streaming
+        if (!connected || prefConfig == null || !prefConfig.enablePerfOverlay) {
+            return;
+        }
 
+        // Keep only the newest text (coalescing)
+        pendingPerfOverlayText = text;
+
+        // Throttle updates to a fixed cadence to protect the UI thread
+        if (perfOverlayUpdateScheduled.compareAndSet(false, true)) {
+            final Handler h = timerHandler; // main looper handler created in onCreate()
+            if (h != null) {
+                h.postDelayed(perfOverlayApplyRunnable, PERF_OVERLAY_UPDATE_INTERVAL_MS);
+            } else {
+                perfOverlayUpdateScheduled.set(false);
             }
-        });
+        }
     }
 
     @Override
