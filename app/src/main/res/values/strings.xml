@@ -799,4 +799,14 @@
     <string name="pref_suggested_resolution_title">Lower Suggested resolutions</string>
     <string name="pref_suggested_resolution_summary">Auto-detected from your display</string>
 
+    <string name="title_enable_upscaling_dialog">Enable upscaling?</string>
+    <string name="text_enable_upscaling_dialog">You selected a streaming resolution below your display resolution. Do you want to enable upscaling?</string>
+
+    <string name="button_enable_upscaling">Enable</string>
+    <string name="button_not_now">Not now</string>
+    <string name="button_ok">OK</string>
+
+    <string name="title_upscaling_unavailable_dialog">Upscaling unavailable</string>
+    <string name="text_upscaling_unavailable_dialog">Upscaling cannot be enabled while Direct Present or HDR is enabled. Disable those options first.</string>
+
 </resources>

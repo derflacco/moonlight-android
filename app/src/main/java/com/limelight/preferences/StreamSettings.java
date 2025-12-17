@@ -67,6 +67,10 @@ import java.util.Map;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Collections;
+import java.util.HashSet;
+import androidx.appcompat.app.AlertDialog;
+
 public class StreamSettings extends AppCompatActivity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
@@ -176,6 +180,7 @@ public class StreamSettings extends AppCompatActivity {
                             || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
                             || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
                             || "pref_low_latency_frame_balance".equals(key)  // LFR toggle (Prefer lower delays)
+
                     ) {
                         // Re-evaluate UI locks and dependent visibility (including LFR mode slider)
                         updateLocks();
@@ -192,9 +197,11 @@ public class StreamSettings extends AppCompatActivity {
 
             // HDR is enabled if any HDR toggle is active
             boolean hdrOn =
-                    (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
+                    sp.getBoolean("checkbox_enable_hdr", false) ||
+                            (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
+
 
             // Legacy pacing state (used as a fallback if the unified slider has never been set)
             String pacingStr = sp.getString("frame_pacing", "latency");
@@ -348,7 +355,24 @@ public class StreamSettings extends AppCompatActivity {
                 lfrBal.setEnabled(showLfrToggle && !lockLfr);
             }
 
-            if (fsrEn != null) fsrEn.setEnabled(!lockFsrEn);
+            if (fsrEn != null) {
+                fsrEn.setEnabled(!lockFsrEn);
+            }
+
+// Enforce mutual exclusion: if Direct Present or HDR is active, force-disable upscaling.
+            if (lockFsrEn) {
+                if (fsrEn instanceof CheckBoxPreference) {
+                    CheckBoxPreference cb = (CheckBoxPreference) fsrEn;
+                    if (cb.isChecked()) {
+                        sp.edit().putBoolean("pref_video_upscale_enable", false).apply();
+                        cb.setChecked(false);
+                    }
+                } else {
+                    if (sp.getBoolean("pref_video_upscale_enable", false)) {
+                        sp.edit().putBoolean("pref_video_upscale_enable", false).apply();
+                    }
+                }
+            }
 
             // LFR mode slider: visible only when "Prefer lower delays" is enabled AND LFR toggle is shown
             if (lfrModeSeek != null) {
@@ -399,6 +423,9 @@ public void onPause() {
 }
 
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
+        // Track injected native/custom resolution values so warnings keep working even if the list is re-ordered.
+        private final HashSet<String> nativeResolutionValues = new HashSet<>();
+
         private boolean nativeFramerateShown = false;
 
         private PreferenceConfiguration prevPrefConfig;
@@ -466,6 +493,7 @@ public void onPause() {
                 nativeResolutionStartIndex = pref.getEntryValues().length;
             }
             appendPreferenceEntry(pref, newName, newValue);
+            nativeResolutionValues.add(newValue);
         }
 
         private void addNativeResolutionEntries(int nativeWidth, int nativeHeight, boolean insetsRemoved, boolean is_custom) {
@@ -530,6 +558,8 @@ public void onPause() {
             }
 
             List<String> suggestions = buildSuggestedResolutions(displayW, displayH, MAX_SUGGESTED_RESOLUTIONS);
+            sortResolutionValueListAscending(suggestions);
+
             if (suggestions.isEmpty()) {
                 hidePreferenceBestEffort(suggestedPref);
                 return;
@@ -765,16 +795,212 @@ public void onPause() {
 
             return wh[0] + "x" + wh[1] + " (" + pct + "%)";
         }
+        private static long resolutionArea(String value) {
+            int[] wh = parseResolutionWxH(value);
+            if (wh == null) {
+                return Long.MAX_VALUE;
+            }
+            return (long) wh[0] * (long) wh[1];
+        }
+
+        private static void sortResolutionValueListAscending(List<String> values) {
+            if (values == null || values.size() <= 1) {
+                return;
+            }
+
+            Collections.sort(values, (a, b) -> {
+                long aa = resolutionArea(a);
+                long bb = resolutionArea(b);
+                if (aa != bb) {
+                    return Long.compare(aa, bb);
+                }
+
+                int[] awh = parseResolutionWxH(a);
+                int[] bwh = parseResolutionWxH(b);
+                if (awh != null && bwh != null) {
+                    if (awh[0] != bwh[0]) {
+                        return Integer.compare(awh[0], bwh[0]);
+                    }
+                    if (awh[1] != bwh[1]) {
+                        return Integer.compare(awh[1], bwh[1]);
+                    }
+                }
+
+                return a.compareTo(b);
+            });
+        }
+
+        private void sortResolutionListAscending() {
+            ListPreference pref = (ListPreference) findPreference(PreferenceConfiguration.RESOLUTION_PREF_STRING);
+            if (pref == null) {
+                return;
+            }
+
+            CharSequence[] entries = pref.getEntries();
+            CharSequence[] values = pref.getEntryValues();
+            if (entries == null || values == null || entries.length != values.length || values.length <= 1) {
+                return;
+            }
+
+            ArrayList<Integer> idx = new ArrayList<>(values.length);
+            for (int i = 0; i < values.length; i++) {
+                idx.add(i);
+            }
+
+            Collections.sort(idx, (i1, i2) -> {
+                String v1 = values[i1].toString();
+                String v2 = values[i2].toString();
+
+                long a1 = resolutionArea(v1);
+                long a2 = resolutionArea(v2);
+                if (a1 != a2) {
+                    return Long.compare(a1, a2);
+                }
+
+                int[] r1 = parseResolutionWxH(v1);
+                int[] r2 = parseResolutionWxH(v2);
+                if (r1 != null && r2 != null) {
+                    if (r1[0] != r2[0]) {
+                        return Integer.compare(r1[0], r2[0]);
+                    }
+                    if (r1[1] != r2[1]) {
+                        return Integer.compare(r1[1], r2[1]);
+                    }
+                }
+
+                return entries[i1].toString().compareToIgnoreCase(entries[i2].toString());
+            });
+
+            CharSequence[] newEntries = new CharSequence[entries.length];
+            CharSequence[] newValues  = new CharSequence[values.length];
+            for (int o = 0; o < idx.size(); o++) {
+                int i = idx.get(o);
+                newEntries[o] = entries[i];
+                newValues[o]  = values[i];
+            }
+
+            pref.setEntries(newEntries);
+            pref.setEntryValues(newValues);
+        }
+
+        private void autoAdjustBitrateIfAtDefault(SharedPreferences prefs,
+                                                  String oldRes, String oldFps,
+                                                  String newRes, String newFps) {
+            if (prefs == null) {
+                return;
+            }
+            if (oldRes == null) oldRes = PreferenceConfiguration.DEFAULT_RESOLUTION;
+            if (oldFps == null) oldFps = PreferenceConfiguration.DEFAULT_FPS;
+            if (newRes == null) newRes = oldRes;
+            if (newFps == null) newFps = oldFps;
+
+            int oldDefault = PreferenceConfiguration.getDefaultBitrate(oldRes, oldFps);
+            int cur = prefs.getInt(PreferenceConfiguration.BITRATE_PREF_STRING, oldDefault);
+
+            // Only change bitrate when it is still at the old auto default.
+            if (cur == oldDefault) {
+                int newDefault = PreferenceConfiguration.getDefaultBitrate(newRes, newFps);
+                prefs.edit().putInt(PreferenceConfiguration.BITRATE_PREF_STRING, newDefault).apply();
+            }
+        }
+
+        private static boolean isHdrEnabled(SharedPreferences sp) {
+            if (sp == null) {
+                return false;
+            }
+            return sp.getBoolean("checkbox_enable_hdr", false)
+                    || (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false))
+                    || (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false))
+                    || (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
+        }
+
+        private void maybePromptEnableUpscalingForResolution(String newRes, Runnable after) {
+            if (after == null) {
+                after = () -> {};
+            }
+
+            if (TextUtils.isEmpty(newRes)) {
+                after.run();
+                return;
+            }
+
+            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
+            if (sp.getBoolean("pref_video_upscale_enable", false)) {
+                after.run();
+                return;
+            }
+
+            Display display = requireActivity().getWindowManager().getDefaultDisplay();
+            int[] dwh = getDisplayLandscapeSize(display);
+            int displayW = dwh[0];
+            int displayH = dwh[1];
+
+            int[] rwh = parseResolutionWxH(newRes);
+            if (rwh == null || displayW <= 0 || displayH <= 0) {
+                after.run();
+                return;
+            }
+
+            long area = (long) rwh[0] * (long) rwh[1];
+            long base = (long) displayW * (long) displayH;
+
+            // Only prompt when streaming below the display resolution.
+            if (area >= base) {
+                after.run();
+                return;
+            }
+
+            Runnable finalAfter = after;
+            Runnable finalAfter1 = after;
+            Runnable    finalAfter2 = after;
+            new AlertDialog.Builder(requireContext())
+                    .setTitle(R.string.title_enable_upscaling_dialog)
+                    .setMessage(R.string.text_enable_upscaling_dialog)
+                    .setPositiveButton(R.string.button_enable_upscaling, (d, w) -> {
+                        boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
+                        boolean hdrOn = isHdrEnabled(sp);
+
+                        if (gpuPath || hdrOn) {
+                            new AlertDialog.Builder(requireContext())
+                                    .setTitle(R.string.title_upscaling_unavailable_dialog)
+                                    .setMessage(R.string.text_upscaling_unavailable_dialog)
+                                    .setPositiveButton(R.string.button_ok, null)
+                                    .show();
+                        } else {
+                            sp.edit().putBoolean("pref_video_upscale_enable", true).apply();
+
+                            Preference p = findPreference("pref_video_upscale_enable");
+                            if (p instanceof CheckBoxPreference) {
+                                ((CheckBoxPreference) p).setChecked(true);
+                            }
+
+                            updateLocks();
+                        }
+
+                        finalAfter.run();
+                    })
+                    .setNegativeButton(R.string.button_not_now, (d, w) -> finalAfter2.run())
+                    .setOnCancelListener(d -> finalAfter1.run())
+                    .show();
+        }
 
         private void applySuggestedResolution(String resolution) {
             SharedPreferences prefs = getPrefs();
+
+            String oldRes = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+            String oldFps = prefs.getString(PreferenceConfiguration.FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS);
+
+            // Apply the new resolution selection (both "custom" and primary resolution keys are updated).
             prefs.edit()
                     .putString(PreferenceConfiguration.CUSTOM_RESOLUTION_PREF_STRING, resolution)
                     .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, resolution)
                     .apply();
 
-            resetBitrateToDefault(prefs, resolution, null);
-            reloadSettings();
+            // Keep user-selected bitrate stable. Only auto-adjust when bitrate is still at the old default.
+            autoAdjustBitrateIfAtDefault(prefs, oldRes, oldFps, resolution, oldFps);
+
+            // Offer upscaling when streaming below the display resolution.
+            maybePromptEnableUpscalingForResolution(resolution, this::reloadSettings);
         }
 
         private void removeValue(String preferenceKey, String value, Runnable onMatched) {
@@ -1184,6 +1410,7 @@ public void onPause() {
                     hdrPref.setSummary("Update the firmware on your NVIDIA SHIELD Android TV to enable HDR");
                 }
             }
+            sortResolutionListAscending();
 
             // Add a listener to the FPS and resolution preference
             // so the bitrate can be auto-adjusted
@@ -1193,29 +1420,23 @@ public void onPause() {
                     SharedPreferences prefs = getPrefs();
                     String valueStr = (String) newValue;
 
-                    // Detect if this value is the native resolution option
-                    CharSequence[] values = ((ListPreference)preference).getEntryValues();
-                    boolean isNativeRes = true;
-                    for (int i = 0; i < values.length; i++) {
-                        // Look for a match prior to the start of the native resolution entries
-                        if (valueStr.equals(values[i].toString()) && i < nativeResolutionStartIndex) {
-                            isNativeRes = false;
-                            break;
-                        }
-                    }
-
-                    // If this is native resolution, show the warning dialog
-                    if (isNativeRes) {
+                    // If this is a non-standard injected (native/custom) resolution, show the warning dialog.
+                    if (nativeResolutionValues.contains(valueStr)) {
                         Dialog.displayDialog(getActivity(),
                                 getResources().getString(R.string.title_native_res_dialog),
                                 getResources().getString(R.string.text_native_res_dialog),
                                 false);
                     }
 
-                    // Write the new bitrate value
-                    resetBitrateToDefault(prefs, valueStr, null);
+                    String oldRes = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+                    String oldFps = prefs.getString(PreferenceConfiguration.FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS);
 
-                    // Allow the original preference change to take place
+                    // Keep user-selected bitrate stable. Only auto-adjust when bitrate is still at the old default.
+                    autoAdjustBitrateIfAtDefault(prefs, oldRes, oldFps, valueStr, oldFps);
+
+                    // Offer upscaling when streaming below the display resolution.
+                    maybePromptEnableUpscalingForResolution(valueStr, null);
+
                     return true;
                 }
             });
@@ -1234,10 +1455,12 @@ public void onPause() {
                                 false);
                     }
 
-                    // Write the new bitrate value
-                    resetBitrateToDefault(prefs, null, valueStr);
+                    String oldRes = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+                    String oldFps = prefs.getString(PreferenceConfiguration.FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS);
 
-                    // Allow the original preference change to take place
+                    // Keep user-selected bitrate stable. Only auto-adjust when bitrate is still at the old default.
+                    autoAdjustBitrateIfAtDefault(prefs, oldRes, oldFps, oldRes, valueStr);
+
                     return true;
                 }
             });
@@ -1513,8 +1736,22 @@ public void onPause() {
                 @Override
                 public void run() {
                     SharedPreferences prefs = getPrefs();
+
+                    String oldRes = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+                    String oldFps = prefs.getString(PreferenceConfiguration.FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS);
+
                     setValue(resolutionPrefString, nextDefault);
-                    resetBitrateToDefault(prefs, null, null);
+
+                    String newRes = oldRes;
+                    String newFps = oldFps;
+                    if (PreferenceConfiguration.RESOLUTION_PREF_STRING.equals(resolutionPrefString)) {
+                        newRes = nextDefault;
+                    } else if (PreferenceConfiguration.FPS_PREF_STRING.equals(resolutionPrefString)) {
+                        newFps = nextDefault;
+                    }
+
+                    // Keep user-selected bitrate stable. Only auto-adjust when bitrate is still at the old default.
+                    autoAdjustBitrateIfAtDefault(prefs, oldRes, oldFps, newRes, newFps);
                 }
             });
         }
