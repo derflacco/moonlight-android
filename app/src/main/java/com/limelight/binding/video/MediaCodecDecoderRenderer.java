@@ -2475,7 +2475,7 @@ try {
         rendererThread.start();
     }
     private boolean fetchNextInputBuffer() {
-        long startTime;
+        final long startNs = System.nanoTime();
         boolean codecRecovered;
 
         if (stopping) {
@@ -2487,13 +2487,11 @@ try {
             return true;
         }
 
-        startTime = SystemClock.uptimeMillis();
-
         try {
             // Timeout based on target frame rate and latency policy
             int dequeueTimeoutUs;
 
-            float wantedFps =
+            final float wantedFps =
                     (targetFps > 0f)
                             ? targetFps
                             : ((prefs != null && prefs.fps > 0f) ? prefs.fps : 60f);
@@ -2507,9 +2505,7 @@ try {
                     final int minTimeoutUs = 250;
                     final int maxTimeoutUs = 3000;
                     int t = lfrSlowTimeoutUs;
-                    if (t <= 0) {
-                        t = minTimeoutUs;
-                    }
+                    if (t <= 0) t = minTimeoutUs;
                     dequeueTimeoutUs = Math.max(minTimeoutUs, Math.min(maxTimeoutUs, t));
                 } else {
                     // PURE LFR / ULL: non-blocking input
@@ -2570,7 +2566,8 @@ try {
             // Get the backing ByteBuffer for the input buffer index
             if (nextInputBufferIndex >= 0) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                    final int idx = nextInputBufferIndex;
+                    nextInputBuffer = videoDecoder.getInputBuffer(idx);
                     if (nextInputBuffer == null) {
                         // This is not "busy": it's a codec/framework contract violation.
                         // Trigger codec recovery (caller will request IDR after recovery).
@@ -2581,8 +2578,7 @@ try {
                         nextInputBuffer = null;
 
                         handleDecoderException(new IllegalStateException(
-                                "getInputBuffer() returned null for index " + nextInputBufferIndex));
-
+                                "getInputBuffer() returned null for index " + idx));
                         return false;
                     } else {
                         // Always start from a clean buffer position/limit
@@ -2620,10 +2616,10 @@ try {
             return false;
         }
 
-        int deltaMs = (int) (SystemClock.uptimeMillis() - startTime);
-
-        if (deltaMs >= 20) {
-            LimeLog.warning("Dequeue input buffer ran long: " + deltaMs + " ms");
+        // Fine-grained "ran long" warning (ns domain)
+        final long dtNs = System.nanoTime() - startNs;
+        if (dtNs >= 20_000_000L) {
+            LimeLog.warning("Dequeue input buffer ran long: " + (dtNs / 1_000_000L) + " ms");
         }
 
         return nextInputBuffer != null;
