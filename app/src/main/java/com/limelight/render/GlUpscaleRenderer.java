@@ -461,6 +461,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         if (!upscaleEnabled || "none".equals(mode)) {
             return RenderMode.BYPASS;
+        } else if ("easu_rcas".equals(mode) && progEasu != 0 && !nearNative) {
+            return RenderMode.EASU_RCAS;
         } else {
             return RenderMode.RCAS_ONLY;
         }
