@@ -180,7 +180,7 @@ public class StreamSettings extends AppCompatActivity {
                             || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
                             || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
                             || "pref_low_latency_frame_balance".equals(key)  // LFR toggle (Prefer lower delays)
-
+                            || "checkbox_enable_perf_overlay_lite".equals(key) // Lite Mode toggle
                     ) {
                         // Re-evaluate UI locks and dependent visibility (including LFR mode slider)
                         updateLocks();
@@ -315,7 +315,7 @@ public class StreamSettings extends AppCompatActivity {
             boolean lockPacing = gpuPath;
             boolean lockLfr = false;
             boolean lockFsrEn = gpuPath || hdrOn;
-
+            boolean liteModeEnabled = sp.getBoolean("checkbox_enable_perf_overlay_lite", false);
             Preference pacingPref  = findPreference("frame_pacing");                  // Legacy hidden list preference
             Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
@@ -411,7 +411,40 @@ public class StreamSettings extends AppCompatActivity {
                 }
                 lfrModeSeek.setEnabled(lfrModeVisible);
             }
+// --- Lite Mode dependent preferences ---
+            Preference oledShiftPref = findPreference("checkbox_enable_perf_overlay_lite_oledshift");
+            Preference liteDialogPref = findPreference("checkbox_enable_perf_overlay_lite_dialog");
+            Preference liteAdvancedPref = findPreference("checkbox_enable_perf_overlay_lite_advanced");
 
+            if (oledShiftPref != null) {
+                boolean oledShiftVisible = liteModeEnabled;
+                try {
+                    oledShiftPref.setVisible(oledShiftVisible);
+                } catch (Throwable ignored) {
+                    oledShiftPref.setEnabled(oledShiftVisible);
+                }
+                oledShiftPref.setEnabled(oledShiftVisible);
+            }
+
+            if (liteDialogPref != null) {
+                boolean liteDialogVisible = liteModeEnabled;
+                try {
+                    liteDialogPref.setVisible(liteDialogVisible);
+                } catch (Throwable ignored) {
+                    liteDialogPref.setEnabled(liteDialogVisible);
+                }
+                liteDialogPref.setEnabled(liteDialogVisible);
+            }
+
+            if (liteAdvancedPref != null) {
+                boolean liteAdvancedVisible = liteModeEnabled;
+                try {
+                    liteAdvancedPref.setVisible(liteAdvancedVisible);
+                } catch (Throwable ignored) {
+                    liteAdvancedPref.setEnabled(liteAdvancedVisible);
+                }
+                liteAdvancedPref.setEnabled(liteAdvancedVisible);
+            }
             // Warp factor visibility rules:
             // Permanently disabled - warp factor functionality is no longer supported.
             if (warpSeek != null) {
