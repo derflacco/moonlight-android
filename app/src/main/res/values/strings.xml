@@ -774,10 +774,12 @@
     <string-array name="pref_video_upscale_mode_entries">
         <item>None (disable upscaling &amp; sharpening)</item>
         <item>RCAS (sharpen only)</item>
+		<item>EASU + RCAS</item>
     </string-array>
     <string-array name="pref_video_upscale_mode_values">
         <item>none</item>
         <item>rcas</item>
+		<item>easu_rcas</item>
     </string-array>
 
 
