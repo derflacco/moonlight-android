@@ -2668,7 +2668,9 @@ try {
         if (rendererThread != null) {
             rendererThread.interrupt();
         }
-
+        // Reset input buffer
+        nextInputBuffer = null;
+        nextInputBufferIndex = -1;
         // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
         synchronized (upscalerLock) {
             releaseUpscalerLocked();
@@ -2728,7 +2730,9 @@ try {
                 Thread.currentThread().interrupt();
             }
         }
-
+        // Reset input buffer
+        nextInputBuffer = null;
+        nextInputBufferIndex = -1;
         // Wait for the renderer thread to shut down
         try {
             rendererThread.join();
@@ -3702,6 +3706,10 @@ try {
     private boolean prefetchNextInputBuffer() {
         boolean codecRecovered;
 
+        if (stopping) {
+            return false;
+        }
+
         if (nextInputBuffer != null) {
             return true;
         }
@@ -3710,21 +3718,26 @@ try {
             nextInputBufferIndex = videoDecoder.dequeueInputBuffer(0);
             if (nextInputBufferIndex >= 0) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                    final int idx = nextInputBufferIndex;
+                    nextInputBuffer = videoDecoder.getInputBuffer(idx);
                     if (nextInputBuffer == null) {
+                        // Contract violation: treat as codec error and trigger recovery/IDR
                         nextInputBufferIndex = -1;
+                        nextInputBuffer = null;
+                        handleDecoderException(new IllegalStateException(
+                                "prefetch: getInputBuffer() returned null for index " + idx));
+                        return false;
                     } else {
-                        // Always start from a clean buffer position/limit
                         nextInputBuffer.clear();
                     }
                 } else {
                     nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
-
-                    // Always start from a clean buffer position/limit
                     nextInputBuffer.clear();
                 }
             }
         } catch (IllegalStateException e) {
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
             handleDecoderException(e);
             return false;
         } finally {
@@ -3738,8 +3751,10 @@ try {
         }
 
         // Best-effort: it's OK if no buffer is available right now.
+        // The decoder will try again when actually needed (in fetchNextInputBuffer).
         return true;
     }
+
     /**
      * Heavy perf overlay formatting.
      * Runs on the UI/main thread via perfOverlayHandler to avoid blocking the decode loop.
