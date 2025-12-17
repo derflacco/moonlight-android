@@ -417,6 +417,17 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64)
         adaptxLastMode = -1;
 
     }
+    // OLED shift for mini overlay (always active, separate from Lite overlay shift)
+    private long miniShiftNextNs = 0L;
+    private int miniShiftSpaces = 0;
+    private static final int MINI_SHIFT_MAX_SPACES = 6; // Slightly less than Lite for compact display
+    private static final long MINI_SHIFT_PERIOD_NS = 25_000_000_000L; // 25s (slightly faster than Lite)
+    // OLED blink for mini overlay (always active, separate from Lite overlay blink)
+    private long miniBlinkNextStartNs = 0L;
+    private long miniBlinkEndNs = 0L;
+    private static final long MINI_BLINK_PERIOD_NS = 180_000_000_000L; // 3 minutes
+    private static final long MINI_BLINK_DURATION_NS = 200_000_000L;   // 200 ms
+
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
     // Frame rendered telemetry (API 23+): register callback to track render-time deltas
@@ -3792,8 +3803,26 @@ try {
 
         StringBuilder sb = new StringBuilder(sbCap);
 
-        // --- PERF OVERLAY MINI ---
+// --- PERF OVERLAY MINI ---
         if (prefsSnapshot.enablePerfOverlayMini) {
+            // Update mini overlay shift timer (always active for burn-in protection)
+            long now = System.nanoTime();
+
+            // Update shift timer
+            if (miniShiftNextNs == 0L) {
+                miniShiftNextNs = now + MINI_SHIFT_PERIOD_NS;
+            } else if (now >= miniShiftNextNs) {
+                miniShiftSpaces = (miniShiftSpaces + 1) % MINI_SHIFT_MAX_SPACES;
+                miniShiftNextNs = now + MINI_SHIFT_PERIOD_NS;
+            }
+
+            // Update blink timer (always active for burn-in protection)
+            if (now >= miniBlinkNextStartNs) {
+                miniBlinkNextStartNs = now + MINI_BLINK_PERIOD_NS;
+                miniBlinkEndNs = now + MINI_BLINK_DURATION_NS;
+            }
+
+            // Build mini overlay content
             if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
                 long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
                         + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
@@ -3807,6 +3836,7 @@ try {
                 }
                 lastNetDataNum = netData;
             }
+
             float plPct = 0f;
             if (lastTwo.totalFrames > 0) {
                 plPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
@@ -3815,6 +3845,19 @@ try {
             sb.append("Net: ").append((int) (rttInfo >> 32))
                     .append("ms | Dec: ").append(String.format("%.1f", decodeTimeMs)).append("ms\n");
             sb.append(String.format("%.2f", fps.totalFps)).append(" FPS");
+
+            // Apply mini overlay OLED shift (always active for burn-in protection)
+            String miniOverlay = sb.toString();
+            String shiftedMiniOverlay = applyMiniShift(miniOverlay);
+            sb.setLength(0); // Clear original
+            sb.append(shiftedMiniOverlay);
+
+            // Apply mini overlay OLED blink (always active for burn-in protection)
+            if (miniBlinkEndNs > 0L && now < miniBlinkEndNs) {
+                // During blink period, blank the overlay with a single space
+                sb.setLength(0);
+                sb.append(' ');
+            }
         }
         // --- PERF OVERLAY LITE ---
         else if (prefsSnapshot.enablePerfOverlayLite) {
@@ -4014,7 +4057,13 @@ try {
             LimeLog.info("DecPerf: " + rawLog);
         }
     }
-
+    // Helper method for mini overlay shift
+    private String applyMiniShift(String text) {
+        if (text == null || text.isEmpty() || miniShiftSpaces <= 0) return text;
+        StringBuilder prefix = new StringBuilder(miniShiftSpaces);
+        for (int i = 0; i < miniShiftSpaces; i++) prefix.append(' ');
+        return prefix.append(text).toString();
+    }
 private boolean isMTKDecoderName(String name) {
     if (name == null) return false;
     String n = name.toLowerCase();
