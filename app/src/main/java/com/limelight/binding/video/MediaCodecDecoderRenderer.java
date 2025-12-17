@@ -1922,6 +1922,10 @@ try {
                                     continue;
                                 }
                             }
+                        } catch (IllegalStateException e) {
+                            // Do not swallow codec errors in LFR path: trigger recovery/IDR
+                            handleDecoderException(e);
+                            try { doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD); } catch (Throwable ignored2) {}
                         } catch (Throwable ignored) {}
                     }
                     /* /LATEST_ONLY_LOW_LATENCY */
