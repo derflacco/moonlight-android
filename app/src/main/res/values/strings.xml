@@ -766,7 +766,7 @@
     <string name="pref_fg_lite_motion_adapt_summary">Reduce ghosting by lowering blend on fast edges</string>
     <!-- Video Upscaling (FSR-like) -->
     <string name="pref_video_upscale_enable_title">Video upscaling (FSR‑like)</string>
-    <string name="pref_video_upscale_enable_summary">GPU spatial upscaling + optional sharpening.Forces GPU RAW, LFR off.</string>
+    <string name="pref_video_upscale_enable_summary">FSR1-like upscaling + optional sharpening.Forces GPU RAW, LFR off.</string>
     <string name="pref_video_upscale_mode_title">Upscaling mode</string>
     <string name="pref_video_upscale_sharpness_title">Sharpening</string>
     <string name="pref_video_upscale_sharpness_summary">RCAS intensity (0–100)</string>
