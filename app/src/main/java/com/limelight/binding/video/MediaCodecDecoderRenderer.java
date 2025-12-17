@@ -3722,6 +3722,8 @@ try {
                     nextInputBuffer = videoDecoder.getInputBuffer(idx);
                     if (nextInputBuffer == null) {
                         // Contract violation: treat as codec error and trigger recovery/IDR
+                        inputTryAgainStreak = 0;
+                        inputDequeueHangStartMs = 0L;
                         nextInputBufferIndex = -1;
                         nextInputBuffer = null;
                         handleDecoderException(new IllegalStateException(
@@ -3734,8 +3736,15 @@ try {
                     nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
                     nextInputBuffer.clear();
                 }
+
+                // Success: reset hang tracking for consistency with fetchNextInputBuffer
+                inputTryAgainStreak = 0;
+                inputDequeueHangStartMs = 0L;
             }
+            // No buffer available is OK for prefetch - don't increment streak
         } catch (IllegalStateException e) {
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
             nextInputBuffer = null;
             handleDecoderException(e);
@@ -3745,6 +3754,8 @@ try {
         }
 
         if (codecRecovered) {
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
             nextInputBuffer = null;
             return false;
