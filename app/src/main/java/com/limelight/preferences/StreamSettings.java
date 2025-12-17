@@ -319,11 +319,14 @@ public class StreamSettings extends AppCompatActivity {
             Preference pacingPref  = findPreference("frame_pacing");                  // Legacy hidden list preference
             Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
+            Preference fsrMode     = findPreference("pref_video_upscale_mode");       // Upscaling mode preference
+            Preference sharpness   = findPreference("pref_video_upscale_sharpness");  // Sharpening preference
             Preference warpSeek    = findPreference("seekbar_warp_factor");
             Preference profileSeek = findPreference("seekbar_frame_pacing_profile");  // Unified pacing profile slider
             Preference gpuKickPref = findPreference("pref_gpu_kick_enable");          // GPU kick toggle (now hidden)
             Preference lfrModeSeek = findPreference("seekbar_lfr_mode");              // LFR mode slider (Pure/Lite)
-// GPU Kick preference: permanently hidden, engine now forces GPU kick in Direct Present
+
+            // GPU Kick preference: permanently hidden, engine now forces GPU kick in Direct Present
             if (gpuKickPref != null) {
                 try {
                     gpuKickPref.setVisible(false);
@@ -355,11 +358,35 @@ public class StreamSettings extends AppCompatActivity {
                 lfrBal.setEnabled(showLfrToggle && !lockLfr);
             }
 
+            // Check if FSR upscaling is enabled
+            boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;
+
+            // FSR upscaling enable checkbox
             if (fsrEn != null) {
                 fsrEn.setEnabled(!lockFsrEn);
             }
 
-// Enforce mutual exclusion: if Direct Present or HDR is active, force-disable upscaling.
+            // Upscaling mode preference: visible and enabled only when FSR is enabled
+            if (fsrMode != null) {
+                try {
+                    fsrMode.setVisible(fsrEnabled);
+                } catch (Throwable ignored) {
+                    fsrMode.setEnabled(fsrEnabled);
+                }
+                fsrMode.setEnabled(fsrEnabled);
+            }
+
+            // Sharpness preference: visible and enabled only when FSR is enabled
+            if (sharpness != null) {
+                try {
+                    sharpness.setVisible(fsrEnabled);
+                } catch (Throwable ignored) {
+                    sharpness.setEnabled(fsrEnabled);
+                }
+                sharpness.setEnabled(fsrEnabled);
+            }
+
+            // Enforce mutual exclusion: if Direct Present or HDR is active, force-disable upscaling.
             if (lockFsrEn) {
                 if (fsrEn instanceof CheckBoxPreference) {
                     CheckBoxPreference cb = (CheckBoxPreference) fsrEn;
