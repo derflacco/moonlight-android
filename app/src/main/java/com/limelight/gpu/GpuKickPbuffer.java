@@ -34,6 +34,7 @@ public final class GpuKickPbuffer {
     private int program = 0;
     private int vbo = 0;
     private int positionAttr = 0; // we bind 'aPos' to location 0 explicitly
+    private boolean glStateReady = false;
 
     private static final String VERTEX_SHADER_SOURCE =
             "attribute vec2 aPos;\n" +
@@ -50,8 +51,14 @@ public final class GpuKickPbuffer {
             -1.0f,  3.0f
     };
 
+    // Pbuffer size: keep small to minimize per-frame cost.
+// 16x16 is a good "driver-safe" default.
     private static final int PBUFFER_WIDTH = 16;
     private static final int PBUFFER_HEIGHT = 16;
+
+    // Kick strength: increase this if you want more GPU work without increasing pbuffer size.
+// Keep 1 by default (lowest overhead).
+    private static final int KICK_DRAWS_PER_FRAME = 3;
 
     public void setEnabled(boolean enabled) {
         boolean was = this.enabled;
@@ -114,6 +121,9 @@ public final class GpuKickPbuffer {
             if (DEBUG) Log.e(TAG, "makeCurrent fail");
             return false;
         }
+        // No vsync for a headless pbuffer context.
+        try { EGL14.eglSwapInterval(eglDisplay, 0); } catch (Throwable ignored) {}
+
         return true;
     }
 
@@ -157,7 +167,24 @@ public final class GpuKickPbuffer {
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vbo);
         GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, TRIANGLE_VERTICES.length * 4, fb, GLES20.GL_STATIC_DRAW);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+
+// One-time state setup for this dedicated context (reduces per-frame overhead).
+        GLES20.glDisable(GLES20.GL_DITHER);
+        GLES20.glViewport(0, 0, PBUFFER_WIDTH, PBUFFER_HEIGHT);
+
+        GLES20.glUseProgram(program);
+
+// Bind VBO once and point attrib 0 to it.
+// VertexAttribPointer captures the buffer binding, so we can unbind after.
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vbo);
+        GLES20.glEnableVertexAttribArray(positionAttr);
+        GLES20.glVertexAttribPointer(positionAttr, 2, GLES20.GL_FLOAT, false, 0, 0);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+
+        glStateReady = true;
+        GLES20.glFlush();
         return true;
+
     }
 
     /** Ensure our EGL context/surfaces are current. Returns false if cannot. */
@@ -194,18 +221,15 @@ public final class GpuKickPbuffer {
                 if (!inited || !ensureCurrent()) return;
             }
 
-            GLES20.glViewport(0, 0, PBUFFER_WIDTH, PBUFFER_HEIGHT);
-            GLES20.glUseProgram(program);
+            if (!glStateReady) return;
 
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vbo);
-            GLES20.glEnableVertexAttribArray(positionAttr);
-            GLES20.glVertexAttribPointer(positionAttr, 2, GLES20.GL_FLOAT, false, 0, 0);
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
-            GLES20.glDisableVertexAttribArray(positionAttr);
-
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-            GLES20.glUseProgram(0);
+// Minimal GPU work: one (or few) draws + flush.
+// Avoid glFinish() here (blocking).
+            for (int i = 0; i < KICK_DRAWS_PER_FRAME; i++) {
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
+            }
             GLES20.glFlush();
+
         } catch (Throwable t) {
             if (DEBUG) Log.e(TAG, "kickOnce error", t);
         }
@@ -228,6 +252,7 @@ public final class GpuKickPbuffer {
         }
         teardownEGL();
         inited = false;
+        glStateReady = false;
     }
 
     private void teardownEGL() {
