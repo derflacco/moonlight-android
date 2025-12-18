@@ -63,7 +63,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Gamma lift when FSR is active. 1.0 = no change, >1 brightens midtones.
     // Tune this if you want more/less brightness while FSR is on.
     private static final float FSR_GAMMA_COMPENSATION = 1.10f;
-
+// Extra sharpness headroom when stream resolution is <= 50% of output (>= 2.0x upscale).
+    private static final float LOW_RES_UPSCALE_RATIO_START = 2.0f; // 2x upscale == src is 50% of dst
+    private static final float LOW_RES_UPSCALE_RATIO_FULL  = 3.0f; // fully applied at 3x and above
+    private static final float LOW_RES_SHARPNESS_CAP_BONUS = 0.18f; // add up to +0.18 to the cap
+    private static final float MAX_INTERNAL_SHARPNESS      = 0.80f; // hard clamp for safety
     // ====== ES version ======
     private boolean isEs3 = false;
 
@@ -683,7 +687,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             renderMode = RenderMode.RCAS_ONLY;
         }
 
-        float effectiveSharpness = mapUiSharpToInternal(sharpUser, nearNative);
+        final float upscaleRatio =
+                Math.min((float) fbW / (float) srcW, (float) fbH / (float) srcH);
+
+        float effectiveSharpness = mapUiSharpToInternal(sharpUser, nearNative, upscaleRatio);
 
         boolean success = false;
         String actualMode = "BYPASS";
@@ -1385,13 +1392,24 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
 
     // Map UI sharpness (0..1) -> internal RCAS strength.
-    private static float mapUiSharpToInternal(float ui, boolean nearNative) {
+    private static float mapUiSharpToInternal(float ui, boolean nearNative, float upscaleRatio) {
         float s = clamp01(ui);
         if (s <= SHARPNESS_DEADZONE) return 0f;             // dead-zone
         s = (s - SHARPNESS_DEADZONE) / (1.0f - SHARPNESS_DEADZONE); // rebase to 0..1
-        s = (float)(1.0 - Math.exp(-SHARPNESS_EXP_FACTOR * s));     // eased
-        s = (float)Math.pow(s, SHARPNESS_GAMMA);                     // emphasize highs
+        s = (float) (1.0 - Math.exp(-SHARPNESS_EXP_FACTOR * s));    // eased
+        s = (float) Math.pow(s, SHARPNESS_GAMMA);                   // emphasize highs
+
+        // Base caps (existing behavior)
         float cap = nearNative ? 0.32f : 0.55f;
+
+        // If src is <50% of dst (upscaleRatio > 2.0), allow stronger sharpening progressively.
+        if (upscaleRatio >= LOW_RES_UPSCALE_RATIO_START) {
+            float t = (upscaleRatio - LOW_RES_UPSCALE_RATIO_START) /
+                    (LOW_RES_UPSCALE_RATIO_FULL - LOW_RES_UPSCALE_RATIO_START);
+            t = clamp01(t);
+            cap = Math.min(MAX_INTERNAL_SHARPNESS, cap + (LOW_RES_SHARPNESS_CAP_BONUS * t));
+        }
+
         return cap * s;
     }
 
@@ -1699,7 +1717,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         bindQuad(progRcasOes);
         // For a 2x2 FBO, 1/width = 0.5, 1/height = 0.5
         GLES20.glUniform2f(rcasOes_uInvDst, 0.5f, 0.5f);
-        GLES20.glUniform1f(rcasOes_uSharp, mapUiSharpToInternal(0.2f, true));
+        GLES20.glUniform1f(rcasOes_uSharp, mapUiSharpToInternal(0.2f, true, 1.0f));
         GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
