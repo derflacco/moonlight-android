@@ -1289,6 +1289,10 @@ private static int getFramePacingValue(Context context) {
 
         // Adaptive GPU Kick (tiny per-frame draw to keep GPU clocks)
         try { config.enableGpuKick = prefs.getBoolean(GPU_KICK_ENABLE_PREF_STRING, false); } catch (Throwable ignored) { config.enableGpuKick = false; }
+// Force GPU kick in Direct Present / GPU Path Mode (UI hides the toggle as "forced").
+        if (config.gpuPathMode) {
+            config.enableGpuKick = true;
+        }
         return config;
 
 
