@@ -556,9 +556,9 @@
     <string name="title_hide_clipboard_content">Hide clipboard content</string>
     <string name="summary_hide_clipboard_content">Mark remote clipboard as sensitive information</string>
     <string name="title_settings_misc">MISC</string>
-    <string name="perf_overlay_lite_bandwidth">Bandwidth</string>
-    <string name="perf_overlay_lite_network_decoding_delay">Network/Decoding delay</string>
-    <string name="perf_overlay_lite_packet_loss">Packet loss</string>
+    <string name="perf_overlay_lite_bandwidth">Bw</string>
+    <string name="perf_overlay_lite_network_decoding_delay">Net/Dec</string>
+    <string name="perf_overlay_lite_packet_loss"> Loss</string>
     <string name="wrong_import_format">Wrong import format, please check!</string>
     <string name="title_checkbox_gamepad_enable_battery_report">Enable battery status report for gamepad</string>
     <string name="summary_checkbox_gamepad_enable_battery_report">Report gamepad battery status when possible.\nDisable this option might help if you experience stutter with touch screen/touch pad/stylus/mouse input occasionally.</string>
