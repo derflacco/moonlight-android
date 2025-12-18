@@ -895,14 +895,21 @@ return videoFormat;
 
         LimeLog.info("Configuring with format: "+format);
 
-        // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
+// Use GL presenter when:
+// - GPU Path Mode (Direct Present): ALWAYS use GL, but bypass scaling/FSR internally
+// - Upscaling enabled: use full GL upscaler path
         Surface __codecSurface = renderTarget;
-        if (prefs != null && prefs.videoUpscaleEnable) {
+
+        final boolean wantGlPresenter =
+                (prefs != null) && (prefs.gpuPathMode || prefs.videoUpscaleEnable);
+
+        if (wantGlPresenter) {
             synchronized (upscalerLock) {
                 try {
                     if (glUpscaler == null) {
                         glUpscaler = __fsrMaybeCreate((Object) glUpscaler, renderTarget, initialWidth, initialHeight, prefs);
                         decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
+
                         // Provide presentation-size hint from Context if available
                         try {
                             java.lang.reflect.Method m = glUpscaler.getClass().getMethod(
@@ -923,6 +930,14 @@ return videoFormat;
                 }
             }
         }
+
+// Track whether we are presenting via GL
+        glPresentPathActive = (__codecSurface != renderTarget);
+
+
+// Track whether we are presenting via GL
+        glPresentPathActive = (__codecSurface != renderTarget);
+
         videoDecoder.configure(format, __codecSurface, null, 0);
 
         // Start GL upscaler loop if present
@@ -1170,6 +1185,7 @@ try {
     private final Object upscalerLock = new Object();
     private Object glUpscaler; // usato via reflection
     private android.view.Surface decoderInputSurfaceForUpscale;
+    private volatile boolean glPresentPathActive = false; // true when decoder outputs to GL input surface
 
     private void releaseUpscalerLocked() {
         // Caller must hold upscalerLock
@@ -1179,9 +1195,8 @@ try {
             try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
             decoderInputSurfaceForUpscale = null;
         }
+        glPresentPathActive = false;
     }
-
-
 
     // All threads that interact with the MediaCodec instance must call this function regularly!
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
@@ -3552,8 +3567,13 @@ try {
     private boolean shouldUseGpuKick(PreferenceConfiguration p) {
         if (p == null || !p.enableGpuKick) return false;
         if (android.os.Build.VERSION.SDK_INT < 17) return false;
+
+        // When presenting via GL, use the GL kick path only (avoid double kick).
+        if (glPresentPathActive) return false;
+
         return p.gpuPathMode || (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW);
     }
+
 
     private void startGpuKickThreadIfNeeded() {
         synchronized (gpuKickLock) {
