@@ -1265,6 +1265,11 @@ private static int getFramePacingValue(Context context) {
         try {
             config.videoUpscaleSharpness = prefs.getInt(VIDEO_UPSCALE_SHARP_PREF_STRING, DEFAULT_VIDEO_UPSCALE_SHARP);
         } catch (ClassCastException ex) {
+            // Runtime safety: if the checkbox is OFF, force mode to "none" (do not touch stored prefs).
+            if (!config.videoUpscaleEnable) {
+                config.videoUpscaleMode = "none";
+            }
+
             // SeekBarPreference may store string on some forks; try to parse
             try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }

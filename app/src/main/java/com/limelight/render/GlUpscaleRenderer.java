@@ -252,11 +252,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Decide once, at construction, if this renderer can use the ultra-thin path.
     // True when GPU direct path is forced or FSR mode is logically disabled.
     private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
-        if (prefs == null) return false;
+        // Treat disabled upscaling as a full bypass (ultra-thin OES->screen path).
+        if (prefs == null) return true;
         if (prefs.gpuPathMode) return true;
+        if (!prefs.videoUpscaleEnable) return true;
 
         final String mode = prefs.videoUpscaleMode;
-        // FSR bypass
         return (mode == null || "none".equals(mode));
     }
 
@@ -472,10 +473,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // FSR completely bypassed (no EASU, no RCAS): we can just blit OES -> screen.
     // Used to skip renderFrame() entirely when FSR is logically off.
-    private boolean isFsrBypassFastPath() {
-        if (prefs == null) return false;
-        final String mode = prefs.videoUpscaleMode;
-        // Treat null or "none" as full bypass
+    private boolean isFsrBypassFastPath(String mode) {
+        // If the checkbox is OFF, treat it as a full bypass (no FSR/RCAS work).
+        if (prefs == null) return true;
+        if (prefs.gpuPathMode) return true;
+        if (!prefs.videoUpscaleEnable) return true;
+
         return (mode == null || "none".equals(mode));
     }
 
