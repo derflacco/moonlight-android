@@ -23,7 +23,6 @@ import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.TrafficStatsHelper;
 
 import android.annotation.SuppressLint;
-import android.util.LongSparseArray;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
@@ -49,31 +48,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean preferLowerDelays = false;
 
     // Toggle at runtime if needed
-    // Decode latency tracking: map PTS(us) -> enqueue time (ns)
-    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
-
-    // When preferLowerDelays=true we force 0µs (non-blocking, latest-frame rendering).
-    // When preferLowerDelays=false we use this configurable timeout (µs) for output dequeue.
-    private volatile int preferLowerDelaysTimeoutUs = 2000;
-    public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
-
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? 0 : preferLowerDelaysTimeoutUs; }
-
-    // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
-    private void updateDecodeLatencyStats(long presentationTimeUs) {
-        Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
-        if (enqNs != null) {
-            enqueueNsByPtsUs.delete(presentationTimeUs);
-            long decMs = (System.nanoTime() - enqNs) / 1_000_000L;
-            if (decMs >= 0 && decMs < 1000) {
-                activeWindowVideoStats.decoderTimeMs += decMs;
-                if (!USE_FRAME_RENDER_TIME) {
-                    activeWindowVideoStats.totalTimeMs += decMs;
-                }
-            }
-        }
-    }
-
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
 
 
@@ -547,8 +521,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
         }
-
-return videoFormat;
+        return videoFormat;
     }
 
     private void configureAndStartDecoder(MediaFormat format) {
@@ -585,15 +558,6 @@ return videoFormat;
 
         videoDecoder.configure(format, renderTarget, null, 0);
 
-try {
-    MediaCodecInfo __info = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
-    String __name = (__info != null) ? __info.getName() : "<unknown>";
-    LimeLog.info("Decoder name: " + __name);
-} catch (Throwable t) {
-    LimeLog.info("Decoder name: <unavailable>");
-}
-
-
         configuredFormat = format;
 
         // After reconfiguration, we must resubmit CSD buffers
@@ -612,17 +576,6 @@ try {
 
         // Start the decoder
         videoDecoder.start();
-
-// Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
-try {
-    MediaFormat __inF = videoDecoder.getInputFormat();
-    MediaFormat __outF = videoDecoder.getOutputFormat();
-    LimeLog.info("Decoder input format: " + (__inF != null ? __inF.toString() : "<null>"));
-    LimeLog.info("Decoder output format: " + (__outF != null ? __outF.toString() : "<null>"));
-} catch (Throwable t) {
-    LimeLog.info("Decoder formats unavailable after start");
-}
-
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             legacyInputBuffers = videoDecoder.getInputBuffers();
@@ -1068,12 +1021,7 @@ try {
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
                     }
                     else {
-                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                long __ts = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(nextOutputBuffer, __ts);
-            } else {
-                videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-            }
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
                     }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
@@ -1194,22 +1142,12 @@ try {
                                 __isMTK = sum2.contains("mtk") || sum2.contains("mediatek");
                             } catch (Throwable ignored) {}
                             if (__isMTK) {
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                long __ts = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(__last, __ts);
-            } else {
-                videoDecoder.releaseOutputBuffer(__last, true);
-            }
+                                videoDecoder.releaseOutputBuffer(__last, true);
                             } else if (android.os.Build.VERSION.SDK_INT >= 21) {
                                 long __now = System.nanoTime();
                                 videoDecoder.releaseOutputBuffer(__last, __now);
                             } else {
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                long __ts = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(__last, __ts);
-            } else {
-                videoDecoder.releaseOutputBuffer(__last, true);
-            }
+                                videoDecoder.releaseOutputBuffer(__last, true);
                             }
                             continue; // handled this iteration
                         }
@@ -1219,12 +1157,12 @@ try {
 
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 0); // non-blocking fast path
 
                         if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                             // reduced backoff 0–500 µs
                             tryAgainStreak++;
-                            int backoffUs = Math.min(getOutputDequeueTimeoutUs(), (tryAgainStreak <= 2) ? 250 : 500);
+                            int backoffUs = (tryAgainStreak <= 2) ? 250 : 500;
                             outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
                         } else {
                             tryAgainStreak = 0;
@@ -1253,7 +1191,7 @@ try {
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
                                     frameDropped = true; // we're discarding the oldest one
 
@@ -1289,19 +1227,26 @@ try {
                                         recentDrops = Math.max(0, recentDrops - 1);
 
                                         // [STATS] update subito dopo il present
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                                        if (delta >= 0 && delta < 1000) {
+                                            activeWindowVideoStats.decoderTimeMs += delta;
+                                            if (!USE_FRAME_RENDER_TIME) {
+                                                activeWindowVideoStats.totalTimeMs += delta;
+                                            }
+                                        }
                                         statsUpdated = true;
 
                                     } else {
-                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                long __ts = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(lastIndex, __ts);
-            } else {
-                videoDecoder.releaseOutputBuffer(lastIndex, true);
-            }
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
 
                                         // [STATS] anche su pre-Lollipop, dopo presentazione
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                                        if (delta >= 0 && delta < 1000) {
+                                            activeWindowVideoStats.decoderTimeMs += delta;
+                                            if (!USE_FRAME_RENDER_TIME) {
+                                                activeWindowVideoStats.totalTimeMs += delta;
+                                            }
+                                        }
                                         statsUpdated = true;
                                     }
                                 }
@@ -1348,19 +1293,26 @@ try {
                                         recentDrops = Math.max(0, recentDrops - 1);
 
                                         // [STATS] update subito dopo il present
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                                        if (delta >= 0 && delta < 1000) {
+                                            activeWindowVideoStats.decoderTimeMs += delta;
+                                            if (!USE_FRAME_RENDER_TIME) {
+                                                activeWindowVideoStats.totalTimeMs += delta;
+                                            }
+                                        }
                                         statsUpdated = true;
 
                                     } else {
-                                        if (android.os.Build.VERSION.SDK_INT >= 21) {
-                long __ts = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(lastIndex, __ts);
-            } else {
-                videoDecoder.releaseOutputBuffer(lastIndex, true);
-            }
+                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
 
                                         // [STATS] anche su pre-Lollipop, dopo presentazione
-                                        updateDecodeLatencyStats(presentationTimeUs);
+                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                                        if (delta >= 0 && delta < 1000) {
+                                            activeWindowVideoStats.decoderTimeMs += delta;
+                                            if (!USE_FRAME_RENDER_TIME) {
+                                                activeWindowVideoStats.totalTimeMs += delta;
+                                            }
+                                        }
                                         statsUpdated = true;
                                     }
                                 }
@@ -1393,7 +1345,13 @@ try {
                             // --- Fallback stats update ---
                             // If we didn't update the stats in-branch and the frame wasn't dropped,
                             if (!statsUpdated && !frameDropped) {
-                                updateDecodeLatencyStats(presentationTimeUs);
+                                long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                                if (delta >= 0 && delta < 1000) {
+                                    activeWindowVideoStats.decoderTimeMs += delta;
+                                    if (!USE_FRAME_RENDER_TIME) {
+                                        activeWindowVideoStats.totalTimeMs += delta;
+                                    }
+                                }
                             }
 
                         } else {
@@ -1606,9 +1564,6 @@ try {
             videoDecoder.queueInputBuffer(nextInputBufferIndex,
                     0, nextInputBuffer.position(),
                     timestampUs, codecFlags);
-
-            // Track enqueue time for this PTS
-            try { enqueueNsByPtsUs.put(timestampUs, System.nanoTime()); } catch (Throwable ignored) {}
 
             // We need a new buffer now
             nextInputBufferIndex = -1;
@@ -2330,12 +2285,4 @@ try {
             return str;
         }
     }
-
-
-private boolean isMTKDecoderName(String name) {
-    if (name == null) return false;
-    String n = name.toLowerCase();
-    return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
-}
-
 }
