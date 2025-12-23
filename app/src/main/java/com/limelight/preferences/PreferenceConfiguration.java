@@ -230,7 +230,6 @@ public class PreferenceConfiguration {
     public int width, height, bitrate;
     public float fps;
 //    public String customBitrate;
-    public boolean forceTightThresholds = false; // default off
     public boolean enableUltraLowLatency;
     public String customResolution;
     public String customRefreshRate;

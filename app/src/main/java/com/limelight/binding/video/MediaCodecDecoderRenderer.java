@@ -48,21 +48,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
 
-
-// Force tight thresholds regardless of device refresh (use vsyncPeriodNs always)
-private volatile boolean forceTightThresholds = false;
-/** Toggle tight frame pacing thresholds globally. */
-public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
-// Toggle at runtime if needed
+    // Toggle at runtime if needed
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
-    // When preferLowerDelays=true we use this configurable timeout (µs) for output dequeue.
-// When preferLowerDelays=false we force 0µs (non-blocking, latest-frame rendering).
+    // When preferLowerDelays=true we force 0µs (non-blocking, latest-frame rendering).
+    // When preferLowerDelays=false we use this configurable timeout (µs) for output dequeue.
     private volatile int preferLowerDelaysTimeoutUs = 2000;
     public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
 
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? preferLowerDelaysTimeoutUs : 0; }
+    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? 0 : preferLowerDelaysTimeoutUs; }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
@@ -1153,15 +1148,7 @@ try {
                 final int tfps = (targetFps > 0 ? targetFps : 60);
                 final long streamPeriodNs = (long) (1_000_000_000L / Math.max(1, tfps));
 
-
-                // Adaptive period selection to avoid added latency on high-refresh devices
-                final boolean highRefresh = displayHz >= 90f;
-                final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
-                // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
-                final long periodNs = forceTightThresholds
-                        ? vsyncPeriodNs
-                        : ((managedMode && !highRefresh) ? Math.max(vsyncPeriodNs, streamPeriodNs) : vsyncPeriodNs);
-boolean isC2Decoder = false;
+                boolean isC2Decoder = false;
                 try {
                     String decName = videoDecoder.getName();
                     if (decName != null) {
@@ -1182,51 +1169,68 @@ boolean isC2Decoder = false;
                 int    recentDrops             = 0;
 
                 double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1, tfps));
-                double ewmaDecodeToPresentNs   = periodNs * 0.7;
-                double ewmaJitterNs            = periodNs * 0.1;
+                double ewmaDecodeToPresentNs   = vsyncPeriodNs * 0.7;
+                double ewmaJitterNs            = vsyncPeriodNs * 0.1;
 
                 BufferInfo info = new BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
                 /* LATEST_ONLY_LOW_LATENCY */
-                if (!preferLowerDelays) {
-    try {
-        android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
-        int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-        int __last = -1;
-        long __lastPtsUs = -1L;
-
-        // Drain non-blocking; keep only the newest buffer
-        while (__idx >= 0) {
-            if (__last >= 0) {
-                try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-            }
-            __last = __idx;
-            __lastPtsUs = __tmpInfo.presentationTimeUs;
-            __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-        }
-
-        if (__last >= 0) {
-            long __nowNs = System.nanoTime();
-            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                if (preferLowerDelays) {
+                    try {
+                        android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
+                        int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                        int __last = -1;
+                        // Drain non-blocking; keep only the newest buffer
+                        while (__idx >= 0) {
+                            if (__last >= 0) {
+                                try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                            }
+                            __last = __idx;
+                            __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                        }
+                        if (__last >= 0) {
+                            // Simple pacing rule:
+                            // - MTK devices → present immediate (true)
+                            // - Others     → present at "now" timestamp
+                            boolean __isMTK = false;
+                            try {
+                                String sum2 = (android.os.Build.MANUFACTURER + " " + android.os.Build.HARDWARE + " " + android.os.Build.BOARD).toLowerCase(java.util.Locale.US);
+                                __isMTK = sum2.contains("mtk") || sum2.contains("mediatek");
+                            } catch (Throwable ignored) {}
+                            if (__isMTK) {
+                                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                long __ts = System.nanoTime();
+                videoDecoder.releaseOutputBuffer(__last, __ts);
             } else {
-                videoDecoder.releaseOutputBuffer(__last, true);
-            }
-
-            // Update decode->present EWMA and decode stats if we have a valid PTS
-            if (__lastPtsUs >= 0) {
-                long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                ewmaDecodeToPresentNs += EWMA_ALPHA * (__d2pNs - ewmaDecodeToPresentNs);
-                try { updateDecodeLatencyStats(__lastPtsUs); } catch (Throwable ignored) {}
-            }
-
-            continue; // handled this iteration
-        }
-    } catch (Throwable ignored) {}
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(__last, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(__last, true);
 }
-/* /LATEST_ONLY_LOW_LATENCY */
-
+            }
+                            } else if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                long __now = System.nanoTime();
+                                videoDecoder.releaseOutputBuffer(__last, __now);
+                            } else {
+                                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                long __ts = System.nanoTime();
+                videoDecoder.releaseOutputBuffer(__last, __ts);
+            } else {
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+    long __ts = System.nanoTime();
+    videoDecoder.releaseOutputBuffer(__last, __ts);
+} else {
+    videoDecoder.releaseOutputBuffer(__last, true);
+}
+            }
+                            }
+                            continue; // handled this iteration
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                /* /LATEST_ONLY_LOW_LATENCY */
 
                     try {
                         // Try to output a frame
@@ -1285,7 +1289,7 @@ boolean isC2Decoder = false;
                                         double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
                                         factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
 
-                                        long dropThresholdSmoothNs = (long)(periodNs * factorSmooth);
+                                        long dropThresholdSmoothNs = (long)(vsyncPeriodNs * factorSmooth);
 
                                         if (frameAgeNs >= dropThresholdSmoothNs) {
                                             videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
@@ -1312,7 +1316,7 @@ boolean isC2Decoder = false;
     long __ts = System.nanoTime();
     videoDecoder.releaseOutputBuffer(lastIndex, __ts);
 } else {
-    videoDecoder.releaseOutputBuffer(lastIndex, false);
+    videoDecoder.releaseOutputBuffer(lastIndex, true);
 }
             }
 
@@ -1337,17 +1341,17 @@ boolean isC2Decoder = false;
                                                 + 0.2 * mismatch);
                                         factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
 
-                                        long dropThresholdNs = (long)(periodNs * factorLatency);
+                                        long dropThresholdNs = (long)(vsyncPeriodNs * factorLatency);
 
                                         final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
+                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (vsyncPeriodNs / 2);
                                         final boolean isLate = frameAgeNs > dropThresholdNs;
                                         lateStreak = isLate ? (lateStreak + 1) : 0;
 
                                         final boolean shouldDrop =
                                                 isLate &&
                                                         (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long)(periodNs * 0.5)) &&
+                                                        (sinceLastPresent < (long)(vsyncPeriodNs * 0.5)) &&
                                                         dropCooldownOk;
 
                                         if (shouldDrop) {
@@ -1376,7 +1380,7 @@ boolean isC2Decoder = false;
     long __ts = System.nanoTime();
     videoDecoder.releaseOutputBuffer(lastIndex, __ts);
 } else {
-    videoDecoder.releaseOutputBuffer(lastIndex, false);
+    videoDecoder.releaseOutputBuffer(lastIndex, true);
 }
             }
 

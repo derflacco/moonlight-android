@@ -669,48 +669,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 shouldInvertDecoderResolution,
                 glPrefs.glRenderer,
                 this);
+            try { decoderRenderer.setPreferLowerDelays(prefConfig != null ? prefConfig.preferLowerDelays : true); } catch (Throwable ignored) {}
 
-// --- Force tight thresholds (opzionale, via prefConfig.forceTightThresholds) ---
-        try {
-            boolean forceTight = false;
-            if (prefConfig != null) {
-                try {
-                    java.lang.reflect.Field f = prefConfig.getClass().getDeclaredField("forceTightThresholds");
-                    f.setAccessible(true);
-                    Object v = f.get(prefConfig);
-                    if (v instanceof Boolean) forceTight = (Boolean) v;
-                } catch (Throwable ignored) {}
-            }
-            try { decoderRenderer.setForceTightThresholds(forceTight);
-        applyLatencyPolicy(decoderRenderer, prefConfig);} catch (Throwable ignored) {}
-            if (forceTight) {
-                LimeLog.info("ForceTightThresholds enabled: using vsync-based thresholds on all devices");
-            }
-        } catch (Throwable ignored) {}
-
-// --- Selezione profilo latenza ---
-// Semantica: TRUE = gestito (usa timeout); FALSE = 0µs latest-only
-        try {
-             if (prefConfig != null && prefConfig.preferLowerDelays) {
-                // Intermedio: più reattivo di Balanced ma non 0 µs
-                decoderRenderer.setPreferLowerDelays(true);          // GESTITO
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(500);  // 0.5 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("PreferLowerDelays: preferLowerDelays=true, timeout=500us, pacing=BALANCED");
-            } else {
-                // Balanced default
-                decoderRenderer.setPreferLowerDelays(true);          // GESTITO
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(2000); // 2 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("Balanced: preferLowerDelays=true, timeout=2000us, pacing=BALANCED");
-            }
-        } catch (Throwable ignored) {}
 
         // Don't stream HDR if the decoder can't support it
         if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
             willStreamHdr = false;
             Toast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
         }
+
         // Display a message to the user if HEVC was forced on but we still didn't find a decoder
         if (prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_HEVC && !decoderRenderer.isHevcSupported()) {
             Toast.makeText(this, "No HEVC decoder found", Toast.LENGTH_LONG).show();
@@ -4346,29 +4313,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
         return null;
-    }
-
-
-    // Apply low-latency vs smooth policy to the decoder renderer
-    // Notes (EN):
-    // - In low-latency modes we enforce non-blocking dequeue (0 µs) and tight VSYNC pacing.
-    // - In smooth/balanced modes we allow a small timeout to stabilize pacing.
-    private void applyLatencyPolicy(com.limelight.binding.video.MediaCodecDecoderRenderer decoderRenderer,
-                                    com.limelight.preferences.PreferenceConfiguration prefConfig) {
-        try {
-            boolean isLowLatency = true;
-            if (prefConfig != null) {
-                // Consider Ultra/Reactive/ULL as low-latency, Balanced/Smooth as non-low-latency
-                int pacing = prefConfig.framePacing;
-                // Heuristic: if user selected Balanced/Smooth keep some timeout
-                isLowLatency = (pacing != com.limelight.preferences.PreferenceConfiguration.FRAME_PACING_BALANCED);
-            }
-            decoderRenderer.setPreferLowerDelays(isLowLatency);
-            decoderRenderer.setPreferLowerDelaysTimeoutUs(2000);
-            // Tighten thresholds to VSYNC when low-latency is requested
-            decoderRenderer.setForceTightThresholds(isLowLatency);
-        } catch (Throwable ignored) {
-        }
     }
 
 }

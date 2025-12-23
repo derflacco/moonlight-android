@@ -71,12 +71,7 @@
             android:summary="@string/summary_checkbox_ultra_low_latency"
             android:title="@string/title_checkbox_ultra_low_latency"
             app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_forceTightThresholds"
-            android:summary="@string/summary_checkbox_forceTightThresholds"
-            android:title="@string/title_checkbox_forceTightThresholds"
-            app:iconSpaceReserved="false" />
+
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_use_virtual_display"
