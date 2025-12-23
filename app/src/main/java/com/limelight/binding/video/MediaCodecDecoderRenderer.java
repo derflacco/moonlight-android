@@ -27,7 +27,6 @@ import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.media.MediaCodec;
-import android.os.Bundle;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaCodec.BufferInfo;
@@ -137,8 +136,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numVpsIn;
     private int numFramesIn;
     private int numFramesOut;
-
-    private int targetFps = 0;
 
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -717,7 +714,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
-        this.targetFps = (redrawRate > 0 ? redrawRate : 60);
         this.initialWidth = invertResolution ? height : width;
         this.initialHeight = invertResolution ? width : height;
         this.videoFormat = format;
@@ -1047,7 +1043,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE);
         choreographerHandlerThread.start();
 
         // Start the frame callbacks
@@ -1065,93 +1061,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread = new Thread() {
             @Override
             public void run() {
-                // Boost thread priority to reduce decoding latency
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
-
-                // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
-                long vsyncPeriodNs;
-                float displayHz = 60f;
-                try {
-                    if (Build.VERSION.SDK_INT >= 17 && context != null) {
-                        android.view.Display d = ((android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay();
-                        if (d != null) displayHz = d.getRefreshRate();
-                    }
-                } catch (Throwable ignored) {}
-                if (displayHz <= 0f) displayHz = 60f;
-                vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
-
-                // Stream cadence (targetFps set in setup(...))
-                final int tfps = (targetFps > 0 ? targetFps : 60);
-                final long streamPeriodNs = (long) (1_000_000_000L / Math.max(1, tfps));
-
-                boolean isC2Decoder = false;
-                try {
-                    String decName = videoDecoder.getName();
-                    if (decName != null) {
-                        isC2Decoder = decName.toLowerCase(java.util.Locale.US).startsWith("c2.");
-                    }
-                } catch (Throwable ignored) {}
-
-                // Aggressive/adaptive state
-                final double EWMA_ALPHA = 0.25;
-                final double MIN_FACTOR = 1.00;
-                final double MAX_FACTOR = 1.20;
-
-                long   lastDecoderPtsUs        = 0L;
-                long   lastPresentNs           = 0L;
-                long   lastDropNs              = 0L;
-                int    lateStreak              = 0;
-                int    tryAgainStreak          = 0;
-                int    recentDrops             = 0;
-
-                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1, tfps));
-                double ewmaDecodeToPresentNs   = vsyncPeriodNs * 0.7;
-                double ewmaJitterNs            = vsyncPeriodNs * 0.1;
-
                 BufferInfo info = new BufferInfo();
-                long lastOutputNs = System.nanoTime();
                 while (!stopping) {
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 0); // non-blocking fast path
-
-                        if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                            // reduced backoff 0–500 µs
-                            tryAgainStreak++;
-                            int backoffUs = (tryAgainStreak <= 2) ? 250 : 500;
-                            outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
-                        } else {
-                            tryAgainStreak = 0;
-                        }
-
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
                         if (outIndex >= 0) {
-                            // --- flags per gestire le statistiche in modo robusto ---
-                            boolean statsUpdated = false;
-                            boolean frameDropped = false;
-
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
 
                             numFramesOut++;
-
-                            // aggiorna inter-arrival
-                            if (lastDecoderPtsUs != 0L) {
-                                long interUs = presentationTimeUs - lastDecoderPtsUs;
-                                if (interUs > 0) {
-                                    double sample = interUs * 1000.0;
-                                    ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
-                                }
-                            }
-                            lastDecoderPtsUs = presentationTimeUs;
 
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                    frameDropped = true; // we're discarding the oldest one
 
                                     numFramesOut++;
+
                                     lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
                                 }
@@ -1160,116 +1088,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
                                     // In max smoothness or cap FPS mode, we want to never drop frames
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        // Smoothness: tighter threshold 1.05..1.2×
-                                        double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
-                                        double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
-                                        factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
-
-                                        long dropThresholdSmoothNs = (long)(vsyncPeriodNs * factorSmooth);
-
-                                        if (frameAgeNs >= dropThresholdSmoothNs) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue;
-                                        }
-
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                        lastPresentNs = nowNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
-                                        // [STATS] update subito dopo il present
-                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
-                                        if (delta >= 0 && delta < 1000) {
-                                            activeWindowVideoStats.decoderTimeMs += delta;
-                                            if (!USE_FRAME_RENDER_TIME) {
-                                                activeWindowVideoStats.totalTimeMs += delta;
-                                            }
-                                        }
-                                        statsUpdated = true;
-
-                                    } else {
+                                        // Use a PTS that will cause this frame to never be dropped
+                                        videoDecoder.releaseOutputBuffer(lastIndex, 0);
+                                    }
+                                    else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
-
-                                        // [STATS] anche su pre-Lollipop, dopo presentazione
-                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
-                                        if (delta >= 0 && delta < 1000) {
-                                            activeWindowVideoStats.decoderTimeMs += delta;
-                                            if (!USE_FRAME_RENDER_TIME) {
-                                                activeWindowVideoStats.totalTimeMs += delta;
-                                            }
-                                        }
-                                        statsUpdated = true;
                                     }
                                 }
                                 else {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
-                                        double backPressure = Math.min(1.0, (double)tryAgainStreak / 6.0);
-                                        double streamHz = Math.max(1.0, (double)tfps);
-                                        double mismatch = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
-                                        mismatch = Math.min(2.0, mismatch);
-
-                                        double factorLatency = 1.02 + 0.13 * (0.5 * (ewmaJitterNs / vsyncPeriodNs)
-                                                + 0.3 * backPressure
-                                                + 0.2 * mismatch);
-                                        factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
-
-                                        long dropThresholdNs = (long)(vsyncPeriodNs * factorLatency);
-
-                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (vsyncPeriodNs / 2);
-                                        final boolean isLate = frameAgeNs > dropThresholdNs;
-                                        lateStreak = isLate ? (lateStreak + 1) : 0;
-
-                                        final boolean shouldDrop =
-                                                isLate &&
-                                                        (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long)(vsyncPeriodNs * 0.5)) &&
-                                                        dropCooldownOk;
-
-                                        if (shouldDrop) {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
-                                            frameDropped = true;
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue; // niente stats sui frame droppati
-                                        }
-
-                                        videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                        lastPresentNs = nowNs;
-                                        if (!isLate) lateStreak = 0;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
-                                        // [STATS] update subito dopo il present
-                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
-                                        if (delta >= 0 && delta < 1000) {
-                                            activeWindowVideoStats.decoderTimeMs += delta;
-                                            if (!USE_FRAME_RENDER_TIME) {
-                                                activeWindowVideoStats.totalTimeMs += delta;
-                                            }
-                                        }
-                                        statsUpdated = true;
-
-                                    } else {
+                                        // Use a PTS that will cause this frame to be dropped if another comes in within
+                                        // the same V-sync period
+                                        videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
+                                    }
+                                    else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
-
-                                        // [STATS] anche su pre-Lollipop, dopo presentazione
-                                        long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
-                                        if (delta >= 0 && delta < 1000) {
-                                            activeWindowVideoStats.decoderTimeMs += delta;
-                                            if (!USE_FRAME_RENDER_TIME) {
-                                                activeWindowVideoStats.totalTimeMs += delta;
-                                            }
-                                        }
-                                        statsUpdated = true;
                                     }
                                 }
 
@@ -1287,29 +1120,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
-                                        frameDropped = true;
                                     } catch (InterruptedException e) {
+                                        // We're shutting down, so we can just drop this buffer on the floor
+                                        // and it will be reclaimed when the codec is released.
                                         return;
                                     }
                                 }
 
                                 // Add this buffer
                                 outputBufferQueue.add(lastIndex);
-                                // NB: in BALANCED non presentiamo qui; lasciamo il fallback stats sotto
                             }
 
-                            // --- Fallback stats update ---
-                            // If we didn't update the stats in-branch and the frame wasn't dropped,
-                            if (!statsUpdated && !frameDropped) {
-                                long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
-                                if (delta >= 0 && delta < 1000) {
-                                    activeWindowVideoStats.decoderTimeMs += delta;
-                                    if (!USE_FRAME_RENDER_TIME) {
-                                        activeWindowVideoStats.totalTimeMs += delta;
-                                    }
+                            // Add delta time to the totals (excluding probable outliers)
+                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                            if (delta >= 0 && delta < 1000) {
+                                activeWindowVideoStats.decoderTimeMs += delta;
+                                if (!USE_FRAME_RENDER_TIME) {
+                                    activeWindowVideoStats.totalTimeMs += delta;
                                 }
                             }
-
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
@@ -1329,12 +1158,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
                 }
-                            }
+            }
         };
         rendererThread.setName("Video - Renderer (MediaCodec)");
         rendererThread.setPriority(Thread.NORM_PRIORITY + 2);
         rendererThread.start();
     }
+
     private boolean fetchNextInputBuffer() {
         long startTime;
         boolean codecRecovered;
