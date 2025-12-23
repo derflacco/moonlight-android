@@ -660,7 +660,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                         // We must use commit because the app will crash when we return from this function
                         tombstonePrefs.edit().putInt("CrashCount", tombstonePrefs.getInt("CrashCount", 0) + 1).commit();
-                                 reportedCrash = true;
+                        reportedCrash = true;
                     }
                 },
                 tombstonePrefs.getInt("CrashCount", 0),
@@ -669,8 +669,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 shouldInvertDecoderResolution,
                 glPrefs.glRenderer,
                 this);
-            try { decoderRenderer.setPreferLowerDelays(prefConfig != null ? prefConfig.preferLowerDelays : true); } catch (Throwable ignored) {}
-
 
         // Don't stream HDR if the decoder can't support it
         if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
