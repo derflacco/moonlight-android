@@ -1069,46 +1069,81 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             @Override
             public void run() {
                 BufferInfo info = new BufferInfo();
-                while (!stopping) {
-                /* LATEST_ONLY_LOW_LATENCY */
-                if (preferLowerDelays) {
-                    try {
-                        android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
-                        int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                        int __last = -1;
-                        // Drain non-blocking; keep only the newest buffer
-                        while (__idx >= 0) {
-                            if (__last >= 0) {
-                                try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                            }
-                            __last = __idx;
-                            __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                        }
-                        if (__last >= 0) {
-                            // Simple pacing rule:
-                            // - MTK devices → present immediate (true)
-                            // - Others     → present at "now" timestamp
-                            boolean __isMTK = false;
-                            try {
-                                String sum2 = (android.os.Build.MANUFACTURER + " " + android.os.Build.HARDWARE + " " + android.os.Build.BOARD).toLowerCase(java.util.Locale.US);
-                                __isMTK = sum2.contains("mtk") || sum2.contains("mediatek");
-                            } catch (Throwable ignored) {}
-                            if (__isMTK) {
-                                videoDecoder.releaseOutputBuffer(__last, true);
-                            } else if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                long __now = System.nanoTime();
-                                videoDecoder.releaseOutputBuffer(__last, __now);
-                            } else {
-                                videoDecoder.releaseOutputBuffer(__last, true);
-                            }
-                            continue; // handled this iteration
-                        }
-                    } catch (Throwable ignored) {}
-                }
-                /* /LATEST_ONLY_LOW_LATENCY */
+                final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
 
+                while (!stopping) {
                     try {
-                        // Try to output a frame
+                        /* LATEST_ONLY_LOW_LATENCY */
+                        if (preferLowerDelays) {
+                            int idx = videoDecoder.dequeueOutputBuffer(lfrInfo, 0);
+                            long idxPtsUs = (idx >= 0) ? lfrInfo.presentationTimeUs : 0L;
+
+                            int last = -1;
+                            long lastPtsUs = 0L;
+
+                            // Drain non-blocking; keep only the newest buffer
+                            while (idx >= 0) {
+                                if (last >= 0) {
+                                    // Stats for the frame we are about to drop
+                                    long delta = SystemClock.uptimeMillis() - (lastPtsUs / 1000L);
+                                    if (delta >= 0 && delta < 1000) {
+                                        activeWindowVideoStats.decoderTimeMs += delta;
+                                        if (!USE_FRAME_RENDER_TIME) {
+                                            activeWindowVideoStats.totalTimeMs += delta;
+                                        }
+                                    }
+
+                                    try {
+                                        videoDecoder.releaseOutputBuffer(last, false);
+                                    } catch (Throwable ignored) { }
+
+                                    numFramesOut++; // dropped output buffer
+                                }
+
+                                last = idx;
+                                lastPtsUs = idxPtsUs;
+
+                                idx = videoDecoder.dequeueOutputBuffer(lfrInfo, 0);
+                                idxPtsUs = (idx >= 0) ? lfrInfo.presentationTimeUs : 0L;
+                            }
+
+                            if (last >= 0) {
+                                // Stats for the frame we are about to present
+                                long delta = SystemClock.uptimeMillis() - (lastPtsUs / 1000L);
+                                if (delta >= 0 && delta < 1000) {
+                                    activeWindowVideoStats.decoderTimeMs += delta;
+                                    if (!USE_FRAME_RENDER_TIME) {
+                                        activeWindowVideoStats.totalTimeMs += delta;
+                                    }
+                                }
+
+                                // Present immediately (API21+: release at "now")
+                                try {
+                                    if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                        videoDecoder.releaseOutputBuffer(last, System.nanoTime());
+                                    } else {
+                                        videoDecoder.releaseOutputBuffer(last, true);
+                                    }
+                                } catch (IllegalStateException e) {
+                                    handleDecoderException(e);
+                                } catch (Throwable ignored) { }
+
+                                numFramesOut++; // rendered output buffer
+                                activeWindowVideoStats.totalFramesRendered++;
+
+                                continue; // handled this iteration
+                            } else {
+                                // Handle format change also in LFR path
+                                if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                                    LimeLog.info("Output format changed");
+                                    outputFormat = videoDecoder.getOutputFormat();
+                                    LimeLog.info("New output format: " + outputFormat);
+                                }
+                            }
+                        }
+                        /* /LATEST_ONLY_LOW_LATENCY */
+
+                        // Non-LFR path (unchanged behavior)
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
@@ -1120,7 +1155,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
-                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    try {
+                                        videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    } catch (Throwable ignored) { }
 
                                     numFramesOut++;
 
@@ -1130,53 +1167,35 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // In max smoothness or cap FPS mode, we want to never drop frames
+                                    // Never-drop policy (do not hold output buffers)
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        // Use a PTS that will cause this frame to never be dropped
                                         videoDecoder.releaseOutputBuffer(lastIndex, 0);
-                                    }
-                                    else {
+                                    } else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
                                     }
-                                }
-                                else {
+                                } else {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        // Use a PTS that will cause this frame to be dropped if another comes in within
-                                        // the same V-sync period
                                         videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
-                                    }
-                                    else {
+                                    } else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
                                     }
                                 }
 
                                 activeWindowVideoStats.totalFramesRendered++;
-                            }
-                            else {
-                                // For balanced frame pacing case, the Choreographer callback will handle rendering.
-                                // We just put all frames into the output buffer queue and let it handle things.
-
-                                // Discard the oldest buffer if we've exceeded our limit.
-                                //
-                                // NB: We have to do this on the producer side because the consumer may not
-                                // run for a while (if there is a huge mismatch between stream FPS and display
-                                // refresh rate).
+                            } else {
+                                // Balanced: enqueue for Choreographer
                                 if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
                                     } catch (InterruptedException e) {
-                                        // We're shutting down, so we can just drop this buffer on the floor
-                                        // and it will be reclaimed when the codec is released.
                                         return;
-                                    }
+                                    } catch (Throwable ignored) { }
                                 }
-
-                                // Add this buffer
                                 outputBufferQueue.add(lastIndex);
                             }
 
                             // Add delta time to the totals (excluding probable outliers)
-                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
                             if (delta >= 0 && delta < 1000) {
                                 activeWindowVideoStats.decoderTimeMs += delta;
                                 if (!USE_FRAME_RENDER_TIME) {
@@ -1204,6 +1223,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
         };
+
         rendererThread.setName("Video - Renderer (MediaCodec)");
         rendererThread.setPriority(Thread.NORM_PRIORITY + 2);
         rendererThread.start();

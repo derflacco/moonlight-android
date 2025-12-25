@@ -607,9 +607,6 @@
 	<string name="title_checkbox_ultra_low_latency">超低延遲（實驗性）</string>
 	<string name="summary_checkbox_ultra_low_latency">僅對 SD8Gen2/8(s)Gen3/8Elite 與 MTK 裝置有效。</string>
 
-	<string name="title_checkbox_forceTightThresholds">緊密 VSync（實驗性）</string>
-	<string name="summary_checkbox_forceTightThresholds">更緊的 VSync 門檻以降低延遲；可能增加掉幀。</string>
-
 	<string name="title_checkbox_use_virtual_display">使用虛擬顯示器</string>
 	<string name="summary_checkbox_use_virtual_display">預設使用虛擬顯示器。\n虛擬顯示器可自動匹配用戶端解析度與幀率設定，帶來無縫的串流體驗。\n需要 Apollo 作為主機串流軟體。</string>
 
