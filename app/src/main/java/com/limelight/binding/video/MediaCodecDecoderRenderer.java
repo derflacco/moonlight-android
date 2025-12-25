@@ -1516,7 +1516,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = "(unknown)";
                 }
 
-                float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
+                final int denom = (lastTwo.totalFramesRendered > 0) ? lastTwo.totalFramesRendered : Math.max(1, lastTwo.totalFramesReceived);
+                final float decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) denom;
+
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
                 StringBuilder sb = new StringBuilder();
                 if(prefs.enablePerfOverlayLite){
