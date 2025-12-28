@@ -970,6 +970,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     public void setPresentationSizeHint(int w, int h) {
         hintOutW = Math.max(0, w);
         hintOutH = Math.max(0, h);
+        // Ensure we render at least once with the new target even if no new frame arrives
+        sizeChangedSinceLastSwap = true;
     }
     public void setPresentationSizeHintFromDisplay(android.view.Display display) {
         if (display == null) return;
