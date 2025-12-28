@@ -17,6 +17,7 @@ import android.util.DisplayMetrics;
 import android.view.WindowManager;
 import android.view.WindowMetrics;
 import android.graphics.Rect;
+import androidx.annotation.Keep;
 
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.LimeLog;
@@ -173,7 +174,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
     }
-
+    @Keep
     public Surface createDecoderInputSurface() {
         if (!isGlReady()) {
             initEglAndGl();
