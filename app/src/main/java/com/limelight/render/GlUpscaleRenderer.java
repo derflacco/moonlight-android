@@ -11,6 +11,12 @@ import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.view.Surface;
+import android.view.Display;
+import android.hardware.display.DisplayManager;
+import android.util.DisplayMetrics;
+import android.view.WindowManager;
+import android.view.WindowMetrics;
+import android.graphics.Rect;
 
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.LimeLog;
@@ -39,6 +45,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // RCAS_OES health-check state
     private boolean rcasOesChecked = false;
     private boolean rcasOesHealthy = false;
+
 
     // ===== FSR Telemetry (lightweight) =====
     private static final class FsrTelemetry {
@@ -123,8 +130,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // SurfaceTexture transform
     private final float[] texMatrix = new float[16];
-    // Timestamp dell’ultimo frame acquisito da SurfaceTexture (ns, clock monotonic)
-    private long lastFrameTexTimestampNs = 0L;
 
     // Presentation size hint (display-sized buffer), if known
     private volatile int hintOutW = 0, hintOutH = 0;
@@ -199,12 +204,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private Thread renderThread;
     private final Object frameLock = new Object();
     private boolean frameAvailable = false;
-    // Count pending SurfaceTexture frames (for draining backlog in GPU-only pacing)
-    private final java.util.concurrent.atomic.AtomicInteger pendingFrames = new java.util.concurrent.atomic.AtomicInteger(0);
-
-    // Dedicated handler thread for SurfaceTexture frame callbacks (keeps them off the main thread)
-    private android.os.HandlerThread stCbThread;
-    private android.os.Handler stCbHandler;
 
     // State cache
     private int curVpW = -1, curVpH = -1;
@@ -237,20 +236,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
 
+
         decoderSurfaceTex = new SurfaceTexture(oesTexId);
-        try {
-            // Ensure producer buffers match source video size to avoid extra scaling in SF
-            decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
-        } catch (Throwable ignored) {}
-
-        // Start callback thread (if not already)
-        if (stCbThread == null) {
-            stCbThread = new android.os.HandlerThread("ST-Callback", android.os.Process.THREAD_PRIORITY_DISPLAY);
-            stCbThread.start();
-            stCbHandler = new android.os.Handler(stCbThread.getLooper());
-        }
-
-        decoderSurfaceTex.setOnFrameAvailableListener(this, stCbHandler);
+        decoderSurfaceTex.setOnFrameAvailableListener(this);
         decoderInputSurface = new Surface(decoderSurfaceTex);
         return decoderInputSurface;
     }
@@ -277,15 +265,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 decoderSurfaceTex.setOnFrameAvailableListener(null);
                 decoderSurfaceTex.release();
                 decoderSurfaceTex = null;
-                // Stop callback thread
-                try {
-                    if (stCbThread != null) {
-                        stCbThread.quitSafely();
-                        stCbThread = null;
-                        stCbHandler = null;
-                    }
-                } catch (Throwable ignored2) {}
-
             }
             if (decoderInputSurface != null) {
                 decoderInputSurface.release();
@@ -300,14 +279,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     @Override public void onFrameAvailable(SurfaceTexture st) {
         synchronized (frameLock) {
             frameAvailable = true;
-            pendingFrames.incrementAndGet();
             frameLock.notifyAll();
         }
     }
 
     // ====== Loop ======
     private void renderLoop() {
-        boolean sizeChangedSinceLastSwap = true; // forza un primo draw
         while (running.get()) {
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -324,37 +301,23 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             if (!fixedStateApplied) { applyFixedState(); }
 
-            boolean didUpdateTex = false;
             try {
                 if (decoderSurfaceTex != null) {
-                    int p = pendingFrames.getAndSet(0);
-                    if (p > 0) {
-                        // Drain backlog and keep the most recent frame
-                        do { decoderSurfaceTex.updateTexImage(); } while (--p > 0);
-                        decoderSurfaceTex.getTransformMatrix(texMatrix);
-                        // Latch timestamp del frame (SurfaceTexture clock monotonic)
-                        try { lastFrameTexTimestampNs = decoderSurfaceTex.getTimestamp(); } catch (Throwable ignored) {}
-                        didUpdateTex = true;
-                    }
+                    decoderSurfaceTex.updateTexImage();
+                    decoderSurfaceTex.getTransformMatrix(texMatrix);
                 }
             } catch (Throwable t) { /* ignore */ }
 
             long __now = System.nanoTime();
             if (fbW <= 0 || (__now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
-                int oldW = fbW, oldH = fbH;
                 refreshWindowSize();
-                sizeChangedSinceLastSwap |= (fbW != oldW || fbH != oldH);
                 lastSizeQueryNs = __now;
             }
             if (fbW <= 0 || fbH <= 0) continue;
 
-            // Se non c'è nulla di nuovo da mostrare e la size non è cambiata, evita draw/swap (riduce jitter)
-            if (!didUpdateTex && !sizeChangedSinceLastSwap) {
-                continue;
-            }
-
             ensureViewport(fbW, fbH);
-            // Niente glClear: disegniamo full-screen, risparmia GPU
+            GLES20.glClearColor(0f, 0f, 0f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
             final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
             final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
@@ -369,6 +332,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             float scaleX = (float) dstTargetW / (float) srcW;
             float scaleY = (float) dstTargetH / (float) srcH;
             boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
+            final boolean canUpscaleNow = (fbW != srcW || fbH != srcH);
 
             // === FSR path selection + telemetry ===
             final float nearThr = 0.05f;
@@ -436,11 +400,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     drawOesToScreen();
                 }
             }
-
-            // Usa il timestamp del frame quando disponibile per sincronizzarsi meglio al VSYNC di SF
-            final long presentNs = (lastFrameTexTimestampNs > 0L) ? lastFrameTexTimestampNs : System.nanoTime();
-            try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs); } catch (Throwable ignored) {}
-
+            try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
             boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
             if (!__swapped) {
                 int err = EGL14.eglGetError();
@@ -450,9 +410,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= 8) {
                     running.set(false);
                 }
+                continue;
             } else {
                 if (swapFailStreak != 0) swapFailStreak = 0;
-                sizeChangedSinceLastSwap = false; // abbiamo presentato con la nuova size
             }
         }
     }
@@ -465,7 +425,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-        setOesFilter(false); // LINEAR: video → screen (evita aliasing)
+        setOesFilter(false);
         GLES20.glUniform1i(blit_uTex, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -777,9 +737,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
-        // Micro-ottimizzazioni GL per content 2D video
-        try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
-        try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
         fixedStateApplied = true;
     }
 
@@ -810,6 +767,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         float cap = nearNative ? 0.18f : 0.25f;
         return cap * s;
     }
+
 
     private static int compileShader(int type, String src) {
         int sh = GLES20.glCreateShader(type);
@@ -863,7 +821,35 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform mat4 uTexMatrix;\n" +
                     "void main(){ vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy; fragColor=vec4(texture(uTex, uv).rgb,1.0);}";
 
-    /*  private static final String FS_EASU_OES = ... (omesso) */
+/*    private static final String FS_EASU_OES =
+            "#version 300 es\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "precision highp float;\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform vec2 uSrcSize;\n" +
+                    "uniform vec2 uDstSize;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }\n" +
+                    "vec3 gamma(vec3 c){ return pow(max(c, vec3(0.0)), vec3(1.0/2.2)); }\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "vec3 s(vec2 uv){ return lin(texture(uTex,(uTexMatrix*vec4(uv,0.0,1.0)).xy).rgb); }\n" +
+                    "void main(){\n" +
+                    "  vec2 t = 1.0 / uSrcSize;\n" +
+                    "  vec2 uv = (gl_FragCoord.xy - 0.5) / uDstSize;" +
+        "  vec3 c00=s(uv+t*vec2(-1,-1)); vec3 c10=s(uv+t*vec2(0,-1)); vec3 c20=s(uv+t*vec2(1,-1));\n" +
+        "  vec3 c01=s(uv+t*vec2(-1, 0)); vec3 c11=s(uv);            vec3 c21=s(uv+t*vec2(1, 0));\n" +
+        "  vec3 c02=s(uv+t*vec2(-1, 1)); vec3 c12=s(uv+t*vec2(0, 1)); vec3 c22=s(uv+t*vec2(1, 1));\n" +
+        "  float gx=(luma(c20)+2.0*luma(c21)+luma(c22))-(luma(c00)+2.0*luma(c01)+luma(c02));\n" +
+        "  float gy=(luma(c02)+2.0*luma(c12)+luma(c22))-(luma(c00)+2.0*luma(c10)+luma(c20));\n" +
+        "  vec2 dir=normalize(vec2(gx,gy)+1e-5);\n" +
+        "  vec2 off=vec2(-dir.y,dir.x)*t*0.5;\n" +
+        "  vec3 a=s(uv-off); vec3 b=s(uv+off);\n" +
+        "  vec3 base=(c11+c12+c21+c10)*0.25;\n" +
+        "  vec3 up=mix(base,(a+b)*0.5,0.6);\n" +
+        "  fragColor=vec4(clamp(up,0.0,1.0),1.0);\n" +
+        "}";*/
 
     private static final String FS_RCAS =
             "#version 300 es\n" +
