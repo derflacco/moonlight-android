@@ -209,6 +209,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int curVpW = -1, curVpH = -1;
     private boolean twoDNearest = false, oesNearest = false;
 
+    // Track if render surface size changed since last swap
+    private boolean sizeChangedSinceLastSwap = true;
+
     public GlUpscaleRenderer(android.content.Context context, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
         this(windowSurface, srcW, srcH, prefs);
         try { setPresentationSizeHintFromContext(context); } catch (Throwable ignored) {}
@@ -238,6 +241,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
 
         decoderSurfaceTex = new SurfaceTexture(oesTexId);
+        // Set buffer size to match source video - avoids extra scaling in SurfaceFlinger
+        try {
+            decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
+        } catch (Throwable ignored) {}
+
         decoderSurfaceTex.setOnFrameAvailableListener(this);
         decoderInputSurface = new Surface(decoderSurfaceTex);
         return decoderInputSurface;
@@ -286,10 +294,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Loop ======
     private void renderLoop() {
         while (running.get()) {
+            boolean newFrameAvailable = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
                     try { frameLock.wait(33); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
                 }
+                newFrameAvailable = frameAvailable;
                 frameAvailable = false;
             }
 
@@ -301,19 +311,30 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             if (!fixedStateApplied) { applyFixedState(); }
 
+            boolean didUpdateTex = false;
             try {
-                if (decoderSurfaceTex != null) {
+                if (decoderSurfaceTex != null && newFrameAvailable) {
                     decoderSurfaceTex.updateTexImage();
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
+                    didUpdateTex = true;
                 }
             } catch (Throwable t) { /* ignore */ }
 
             long __now = System.nanoTime();
             if (fbW <= 0 || (__now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
+                int oldFbW = fbW, oldFbH = fbH;
                 refreshWindowSize();
+                if (fbW != oldFbW || fbH != oldFbH) {
+                    sizeChangedSinceLastSwap = true;
+                }
                 lastSizeQueryNs = __now;
             }
             if (fbW <= 0 || fbH <= 0) continue;
+
+            // Skip draw if no new frame and size unchanged (saves GPU cycles)
+            if (!didUpdateTex && !sizeChangedSinceLastSwap) {
+                continue;
+            }
 
             ensureViewport(fbW, fbH);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
@@ -413,6 +434,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 continue;
             } else {
                 if (swapFailStreak != 0) swapFailStreak = 0;
+                sizeChangedSinceLastSwap = false; // we have presented with current size
             }
         }
     }
@@ -737,6 +759,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
+        // Micro-optimizations for 2D video rendering
+        try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
+        try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
         fixedStateApplied = true;
     }
 
