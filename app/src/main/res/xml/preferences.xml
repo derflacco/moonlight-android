@@ -1051,7 +1051,13 @@
     android:title="@string/title_prefer_big_cores"
     android:summary="@string/summary_prefer_big_cores"
     app:iconSpaceReserved="false" />
-</PreferenceCategory>
+        <SwitchPreferenceCompat
+            android:key="pref_cpu_warmup_enable"
+            android:title="@string/pref_cpu_warmup_enable_title"
+            android:summary="@string/pref_cpu_warmup_enable_summary"
+            android:defaultValue="false" />
+
+    </PreferenceCategory>
 
     <PreferenceCategory
         android:key="category_settings_misc"

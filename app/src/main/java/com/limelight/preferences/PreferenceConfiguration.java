@@ -12,6 +12,9 @@ import com.limelight.profiles.ProfilesManager;
 public class PreferenceConfiguration {
 // Snappy Input
 public boolean snappyInput = true;
+// CpuWarmUp (read from prefs)
+    public boolean cpuWarmUpEnable;
+
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
     public boolean gpuPathMode;
@@ -894,7 +897,8 @@ private static int getFramePacingValue(Context context) {
         config.preferLowerDelays = getPreferLowerDelays(context);
         // Big cores preference (non-root)
         config.preferBigCores = prefs.getBoolean(PREFER_BIG_CORES_PREF_STRING, true);
-
+// CpuWarmUp prefs (UI)
+        config.cpuWarmUpEnable = prefs.getBoolean("pref_cpu_warmup_enable", false);
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
         if (warpFactorStr.equals("warp")) {

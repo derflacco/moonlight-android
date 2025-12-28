@@ -784,5 +784,7 @@
 
     <string name="title_upscaling_unavailable_dialog">Upscaling unavailable</string>
     <string name="text_upscaling_unavailable_dialog">Upscaling cannot be enabled while Direct Present or HDR is enabled. Disable those options first.</string>
+    <string name="pref_cpu_warmup_enable_title">CPU warm-up (medium)</string>
+    <string name="pref_cpu_warmup_enable_summary">Pre-boost CPU with 8 worker threads (~50% duty, light 10 ms bursts). Increases power/thermals.</string>
 
 </resources>
