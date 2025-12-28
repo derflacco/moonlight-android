@@ -168,11 +168,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
-        initEglAndGl();
     }
 
     public Surface createDecoderInputSurface() {
-        if (!isGlReady()) return null;
+        if (!isGlReady()) {
+            initEglAndGl();
+            if (!isGlReady()) return null;
+        }
         if (decoderInputSurface != null) return decoderInputSurface;
 
         GLES20.glGenTextures(1, tmpIntArray, 0);
@@ -194,6 +196,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     public void start() {
+        if (!isGlReady()) { initEglAndGl(); }
         if (!isGlReady() || running.getAndSet(true)) return;
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
         renderThread.setPriority(Thread.NORM_PRIORITY + 1);
@@ -236,6 +239,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Main render loop ======
     private void renderLoop() {
         while (running.get()) {
+            if (!isGlReady()) { return; }
             boolean newFrameAvailable = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -244,7 +248,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 newFrameAvailable = frameAvailable;
                 frameAvailable = false;
             }
-
+            if (prefs != null && !prefs.videoUpscaleEnable) {
+                try { Thread.sleep(1); } catch (InterruptedException ignored) {}
+                return;
+            }
             if (!isGlReady()) continue;
             if (EGL14.eglGetCurrentContext() != eglContext ||
                     EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
