@@ -138,7 +138,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Presentation size hint (display-sized buffer), if known
     private volatile int hintOutW = 0, hintOutH = 0;
-
+    // Cached direct-present
+    private final boolean fastBypassStatic;
     // Performance optimizations
     private final int[] tmpIntArray = new int[1]; // Reusable int array
 
@@ -148,7 +149,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private long lastSizeQueryNs = 0L;
     private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
     private int swapFailStreak = 0;
-    private boolean fixedStateApplied = false;
 
     // Threading
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -173,6 +173,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
+
+        // Precompute whether we can always take the ultra-thin OES->screen path.
+        this.fastBypassStatic = computeFastBypassStatic(prefs);
     }
     @Keep
     public Surface createDecoderInputSurface() {
@@ -253,16 +256,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 newFrameAvailable = frameAvailable;
                 frameAvailable = false;
             }
-            if (prefs != null && !prefs.videoUpscaleEnable) {
-                try { Thread.sleep(1); } catch (InterruptedException ignored) {}
-                return;
-            }
             if (!isGlReady()) continue;
             if (EGL14.eglGetCurrentContext() != eglContext ||
                     EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
                 EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
             }
-            if (!fixedStateApplied) { applyFixedState(); }
 
             boolean didUpdateTex = false;
             try {
@@ -300,12 +298,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             final boolean modeEasuRcas = "easu_rcas".equals(mode);
             final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
 
-            if (prefs != null && prefs.gpuPathMode) {
-                // Hard-bypass FSR paths in GPU Path mode
+// Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
+            if (fastBypassStatic) {
                 drawOesToScreen();
                 try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
                 boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
                 if (!swapped) { try { int err = EGL14.eglGetError(); com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
+                sizeChangedSinceLastSwap = false;
                 continue;
             }
 
@@ -697,6 +696,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
         rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
         rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
+        // Apply fixed GL state once per EGL/GL init (no need to re-check in renderLoop).
+        applyFixedState();
     }
 
     private void destroyGl() {
@@ -742,7 +743,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
         try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
         try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
-        fixedStateApplied = true;
     }
 
     private void setTex2DFilter(boolean toNearest) {
@@ -1091,5 +1091,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
         try { com.limelight.LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
+    }
+    // Decide once, at construction, if this renderer can use the ultra-thin path.
+// True when GPU direct path is forced or FSR is logically disabled.
+    private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
+        if (prefs == null) return false;
+        if (prefs.gpuPathMode) return true;
+        if (!prefs.videoUpscaleEnable) return true; // AGGIUNTO
+
+        final String mode = prefs.videoUpscaleMode;
+        // FSR bypass
+        return (mode == null || "none".equals(mode));
     }
 }
