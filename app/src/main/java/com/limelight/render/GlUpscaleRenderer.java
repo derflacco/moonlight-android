@@ -1033,17 +1033,46 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     public void setPresentationSizeHintFromContext(android.content.Context ctx) {
         if (ctx == null) return;
         int w = 0, h = 0;
+
         try {
-            android.view.WindowManager wm = ctx.getSystemService(android.view.WindowManager.class);
+            // WindowManager access (API 23+ with fallback)
+            android.view.WindowManager wm = null;
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                wm = ctx.getSystemService(android.view.WindowManager.class);
+            } else {
+                wm = (android.view.WindowManager) ctx.getSystemService(android.content.Context.WINDOW_SERVICE);
+            }
+
             if (wm != null) {
-                try {
-                    android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
-                    android.graphics.Rect b = m.getBounds();
-                    if (b != null) { w = Math.max(w, b.width()); h = Math.max(h, b.height()); }
-                } catch (Throwable ignored) {}
+                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    // API 30+: use WindowMetrics
+                    try {
+                        android.view.WindowMetrics m = wm.getMaximumWindowMetrics();
+                        android.graphics.Rect b = m.getBounds();
+                        if (b != null) {
+                            w = Math.max(w, b.width());
+                            h = Math.max(h, b.height());
+                        }
+                    } catch (Throwable ignored) {}
+                } else {
+                    // Fallback for API < 30
+                    android.view.Display d = wm.getDefaultDisplay();
+                    if (d != null) {
+                        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+                        if (android.os.Build.VERSION.SDK_INT >= 17) {
+                            d.getRealMetrics(dm);
+                        } else {
+                            d.getMetrics(dm);
+                        }
+                        w = Math.max(w, dm.widthPixels);
+                        h = Math.max(h, dm.heightPixels);
+                    }
+                }
             }
         } catch (Throwable ignored) {}
+
         try {
+            // DisplayManager fallback
             android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
             android.view.Display d = (dm != null ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null);
             if (d != null) {
@@ -1053,19 +1082,23 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 h = Math.max(h, dmets.heightPixels);
             }
         } catch (Throwable ignored) {}
+
         if (w <= 0 || h <= 0) {
             try {
+                // Resources fallback
                 android.util.DisplayMetrics dmets = ctx.getResources().getDisplayMetrics();
                 w = Math.max(w, dmets.widthPixels);
                 h = Math.max(h, dmets.heightPixels);
             } catch (Throwable ignored) {}
         }
+
         if (w > 0 && h > 0) {
             setPresentationSizeHint(w, h);
-            try { com.limelight.LimeLog.info("FSR: presentation hint (auto) = " + w + "x" + h); } catch (Throwable ignored) {}
+            try {
+                com.limelight.LimeLog.info("FSR: presentation hint (auto) = " + w + "x" + h);
+            } catch (Throwable ignored) {}
         }
     }
-
     // Draw a tiny frame with RCAS_OES into a 2x2 FBO and read back to verify non-zero output.
     private void checkRcasOesHealthOnce(int dstW, int dstH) {
         if (rcasOesChecked) return;
