@@ -453,6 +453,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void drawOesToScreen() {
         GLES20.glUseProgram(progBlit);
         bindQuad(progBlit);
+
+        GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+        setOesFilter(false);
+        GLES20.glUniform1i(blit_uTex, 0);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+
         if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
     }
 
@@ -1176,8 +1184,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
     // Decide once, at construction, if this renderer can use the ultra-thin path.
 // True when GPU direct path is forced or FSR is logically disabled.
-    private boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
-        if (prefs == null || (hdrActive && prefs.gpuPathMode)) return true;
+    private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
+        if (prefs == null) return false;
         if (prefs.gpuPathMode) return true;
         if (!prefs.videoUpscaleEnable) return true;
 
