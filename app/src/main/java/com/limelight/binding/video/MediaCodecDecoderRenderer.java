@@ -43,7 +43,7 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import com.limelight.perf.CpuWarmUp;
-
+import com.limelight.utils.CpuAffinity;
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
 
@@ -1223,57 +1223,42 @@ try {
                 BufferInfo info = new BufferInfo();
                 final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
 //* Pin hot threads to big cluster *//
-                // Give the renderer thread a recognizable name for /proc and debugging
-                try { Thread.currentThread().setName("MoonlightRenderer"); } catch (Throwable ignored) {}
-
-                // Log TID and allowed CPUs before pin
+                // Pin renderer thread to big cores if requested
                 try {
                     int __tid = android.os.Process.myTid();
-                    String __allowedBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                    String __allowedBefore = CpuAffinity.readAllowedCpuListForCurrentThread();
                     LimeLog.info("RendererAffinity: tid=" + __tid
                             + " allowed_before=" + __allowedBefore
                             + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
                 } catch (Throwable ignored) {}
 
-// Best-effort: pin renderer thread to big cores if requested (non-root, optional JNI)
-                try {
-                    if (prefs != null && prefs.preferBigCores) {
-                        try { com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true); } catch (Throwable ignored) {}
+                if (prefs != null && prefs.preferBigCores) {
+                    try {
+                        // Pin current thread to big cores
+                        CpuAffinity.pinCurrentThreadToBigCoresIf(true);
+
+                        // Optional: set high priority
                         try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY); } catch (Throwable ignored) {}
 
-                        // 2) Pinna/prioritizza SOLO i thread veramente "hot" (NO mass pin, NO Binder/HwBinder)
-                        try {
-                            int[] big = com.limelight.utils.CpuAffinity.detectBigCores();
-                            if (big != null && big.length > 0) {
-                                int[] tids = com.limelight.utils.CpuAffinity.listTids();
-                                for (int tid : tids) {
-                                    String name = com.limelight.utils.CpuAffinity.readThreadName(tid);
-                                    if (name == null) name = "";
-
-                                    if (name.startsWith("Binder:") || name.startsWith("HwBinder:")) {
-                                        // Evita di toccare Binder/HwBinder per non rischiare jank/ANR
-                                        continue;
-                                    }
-                                }
-                            }
-                        } catch (Throwable ignored) {}
-// Log what we tried to set (native detection) + the kernel result
-                        int[] __bigNative = com.limelight.utils.CpuAffinity.detectBigCoresForDebug();
-                        String __allowedAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                        LimeLog.info("RendererAffinity: nativeLoaded=" + com.limelight.utils.CpuAffinity.isNativeLoaded()
+                        // Log the result
+                        int[] __bigNative = CpuAffinity.detectBigCoresForDebug();
+                        String __allowedAfter = CpuAffinity.readAllowedCpuListForCurrentThread();
+                        LimeLog.info("RendererAffinity: nativeLoaded=" + CpuAffinity.isNativeLoaded()
                                 + " big_native=" + java.util.Arrays.toString(__bigNative)
                                 + " allowed_after=" + __allowedAfter);
 
+                        // Store for periodic refresh
+                        lastAllowedMask = __allowedAfter;
+                        affinityPinned = true;
+                        lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
 
-                        // Remember what we pinned to and when
-                        MediaCodecDecoderRenderer.this.lastAllowedMask = __allowedAfter;
-                        MediaCodecDecoderRenderer.this.affinityPinned = true;
-                        MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
-// Optional: current CPU
-                        int __cpu = com.limelight.utils.CpuAffinity.getCurrentCpuOrMinus1();
+                        // Log current CPU
+                        int __cpu = CpuAffinity.getCurrentCpuOrMinus1();
                         LimeLog.info("RendererAffinity: current_cpu=" + __cpu);
+                    } catch (Throwable t) {
+                        LimeLog.warning("RendererAffinity pinning failed: " + t);
                     }
-                } catch (Throwable ignored) {}
+                }
 
                 android.os.PerformanceHintManager.Session __hs = null;
 
@@ -1462,18 +1447,18 @@ try {
                     }
                 }
 //* Pin hot threads to big cluster *//
-// Close PHM session if created and restore affinity
-                try { if (__hs != null) __hs.close(); } catch (Throwable ignored) {}
+// Clear affinity on thread exit
                 try {
-                    com.limelight.utils.CpuAffinity.clearAllThreadsAffinityAllOnline();
+                    CpuAffinity.clearAllThreadsAffinityAllOnline();
 
                     // Reset sticky-affinity state
                     MediaCodecDecoderRenderer.this.affinityPinned = false;
                     MediaCodecDecoderRenderer.this.lastAllowedMask = null;
                     MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
                     LimeLog.info("RendererAffinity: cleared to all online CPUs");
+
                     // Log final mask after clearing (debug)
-                    String __cleared = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
+                    String __cleared = CpuAffinity.readAllowedCpuListForCurrentThread();
                     LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
                 } catch (Throwable ignored) {}
                 //* Pin hot threads to big cluster *//
