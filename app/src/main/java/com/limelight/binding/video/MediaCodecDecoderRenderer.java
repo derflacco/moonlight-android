@@ -44,6 +44,8 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+
+
     // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
     // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
     // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
@@ -51,7 +53,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile long lastAffinityRefreshNs = 0L;
     private volatile String lastAllowedMask = null;
     private volatile boolean affinityPinned = false;
-      // Latency profile: favor minimal end-to-end delay over absolute smoothness.
+
+
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
     // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
     private static void __fsrCall(Object upscaler, String method) {
@@ -105,17 +108,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         for (int i = 0; i < spaces; i++) pfx.append(' ');
         return pfx.append(text).toString(); // shift solo prima riga
     }
+
     // --- end helpers ---
 
     // Latency profile: favor minimal end-to-end delay over absolute smoothness.
     // Set true to enable a 'latest-only' fast path in the render loop.
     private boolean preferLowerDelays = false;
+
+    // Toggle at runtime if needed
+    public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
+
+    // Reused by latest-only / low-latency drain to avoid per-loop allocations
+    final android.media.MediaCodec.BufferInfo latestInfo = new android.media.MediaCodec.BufferInfo();
+
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
     public boolean isHdrActive() { return hdrActive; }
 
-    // Toggle at runtime if needed
-    public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
 
 
     private static final boolean USE_FRAME_RENDER_TIME = false;
@@ -1288,73 +1297,49 @@ try {
                     }
 //* Pin hot threads to big cluster *//
                     try {
-                        /* LATEST_ONLY_LOW_LATENCY */
+                        // PURE LFR / ULL path
                         if (preferLowerDelays) {
-                            int idx = videoDecoder.dequeueOutputBuffer(lfrInfo, 0);
-                            long idxPtsUs = (idx >= 0) ? lfrInfo.presentationTimeUs : 0L;
+                            try {
+                                // Reuse a single BufferInfo to avoid per-loop allocations
+                                final android.media.MediaCodec.BufferInfo __tmpInfo = latestInfo;
+                                int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                int __last = -1;
+                                long __lastPtsUs = -1L;
 
-                            int last = -1;
-                            long lastPtsUs = 0L;
+                                // Drain non-blocking; keep only the newest buffer
+                                while (__idx >= 0) {
+                                    final long ptsUs = __tmpInfo.presentationTimeUs;
 
-                            // Drain non-blocking; keep only the newest buffer
-                            while (idx >= 0) {
-                                if (last >= 0) {
-                                    // Stats for the frame we are about to drop
-                                    long delta = SystemClock.uptimeMillis() - (lastPtsUs / 1000L);
-                                    if (delta >= 0 && delta < 1000) {
-                                        activeWindowVideoStats.decoderTimeMs += delta;
-                                        if (!USE_FRAME_RENDER_TIME) {
-                                            activeWindowVideoStats.totalTimeMs += delta;
-                                        }
+                                    if (__last >= 0) {
+                                        // Drop older buffer without rendering
+                                        try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
+                                    }
+
+                                    __last = __idx;
+                                    __lastPtsUs = ptsUs;
+                                    __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
+                                }
+
+                                if (__last >= 0) {
+                                    final long __nowNs = System.nanoTime();
+
+                                    // Present the newest buffer ASAP (timestamped)
+                                    if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                        videoDecoder.releaseOutputBuffer(__last, __nowNs);
+                                    } else {
+                                        videoDecoder.releaseOutputBuffer(__last, true);
                                     }
 
                                     try {
-                                        videoDecoder.releaseOutputBuffer(last, false);
-                                    } catch (Throwable ignored) { }
+                                        activeWindowVideoStats.totalFramesRendered++;
+                                        numFramesOut++;
 
-                                    numFramesOut++; // dropped output buffer
+                                    } catch (Throwable ignored) {}
+
+
+                                    continue;
                                 }
-
-                                last = idx;
-                                lastPtsUs = idxPtsUs;
-
-                                idx = videoDecoder.dequeueOutputBuffer(lfrInfo, 0);
-                                idxPtsUs = (idx >= 0) ? lfrInfo.presentationTimeUs : 0L;
-                            }
-
-                            if (last >= 0) {
-                                // Stats for the frame we are about to present
-                                long delta = SystemClock.uptimeMillis() - (lastPtsUs / 1000L);
-                                if (delta >= 0 && delta < 1000) {
-                                    activeWindowVideoStats.decoderTimeMs += delta;
-                                    if (!USE_FRAME_RENDER_TIME) {
-                                        activeWindowVideoStats.totalTimeMs += delta;
-                                    }
-                                }
-
-                                // Present immediately (API21+: release at "now")
-                                try {
-                                    if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                        videoDecoder.releaseOutputBuffer(last, System.nanoTime());
-                                    } else {
-                                        videoDecoder.releaseOutputBuffer(last, true);
-                                    }
-                                } catch (IllegalStateException e) {
-                                    handleDecoderException(e);
-                                } catch (Throwable ignored) { }
-
-                                numFramesOut++; // rendered output buffer
-                                activeWindowVideoStats.totalFramesRendered++;
-
-                                continue; // handled this iteration
-                            } else {
-                                // Handle format change also in LFR path
-                                if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                                    LimeLog.info("Output format changed");
-                                    outputFormat = videoDecoder.getOutputFormat();
-                                    LimeLog.info("New output format: " + outputFormat);
-                                }
-                            }
+                            } catch (Throwable ignored) {}
                         }
                         /* /LATEST_ONLY_LOW_LATENCY */
 
