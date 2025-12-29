@@ -118,9 +118,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Toggle at runtime if needed
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
+    // When preferLowerDelays=true we use this configurable timeout (µs) for output dequeue.
+// When preferLowerDelays=false we force 0µs (non-blocking, latest-frame rendering).
+    private volatile int preferLowerDelaysTimeoutUs = 50000;
 
-    // Reused by latest-only / low-latency drain to avoid per-loop allocations
-    final android.media.MediaCodec.BufferInfo latestInfo = new android.media.MediaCodec.BufferInfo();
+    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? 0 : preferLowerDelaysTimeoutUs; }
 
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
@@ -1286,54 +1288,8 @@ try {
                     }
 //* Pin hot threads to big cluster *//
                     try {
-                        // PURE LFR / ULL path
-                        if (preferLowerDelays) {
-                            try {
-                                // Reuse a single BufferInfo to avoid per-loop allocations
-                                final android.media.MediaCodec.BufferInfo __tmpInfo = latestInfo;
-                                int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                                int __last = -1;
-                                long __lastPtsUs = -1L;
-
-                                // Drain non-blocking; keep only the newest buffer
-                                while (__idx >= 0) {
-                                    final long ptsUs = __tmpInfo.presentationTimeUs;
-
-                                    if (__last >= 0) {
-                                        // Drop older buffer without rendering
-                                        try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                    }
-
-                                    __last = __idx;
-                                    __lastPtsUs = ptsUs;
-                                    __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                                }
-
-                                if (__last >= 0) {
-                                    final long __nowNs = System.nanoTime();
-
-                                    // Present the newest buffer ASAP (timestamped)
-                                    if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                        videoDecoder.releaseOutputBuffer(__last, __nowNs);
-                                    } else {
-                                        videoDecoder.releaseOutputBuffer(__last, true);
-                                    }
-
-                                    try {
-                                        activeWindowVideoStats.totalFramesRendered++;
-                                        numFramesOut++;
-
-                                    } catch (Throwable ignored) {}
-
-
-                                    continue;
-                                }
-                            } catch (Throwable ignored) {}
-                        }
-                        /* /LATEST_ONLY_LOW_LATENCY */
-
-                        // Non-LFR path (unchanged behavior)
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
+                        // Try to output a frame
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
