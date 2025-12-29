@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.jcodec.codecs.h264.H264Utils;
 import org.jcodec.codecs.h264.io.model.SeqParameterSet;
 import org.jcodec.codecs.h264.io.model.VUIParameters;
-
+import android.util.LongSparseArray;
 import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.R;
@@ -131,7 +131,36 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private CpuWarmUp cpuWarmUp;
     private boolean cpuWarmUpStarted = false;
 
+// stats
+// Decode latency tracking: map PTS(us) -> enqueue time (ns)
+private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
+    // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
+    private void updateDecodeLatencyStats(long presentationTimeUs) {
+        Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
+        if (enqNs != null) {
+            enqueueNsByPtsUs.remove(presentationTimeUs);
+            long decNs = System.nanoTime() - enqNs;
+            long decMs = decNs / 1_000_000L;
 
+            // Log per debug
+            if (BuildConfig.DEBUG) {
+                LimeLog.info("Decode latency for PTS " + presentationTimeUs +
+                        ": " + decMs + "ms (enqNs=" + enqNs + ")");
+            }
+
+            if (decMs >= 0 && decMs < 1000) {
+                activeWindowVideoStats.decoderTimeMs += decMs;
+                if (!USE_FRAME_RENDER_TIME) {
+                    activeWindowVideoStats.totalTimeMs += decMs;
+                }
+            }
+        } else {
+            // Debug: log se non troviamo l'enqueue time
+            if (BuildConfig.DEBUG && presentationTimeUs != 0) {
+                LimeLog.warning("No enqueue time found for PTS: " + presentationTimeUs);
+            }
+        }
+    }
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
@@ -1303,12 +1332,14 @@ try {
                                     try {
                                         videoDecoder.releaseOutputBuffer(lastIndex, false);
                                     } catch (Throwable ignored) { }
-
                                     numFramesOut++;
-
                                     lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
                                 }
+                                if (lastIndex >= 0) {
+                                    try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
+                                }
+
 // --- Present policy per profilo di pacing ---
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Immediate present using frame PTS; no decoder-side pacing
@@ -1350,15 +1381,16 @@ try {
                                 }
                                 outputBufferQueue.add(lastIndex);
                             }
-
-                            // Add delta time to the totals (excluding probable outliers)
-                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
-                            if (delta >= 0 && delta < 1000) {
-                                activeWindowVideoStats.decoderTimeMs += delta;
-                                if (!USE_FRAME_RENDER_TIME) {
-                                    activeWindowVideoStats.totalTimeMs += delta;
-                                }
-                            }
+                            // Measure decode latency AT DEQUEUE
+                            try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
+//                           // Add delta time to the totals (excluding probable outliers)
+//                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
+//                            if (delta >= 0 && delta < 1000) {
+//                                activeWindowVideoStats.decoderTimeMs += delta;
+//                                if (!USE_FRAME_RENDER_TIME) {
+//                                    activeWindowVideoStats.totalTimeMs += delta;
+//                                }
+//                            }
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
@@ -1671,6 +1703,11 @@ try {
             videoDecoder.queueInputBuffer(nextInputBufferIndex,
                     0, nextInputBuffer.position(),
                     timestampUs, codecFlags);
+
+            // Track enqueue time for this PTS
+            if (timestampUs != 0) { // Don't track config buffers with timestamp 0
+                enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
+            }
 
             // We need a new buffer now
             nextInputBufferIndex = -1;
