@@ -362,8 +362,8 @@
     <string name="pacing_balanced_alt">Balanced with FPS limit</string>
     <string name="pacing_smoothness">Prefer smoothest video (may significantly increase latency)</string>
     <string name="pacing_gpu_raw">GPU RAW (SurfaceFlinger)</string>
-    <string name="gpu_path_mode_title">Direct Present</string>
-    <string name="gpu_path_mode_summary">uses system-driven vsync; disable to use FSR; forces GPU RAW,FSR off</string>
+    <string name="gpu_path_mode_title">Fast Gl Path</string>
+    <string name="gpu_path_mode_summary">Enable a minimal fast Gl Path. Forces FSR off. Disable to use FSR; </string>
 
 
 
