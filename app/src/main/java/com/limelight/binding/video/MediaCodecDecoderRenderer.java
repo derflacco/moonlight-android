@@ -118,11 +118,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Toggle at runtime if needed
     public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
-    // When preferLowerDelays=true we use this configurable timeout (µs) for output dequeue.
-// When preferLowerDelays=false we force 0µs (non-blocking, latest-frame rendering).
-    private volatile int preferLowerDelaysTimeoutUs = 50000;
+    // When preferLowerDelays=false we use StockTimoutUs
+    // When preferLowerDelays=true we use 0 non blocking
+    private volatile int StockTimeoutUs = 50000;
 
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? 0 : preferLowerDelaysTimeoutUs; }
+    private int getOutputDequeueTimeoutUs() {
+        // only if preferLowerDelays=true and pacing is not in the deny list
+        if (preferLowerDelays && prefs != null && !LfrDenyList()) {
+            return 0;
+        }
+        // else stock moonlight
+        return StockTimeoutUs;
+    }
+
+    private boolean LfrDenyList() {
+        // don't apply preferlowerdelays for this pacing list
+        // balanced is not needed here, but is better to add it anyway
+        return prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
+                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
+                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED;
+    }
 
     // --- HDR state for overlays ---
     private volatile boolean hdrActive = false;
