@@ -168,46 +168,120 @@ public class StreamSettings extends AppCompatActivity {
     }
 
     public static class SettingsFragment extends PreferenceFragmentCompat {
-        // --- UI lock helpers (Direct Present / FSR / HDR) ---
-        private final SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
+        // --- UI state listeners ---
+        SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
                 (sp, key) -> {
                     if ("checkbox_gpu_path_mode".equals(key)                 // Direct Present
                             || "pref_video_upscale_enable".equals(key)       // FSR
-                            || "pref_video_hdr_enable".equals(key)           // HDR (var. 1)
-                            || "pref_hdr_enable".equals(key)                 // HDR (var. 2)
-                            || "pref_hdr_pipeline_enable".equals(key)) {     // HDR pipeline toggle
+                            || "pref_video_hdr_enable".equals(key)           // HDR (old)
+                            || "pref_hdr_enable".equals(key)                 // HDR (legacy)
+                            || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
+                            || "frame_pacing".equals(key)                    // Legacy pacing list
+                            || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
+                            || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
+                            || "pref_low_latency_frame_balance".equals(key)  // LFR toggle (Prefer lower delays)
+
+                    ) {
+                        // Re-evaluate UI locks and dependent visibility (including LFR mode slider)
                         updateLocks();
                     }
                 };
 
 
+
+
         private void updateLocks() {
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-            // Direct Present (GPU Path)
-            boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
+            // Persisted GPU Path state
+            boolean gpuPathStored = sp.getBoolean("checkbox_gpu_path_mode", false);
 
-            // HDR: true se almeno uno dei toggle è attivo (adatta le chiavi ai tuoi nomi se diverso)
+            // Aggregate HDR state
             boolean hdrOn =
-                    (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
+                    sp.getBoolean("checkbox_enable_hdr", false) ||
+                            (sp.contains("pref_video_hdr_enable") && sp.getBoolean("pref_video_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
-            // Regole:
-            // - FSR: UI disabilitata solo se Direct Present OPPURE HDR sono attivi
-            // - Frame pacing / LFR: lockati solo da Direct Present
-            boolean lockPacing = gpuPath;               // "frame_pacing"
-            boolean lockLfr    = gpuPath;               // "pref_low_latency_frame_balance"
-            boolean lockFsrEn  = gpuPath || hdrOn;      // "pref_video_upscale_enable"
+            // Read current pacing mode
+            String pacingStr = sp.getString("frame_pacing", "latency");
+            if (pacingStr == null) pacingStr = "latency";
 
-            Preference pacing = findPreference("frame_pacing");
-            Preference lfrBal = findPreference("pref_low_latency_frame_balance");
-            Preference fsrEn  = findPreference("pref_video_upscale_enable");
-            // Se vuoi anche bloccare Tight VSync con Direct Present, decommenta le due righe seguenti:
-            // Preference tight  = findPreference("checkbox_forceTightThresholds");
-            // if (tight  != null) tight.setEnabled(!gpuPath);
+            // LFR preference
+            boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
 
-            if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
+            // Map pacing string to flags
+            boolean isMinLatency = "latency".equals(pacingStr);
+            boolean isGpuRaw     = "gpu-raw".equals(pacingStr);
+            boolean isWarp       = "warp".equals(pacingStr);
+            boolean isWarp2      = "warp2".equals(pacingStr);
+
+            // Effective GPU Path state
+            boolean gpuPath = gpuPathStored;
+
+            // Dependency locks
+            boolean lockFsrEn = gpuPath || hdrOn;
+
+            Preference pacingPref  = findPreference("frame_pacing");
+            Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
+            Preference fsrEn       = findPreference("pref_video_upscale_enable");
+            Preference fsrMode     = findPreference("pref_video_upscale_mode");
+            Preference sharpness   = findPreference("pref_video_upscale_sharpness");
+
+            // Define LFR visibility scope
+            boolean showLfrToggle = isGpuRaw || isMinLatency || isWarp || isWarp2;
+
+            if (lfrBal != null) {
+                try {
+                    lfrBal.setVisible(showLfrToggle);
+                } catch (Throwable ignored) {
+                    lfrBal.setEnabled(showLfrToggle);
+                }
+                lfrBal.setEnabled(showLfrToggle); // Ensure enabled state
+            }
+
+            // Determine FSR enabled state
+            boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;
+
+            // FSR enable toggle
+            if (fsrEn != null) {
+                fsrEn.setEnabled(!lockFsrEn);
+            }
+
+            // FSR mode selector
+            if (fsrMode != null) {
+                try {
+                    fsrMode.setVisible(fsrEnabled);
+                } catch (Throwable ignored) {
+                    fsrMode.setEnabled(fsrEnabled);
+                }
+                fsrMode.setEnabled(fsrEnabled);
+            }
+
+            // FSR sharpness slider
+            if (sharpness != null) {
+                try {
+                    sharpness.setVisible(fsrEnabled);
+                } catch (Throwable ignored) {
+                    sharpness.setEnabled(fsrEnabled);
+                }
+                sharpness.setEnabled(fsrEnabled);
+            }
+
+            // Enforce mutual exclusion (disable FSR if locked)
+            if (lockFsrEn) {
+                if (fsrEn instanceof CheckBoxPreference) {
+                    CheckBoxPreference cb = (CheckBoxPreference) fsrEn;
+                    if (cb.isChecked()) {
+                        sp.edit().putBoolean("pref_video_upscale_enable", false).apply();
+                        cb.setChecked(false);
+                    }
+                } else {
+                    if (sp.getBoolean("pref_video_upscale_enable", false)) {
+                        sp.edit().putBoolean("pref_video_upscale_enable", false).apply();
+                    }
+                }
+            }
         }
 
 @Override
