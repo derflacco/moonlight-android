@@ -1100,7 +1100,7 @@ private static int getFramePacingValue(Context context) {
         if (config.gpuPathMode) {
             config.videoUpscaleEnable = false;
             config.videoUpscaleMode = "none";
-            config.framePacing = FRAME_PACING_GPU_RAW;
+
         }
 
         return config;

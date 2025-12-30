@@ -207,8 +207,6 @@ public class StreamSettings extends AppCompatActivity {
             // Preference tight  = findPreference("checkbox_forceTightThresholds");
             // if (tight  != null) tight.setEnabled(!gpuPath);
 
-            if (pacing != null) pacing.setEnabled(!lockPacing);
-            if (lfrBal != null) lfrBal.setEnabled(!lockLfr);
             if (fsrEn  != null) fsrEn.setEnabled(!lockFsrEn);
         }
 
