@@ -6,6 +6,7 @@ class VideoStats {
 
     long decoderTimeMs;
     long totalTimeMs;
+    long endToEndLatencyMs; // Tracks old latency metric (uptime - PTS)
     int totalFrames;
     int totalFramesReceived;
     int totalFramesRendered;
@@ -20,6 +21,7 @@ class VideoStats {
     void add(VideoStats other) {
         this.decoderTimeMs += other.decoderTimeMs;
         this.totalTimeMs += other.totalTimeMs;
+        this.endToEndLatencyMs += other.endToEndLatencyMs;
         this.totalFrames += other.totalFrames;
         this.totalFramesReceived += other.totalFramesReceived;
         this.totalFramesRendered += other.totalFramesRendered;
@@ -45,6 +47,7 @@ class VideoStats {
     void copy(VideoStats other) {
         this.decoderTimeMs = other.decoderTimeMs;
         this.totalTimeMs = other.totalTimeMs;
+        this.endToEndLatencyMs = other.endToEndLatencyMs;
         this.totalFrames = other.totalFrames;
         this.totalFramesReceived = other.totalFramesReceived;
         this.totalFramesRendered = other.totalFramesRendered;
@@ -60,6 +63,7 @@ class VideoStats {
     void clear() {
         this.decoderTimeMs = 0;
         this.totalTimeMs = 0;
+        this.endToEndLatencyMs = 0;
         this.totalFrames = 0;
         this.totalFramesReceived = 0;
         this.totalFramesRendered = 0;

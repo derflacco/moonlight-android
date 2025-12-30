@@ -134,7 +134,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 // stats
 // Decode latency tracking: map PTS(us) -> enqueue time (ns)
 private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
-    // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
+    // Update stats using both decode time (enqueue->dequeue) and end-to-end latency (uptime - PTS)
     private void updateDecodeLatencyStats(long presentationTimeUs) {
         Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
         if (enqNs != null) {
@@ -142,20 +142,30 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
             long decNs = System.nanoTime() - enqNs;
             long decMs = decNs / 1_000_000L;
 
+            // Also calculate old end-to-end latency for comparison
+            long endToEndMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
+
             // Log per debug
             if (BuildConfig.DEBUG) {
                 LimeLog.info("Decode latency for PTS " + presentationTimeUs +
-                        ": " + decMs + "ms (enqNs=" + enqNs + ")");
+                        ": " + decMs + "ms (pure decode), " + endToEndMs + "ms (end-to-end)");
             }
 
+            // Update pure decode time stats
             if (decMs >= 0 && decMs < 1000) {
                 activeWindowVideoStats.decoderTimeMs += decMs;
+            }
+
+            // Update end-to-end latency stats (for backward compatibility and comparison)
+            if (endToEndMs >= 0 && endToEndMs < 1000) {
+                activeWindowVideoStats.endToEndLatencyMs += endToEndMs;
                 if (!USE_FRAME_RENDER_TIME) {
-                    activeWindowVideoStats.totalTimeMs += decMs;
+                    // Keep backward compatible behavior for totalTimeMs
+                    activeWindowVideoStats.totalTimeMs += endToEndMs;
                 }
             }
         } else {
-            // Debug: log se non troviamo l'enqueue time
+            // Debug: log if we don't find the enqueue time
             if (BuildConfig.DEBUG && presentationTimeUs != 0) {
                 LimeLog.warning("No enqueue time found for PTS: " + presentationTimeUs);
             }
@@ -1820,9 +1830,13 @@ try {
                     decoder = "(unknown)";
                 }
 
+// Calculate both latency metrics for display
                 float decodeTimeMs = 0f;
+                float endToEndTimeMs = 0f;
+
                 if (lastTwo.totalFramesReceived > 0) {
                     decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) lastTwo.totalFramesReceived;
+                    endToEndTimeMs = (float) lastTwo.endToEndLatencyMs / (float) lastTwo.totalFramesReceived;
                 }
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
                 StringBuilder sb = new StringBuilder();
@@ -1871,6 +1885,13 @@ try {
                     sb.append(context.getString(R.string.perf_overlay_lite_net,(int)(rttInfo >> 32)));
                     sb.append(" / ");
                     sb.append(context.getString(R.string.perf_overlay_lite_dectime, decodeTimeMs));
+                    /* ADV_LITE_START */
+                    if (prefs.enablePerfOverlayLiteAdvanced) {
+                        sb.append(" / ");
+                        sb.append(context.getString(R.string.perf_overlay_lite_e2e, endToEndTimeMs));
+                        sb.append("  ");
+                    }
+                    /* ADV_LITE_END */
                     sb.append("\t");
                     sb.append(context.getString(R.string.perf_overlay_lite_packet_loss)).append(": ");
                     float liteLossPct = 0f;
@@ -1992,6 +2013,8 @@ try {
                                 .append('\n');
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
+                    // Add end-to-end latency
+                    sb.append(context.getString(R.string.perf_overlay_e2etime, endToEndTimeMs));
                 }
 
                 // Append FSR overlay line if available
@@ -2386,7 +2409,21 @@ try {
         }
         return (int)(globalVideoStats.totalTimeMs / globalVideoStats.totalFramesReceived);
     }
+    //  returns pure decoder latency (enqueue->dequeue)
+    public int getAveragePureDecoderLatency() {
+        if (globalVideoStats.totalFramesReceived == 0) {
+            return 0;
+        }
+        return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
+    }
 
+    //  returns old end-to-end latency using the new field
+    public int getAverageOldEndToEndLatency() {
+        if (globalVideoStats.totalFramesReceived == 0) {
+            return 0;
+        }
+        return (int)(globalVideoStats.endToEndLatencyMs / globalVideoStats.totalFramesReceived);
+    }
     public int getAverageDecoderLatency() {
         if (globalVideoStats.totalFramesReceived == 0) {
             return 0;
