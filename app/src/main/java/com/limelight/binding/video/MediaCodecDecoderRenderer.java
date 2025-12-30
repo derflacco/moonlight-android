@@ -133,8 +133,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 // stats
 // Decode latency tracking: map PTS(us) -> enqueue time (ns)
+    private static final long LATENCY_TRACKING_CLEANUP_THRESHOLD_NS = 30_000_000_000L; // 30 seconds
+    private static final int LATENCY_TRACKING_MAX_SIZE = 1000; // Maximum entries in tracking array
+    private long lastLatencyTrackingCleanupNs = 0L;
+
 private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
     // Update stats using both decode time (enqueue->dequeue) and end-to-end latency (uptime - PTS)
+
     private void updateDecodeLatencyStats(long presentationTimeUs) {
         Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
         if (enqNs != null) {
@@ -144,12 +149,6 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
             // Also calculate old end-to-end latency for comparison
             long endToEndMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
-
-            // Log per debug
-            if (BuildConfig.DEBUG) {
-                LimeLog.info("Decode latency for PTS " + presentationTimeUs +
-                        ": " + decMs + "ms (pure decode), " + endToEndMs + "ms (end-to-end)");
-            }
 
             // Update pure decode time stats
             if (decMs >= 0 && decMs < 1000) {
@@ -163,14 +162,50 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
                     // Keep backward compatible behavior for totalTimeMs
                     activeWindowVideoStats.totalTimeMs += endToEndMs;
                 }
-            }
-        } else {
-            // Debug: log if we don't find the enqueue time
-            if (BuildConfig.DEBUG && presentationTimeUs != 0) {
-                LimeLog.warning("No enqueue time found for PTS: " + presentationTimeUs);
+
             }
         }
     }
+    // cleanup method
+    private void cleanupOldLatencyTrackingEntries() {
+        long nowNs = System.nanoTime();
+        if (nowNs - lastLatencyTrackingCleanupNs < LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
+            return;
+        }
+
+        int initialSize = enqueueNsByPtsUs.size();
+
+        // Remove entries older than 30 seconds based on enqueue time
+        for (int i = enqueueNsByPtsUs.size() - 1; i >= 0; i--) {
+            Long enqueueNs = enqueueNsByPtsUs.valueAt(i);
+            if (enqueueNs != null && (nowNs - enqueueNs) > LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
+                enqueueNsByPtsUs.removeAt(i);
+            }
+        }
+
+        // Enforce maximum size limit (defensive against accumulation)
+        enforceLatencyTrackingSizeLimit();
+
+        lastLatencyTrackingCleanupNs = nowNs;
+
+    }
+    // enforce size limits
+    private void enforceLatencyTrackingSizeLimit() {
+        if (enqueueNsByPtsUs.size() > LATENCY_TRACKING_MAX_SIZE) {
+            // Remove oldest entries (by key, assuming PTS increases over time)
+            // Since LongSparseArray maintains sorted keys, remove from start
+            int excess = enqueueNsByPtsUs.size() - LATENCY_TRACKING_MAX_SIZE;
+            for (int i = 0; i < excess; i++) {
+                enqueueNsByPtsUs.removeAt(0);
+            }
+
+            if (BuildConfig.DEBUG) {
+                LimeLog.warning("Latency tracking exceeded size limit, trimmed to " + LATENCY_TRACKING_MAX_SIZE + " entries");
+            }
+        }
+    }
+
+    // end stats //
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
@@ -1327,6 +1362,9 @@ try {
                             lastAffinityRefreshNs = __now;
                         }
                     }
+                    // Periodic cleanup of latency tracking data to prevent memory accumulation
+                    cleanupOldLatencyTrackingEntries();
+
 //* Pin hot threads to big cluster *//
                     try {
                         // Try to output a frame
