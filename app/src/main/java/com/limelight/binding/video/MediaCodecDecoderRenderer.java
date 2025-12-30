@@ -742,7 +742,8 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
         vpsBuffers.clear();
         spsBuffers.clear();
         ppsBuffers.clear();
-
+// Clear decode latency tracking when decoder is reconfigured
+        enqueueNsByPtsUs.clear();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             // This will contain the actual accepted input format attributes
             inputFormat = videoDecoder.getInputFormat();
@@ -946,7 +947,8 @@ try {
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
                 outputBufferQueue.clear();
-
+                // Clear decode latency tracking during codec recovery
+                enqueueNsByPtsUs.clear();
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
                     LimeLog.warning("Flushing decoder");
@@ -1564,6 +1566,9 @@ try {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
 
+        // Clear decode latency tracking to prevent memory leaks
+        enqueueNsByPtsUs.clear();
+
         // Stop CPU warm-up
         if (cpuWarmUp != null && cpuWarmUpStarted) {
             try {
@@ -1657,6 +1662,10 @@ try {
 
     @Override
     public void cleanup() {
+
+        // Clear decode latency tracking to prevent memory leaks
+        enqueueNsByPtsUs.clear();
+
 
         // Stop CpuWarmUp
         if (cpuWarmUp != null) {
