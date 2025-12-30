@@ -1296,8 +1296,11 @@ try {
     private void startRendererThread()
     {
         rendererThread = new Thread() {
+
             @Override
             public void run() {
+                // Boost thread priority to reduce decoding latency
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
                 BufferInfo info = new BufferInfo();
                 final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
 //* Pin hot threads to big cluster *//
