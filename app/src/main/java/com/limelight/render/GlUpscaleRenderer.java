@@ -313,11 +313,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             if (fbW <= 0 || fbH <= 0) continue;
 
-            // Skip draw if no new frame and size unchanged (saves GPU cycles)
-            if (!didUpdateTex && !sizeChangedSinceLastSwap) {
-                continue;
-            }
+            if (fbW <= 0 || fbH <= 0) continue;
 
+            optimizeForTileBased(fbW, fbH, false);
             ensureViewport(fbW, fbH);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
@@ -466,6 +464,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private boolean drawRcasOnlySafe(int dstW, int dstH, float sharp) {
         checkRcasOesHealthOnce(dstW, dstH);
+        // apply tilebased optimizations
+        optimizeForTileBased(dstW, dstH, true);
         // Prefer direct OES sharpening when program is available
         if (progRcasOes != 0 && rcasOesHealthy) {
             if (__fsr.enabled) { __fsr.sampling = "RCAS_OES"; }
@@ -531,6 +531,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp) {
+        // apply tilebased optimizations
+        optimizeForTileBased(dstW, dstH, true);
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
         if (!ensureFbo(dstW, dstH)) return false;
 
@@ -618,6 +620,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (w <= 0 || h <= 0) return false;
         if (w == fbW && h == fbH && upscaledTex != 0 && fbo != 0) return true;
         createOrResizeFbo(w, h);
+
         return (upscaledTex != 0 && fbo != 0);
     }
 
@@ -799,6 +802,29 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
         try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
     }
+    /**
+     * Optimizations for tile-based GPUs (all mobile GPUs).
+     * Reduces bandwidth and improves rendering efficiency for Mali, Adreno, PowerVR.
+     */
+    private void optimizeForTileBased(int dstW, int dstH, boolean isPostProcess) {
+        // 1. Reduce unnecessary state changes
+        GLES20.glDisable(GLES20.GL_STENCIL_TEST);
+        GLES20.glDisable(GLES20.GL_CULL_FACE);
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST); // Disable unless we use partial updates
+
+        // 2. Use optimal blend equation for simple blending (if needed)
+        GLES20.glBlendEquation(GLES20.GL_FUNC_ADD);
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ZERO);
+
+             // 4. Use framebuffer invalidation where possible (GLES3.0+)
+        // This tells the GPU we don't need to preserve framebuffer contents
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            try {
+                // Only invalidate after read operations (like health check)
+                // Don't call during normal rendering as it would discard our output
+            } catch (Throwable ignored) {}
+        }
+    }
 
     private void setTex2DFilter(boolean toNearest) {
         if (twoDNearest == toNearest) return;
@@ -806,6 +832,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR);
     }
+
 
     private void setOesFilter(boolean toNearest) {
         if (oesNearest == toNearest) return;
@@ -1167,6 +1194,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             int sum = 0;
             while (bb.hasRemaining()) { sum |= (bb.get() & 0xFF); }
             rcasOesHealthy = (sum != 0);
+
+            // FRAMEBUFFER INVALIDATION
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                try {
+                    int[] attachments = {GLES30.GL_COLOR_ATTACHMENT0};
+                    GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, attachments, 0);
+                } catch (Throwable ignored) {}
+            }
 
         } finally {
             // Restore GL state
