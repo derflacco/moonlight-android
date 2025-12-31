@@ -243,6 +243,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         byte optimalSlicesPerFrame;
         boolean refFrameInvalidationActive;
 
+        long initialExceptionTimestamp;
+        boolean reportedCrash;
+
         // Formats (init/reconfigure)
         MediaFormat inputFormat;
         MediaFormat outputFormat;
@@ -274,7 +277,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Surface renderTarget;
     private volatile boolean stopping;
     private CrashListener crashListener;
-    private boolean reportedCrash;
+
     private int consecutiveCrashCount;
     private String glRenderer;
     private boolean foreground = true;
@@ -325,7 +328,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
     private RendererException initialException;
-    private long initialExceptionTimestamp;
     private static final int EXCEPTION_REPORT_DELAY_MS = 3000;
 
     private VideoStats activeWindowVideoStats;
@@ -1120,8 +1122,8 @@ try {
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalStateException e) {
                         // If we failed to recover after all of these attempts, just crash
-                        if (!reportedCrash) {
-                            reportedCrash = true;
+                        if (!coldCfg.reportedCrash) {
+                            coldCfg.reportedCrash = true;
                             crashListener.notifyCrash(e);
                         }
                         throw new RendererException(this, e);
@@ -1249,13 +1251,16 @@ try {
             // throw the original exception again.
             //
             if (coldCfg.initialException != null) {
-                if (SystemClock.uptimeMillis() - initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
-                    crashListener.notifyCrash(coldCfg.initialException);
+                if (SystemClock.uptimeMillis() - coldCfg.initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
+                    if (!coldCfg.reportedCrash) {
+                        coldCfg.reportedCrash = true;
+                        crashListener.notifyCrash(initialException);
+                    }
                     throw coldCfg.initialException;
                 }
             } else {
                 initialException = new RendererException(this, e);
-                initialExceptionTimestamp = SystemClock.uptimeMillis();
+                coldCfg.initialExceptionTimestamp = SystemClock.uptimeMillis();
             }
         }
 
@@ -1647,8 +1652,8 @@ try {
                 // Decoder hung for 5 seconds total
                 DecoderHungException decoderHungException =
                         new DecoderHungException((int) (nowMs - inputDequeueHangStartMs));
-                if (!reportedCrash) {
-                    reportedCrash = true;
+                if (!coldCfg.reportedCrash) {
+                    coldCfg.reportedCrash = true;
                     crashListener.notifyCrash(decoderHungException);
                 }
                 throw new RendererException(this, decoderHungException);
@@ -2368,8 +2373,8 @@ try {
         if (decodeUnitLength > nextInputBuffer.limit() - nextInputBuffer.position()) {
             IllegalArgumentException exception = new IllegalArgumentException(
                     "Decode unit length "+decodeUnitLength+" too large for input buffer "+nextInputBuffer.limit());
-            if (!reportedCrash) {
-                reportedCrash = true;
+            if (!coldCfg.reportedCrash) {
+                coldCfg.reportedCrash = true;
                 crashListener.notifyCrash(exception);
             }
             throw new RendererException(this, exception);
