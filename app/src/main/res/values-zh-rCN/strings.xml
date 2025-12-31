@@ -687,10 +687,6 @@
     <!-- Performance Charts and Monitor -->
     <string name="category_perf_monitor_settings">性能监视器</string>
 
-    <!-- Low-latency frame balance (LFR) -->
-    <string name="title_low_latency_frame_balance">低延迟队列（实验性）</string>
-    <string name="summary_low_latency_frame_balance">通过丢弃缓冲帧以最小化延迟。</string>
-
     <!-- Added/translated missing strings -->
     <string name="perf_overlay_drawdelay">延迟：%1$.2f ms</string>
     <string name="game_menu_select_steam_mode">选择串流模式</string>

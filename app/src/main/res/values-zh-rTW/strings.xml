@@ -783,8 +783,6 @@
 	<string name="rename">重新命名</string>
 	<string name="save">儲存</string>
 
-	<string name="title_low_latency_frame_balance">低延遲隊列（實驗性）</string>
-	<string name="summary_low_latency_frame_balance">透過丟棄緩衝幀以最小化延遲。</string>
 	<string name="category_perf_monitor_settings">效能監視器</string>
 
 	<string name="title_checkbox_full_screen">啟用全螢幕</string>

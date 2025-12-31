@@ -756,7 +756,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 shouldInvertDecoderResolution,
                 glPrefs.glRenderer,
                 this);
-            try { decoderRenderer.setPreferLowerDelays(prefConfig != null ? prefConfig.preferLowerDelays : true); } catch (Throwable ignored) {}
 
 
         // Don't stream HDR if the decoder can't support it

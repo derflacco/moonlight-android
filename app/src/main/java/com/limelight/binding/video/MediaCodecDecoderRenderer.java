@@ -112,32 +112,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // --- end helpers ---
 
-    // Latency profile: favor minimal end-to-end delay over absolute smoothness.
-    // Set true to enable a 'latest-only' fast path in the render loop.
-    private boolean preferLowerDelays = false;
-
-    // Toggle at runtime if needed
-    public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
-    // When preferLowerDelays=false we use StockTimoutUs
-    // When preferLowerDelays=true we use 0 non blocking
-    private volatile int StockTimeoutUs = 50000;
-
-    private int getOutputDequeueTimeoutUs() {
-        // only if preferLowerDelays=true and pacing is not in the deny list
-        if (preferLowerDelays && prefs != null && !LfrDenyList()) {
-            return 0;
-        }
-        // else stock moonlight
-        return StockTimeoutUs;
-    }
-
-    private boolean LfrDenyList() {
-        // don't apply preferlowerdelays for this pacing list
-        // balanced is not needed here, but is better to add it anyway
-        return prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
-                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED;
-    }
     // True when new VPS/SPS/PPS has been received since last submission
     private boolean csdDirty = false;
 
@@ -1393,7 +1367,7 @@ try {
 //* Pin hot threads to big cluster *//
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;

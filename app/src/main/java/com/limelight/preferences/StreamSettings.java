@@ -179,10 +179,9 @@ public class StreamSettings extends AppCompatActivity {
                             || "frame_pacing".equals(key)                    // Legacy pacing list
                             || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
                             || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
-                            || "pref_low_latency_frame_balance".equals(key)  // LFR toggle (Prefer lower delays)
 
                     ) {
-                        // Re-evaluate UI locks and dependent visibility (including LFR mode slider)
+                        // Re-evaluate UI locks and dependent visibility
                         updateLocks();
                     }
                 };
@@ -223,22 +222,10 @@ public class StreamSettings extends AppCompatActivity {
             boolean lockFsrEn = gpuPath || hdrOn;
 
             Preference pacingPref  = findPreference("frame_pacing");
-            Preference lfrBal      = findPreference("pref_low_latency_frame_balance");
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
             Preference fsrMode     = findPreference("pref_video_upscale_mode");
             Preference sharpness   = findPreference("pref_video_upscale_sharpness");
 
-            // Define LFR visibility scope
-            boolean showLfrToggle = isGpuRaw || isMinLatency || isWarp || isWarp2;
-
-            if (lfrBal != null) {
-                try {
-                    lfrBal.setVisible(showLfrToggle);
-                } catch (Throwable ignored) {
-                    lfrBal.setEnabled(showLfrToggle);
-                }
-                lfrBal.setEnabled(showLfrToggle); // Ensure enabled state
-            }
 
             // Determine FSR enabled state
             boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;

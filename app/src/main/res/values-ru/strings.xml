@@ -650,7 +650,6 @@
     <string name="title_prevent_packet_loss">Предотвращать потерю пакетов</string>
     <string name="perf_overlay_lite_net">%1$dмс</string>
     <string name="perf_overlay_lite_dectime">%1$.2fмс</string>
-    <string name="summary_low_latency_frame_balance">Уменьшает задержку за счёт пропуска кадров в очереди</string>
     <string name="title_render_mode">Режим рендеринга</string>
     <string name="title_render_mode_convergence_title">3D конвергенция</string>
     <string name="title_render_mode_convergence_description">Справка: 50 - Сбалансировано / 0: Перед экраном / 100 - За экраном</string>
