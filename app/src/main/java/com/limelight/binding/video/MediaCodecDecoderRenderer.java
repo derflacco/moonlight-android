@@ -128,70 +128,78 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int LATENCY_TRACKING_MAX_SIZE = 1000; // Maximum entries in tracking array
     private long lastLatencyTrackingCleanupNs = 0L;
 
-private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
+    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64);
+    private final Object enqueueNsLock = new Object();
+
     // Update stats using both decode time (enqueue->dequeue) and end-to-end latency (uptime - PTS)
 
     private void updateDecodeLatencyStats(long presentationTimeUs) {
-        Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
-        if (enqNs != null) {
-            enqueueNsByPtsUs.remove(presentationTimeUs);
-            long decNs = System.nanoTime() - enqNs;
-            long decMs = decNs / 1_000_000L;
+        Long enqNs;
 
-            // Also calculate old end-to-end latency for comparison
-            long endToEndMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
-
-            // Update pure decode time stats
-            if (decMs >= 0 && decMs < 1000) {
-                activeWindowVideoStats.decoderTimeMs += decMs;
+        // Thread-safe retrieval and removal
+        synchronized (enqueueNsLock) {
+            enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
+            if (enqNs != null) {
+                enqueueNsByPtsUs.remove(presentationTimeUs);
             }
+        }
 
-            // Update end-to-end latency stats (for backward compatibility and comparison)
-            if (endToEndMs >= 0 && endToEndMs < 1000) {
-                activeWindowVideoStats.endToEndLatencyMs += endToEndMs;
-                if (!USE_FRAME_RENDER_TIME) {
-                    // Keep backward compatible behavior for totalTimeMs
-                    activeWindowVideoStats.totalTimeMs += endToEndMs;
-                }
+        if (enqNs == null) {
+            return;
+        }
 
+           long decNs = System.nanoTime() - enqNs;
+        long decMs = decNs / 1_000_000L;
+
+        // Also calculate old end-to-end latency for comparison
+        long endToEndMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
+
+        // Update pure decode time stats
+        if (decMs >= 0 && decMs < 1000) {
+            activeWindowVideoStats.decoderTimeMs += decMs;
+        }
+
+        // Update end-to-end latency stats (for backward compatibility and comparison)
+        if (endToEndMs >= 0 && endToEndMs < 1000) {
+            activeWindowVideoStats.endToEndLatencyMs += endToEndMs;
+            if (!USE_FRAME_RENDER_TIME) {
+                // Keep backward compatible behavior for totalTimeMs
+                activeWindowVideoStats.totalTimeMs += endToEndMs;
             }
         }
     }
     // cleanup method
     private void cleanupOldLatencyTrackingEntries() {
-        long nowNs = System.nanoTime();
-        if (nowNs - lastLatencyTrackingCleanupNs < LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
-            return;
-        }
-
-        int initialSize = enqueueNsByPtsUs.size();
-
-        // Remove entries older than 30 seconds based on enqueue time
-        for (int i = enqueueNsByPtsUs.size() - 1; i >= 0; i--) {
-            Long enqueueNs = enqueueNsByPtsUs.valueAt(i);
-            if (enqueueNs != null && (nowNs - enqueueNs) > LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
-                enqueueNsByPtsUs.removeAt(i);
+        synchronized (enqueueNsLock) {
+            long nowNs = System.nanoTime();
+            if (nowNs - lastLatencyTrackingCleanupNs < LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
+                return;
             }
+
+            int initialSize = enqueueNsByPtsUs.size();
+
+            // Remove entries older than 30 seconds based on enqueue time
+            for (int i = enqueueNsByPtsUs.size() - 1; i >= 0; i--) {
+                Long enqueueNs = enqueueNsByPtsUs.valueAt(i);
+                if (enqueueNs != null && (nowNs - enqueueNs) > LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
+                    enqueueNsByPtsUs.removeAt(i);
+                }
+            }
+
+            // Enforce maximum size limit (defensive against accumulation)
+            enforceLatencyTrackingSizeLimit();
+
+            lastLatencyTrackingCleanupNs = nowNs;
         }
-
-        // Enforce maximum size limit (defensive against accumulation)
-        enforceLatencyTrackingSizeLimit();
-
-        lastLatencyTrackingCleanupNs = nowNs;
-
     }
     // enforce size limits
     private void enforceLatencyTrackingSizeLimit() {
-        if (enqueueNsByPtsUs.size() > LATENCY_TRACKING_MAX_SIZE) {
-            // Remove oldest entries (by key, assuming PTS increases over time)
-            // Since LongSparseArray maintains sorted keys, remove from start
-            int excess = enqueueNsByPtsUs.size() - LATENCY_TRACKING_MAX_SIZE;
-            for (int i = 0; i < excess; i++) {
-                enqueueNsByPtsUs.removeAt(0);
-            }
-
-            if (BuildConfig.DEBUG) {
-                LimeLog.warning("Latency tracking exceeded size limit, trimmed to " + LATENCY_TRACKING_MAX_SIZE + " entries");
+        synchronized (enqueueNsLock) {
+            if (enqueueNsByPtsUs.size() > LATENCY_TRACKING_MAX_SIZE) {
+                int excess = enqueueNsByPtsUs.size() - LATENCY_TRACKING_MAX_SIZE;
+                for (int i = 0; i < excess; i++) {
+                    enqueueNsByPtsUs.removeAt(0);
+                }
             }
         }
     }
@@ -770,6 +778,7 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
         vpsBuffers.clear();
         spsBuffers.clear();
         ppsBuffers.clear();
+
 // Clear decode latency tracking when decoder is reconfigured
         enqueueNsByPtsUs.clear();
         csdDirty = false;
@@ -1667,6 +1676,11 @@ try {
                 cpuWarmUpStarted = false;
             } catch (Throwable ignored) {}
         }
+
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
+        }
+
         // Wait for the Choreographer looper to shut down (if we have one)
         if (choreographerHandlerThread != null) {
             try {
@@ -1707,7 +1721,9 @@ try {
     public void cleanup() {
 
         // Clear decode latency tracking to prevent memory leaks
-        enqueueNsByPtsUs.clear();
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
+        }
 
 
         // Stop CpuWarmUp
@@ -1768,7 +1784,14 @@ try {
 
             // Track enqueue time for this PTS
             if (timestampUs != 0) { // Don't track config buffers with timestamp 0
-                enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
+            // Validate realistic PTS range.
+            // Discard negative or distant future timestamps.
+                long currentTimeUs = System.currentTimeMillis() * 1000L;
+                if (timestampUs > 0 && timestampUs < (currentTimeUs + 3600_000_000L)) {
+                    synchronized (enqueueNsLock) {
+                        enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
+                    }
+                }
             }
 
             // We need a new buffer now
