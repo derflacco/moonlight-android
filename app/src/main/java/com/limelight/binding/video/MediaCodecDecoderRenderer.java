@@ -548,6 +548,8 @@ private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
         }
         // Initialize CpuWarmUp
         cpuWarmUp = new CpuWarmUp();
+        LimeLog.info("CpuWarmUp initialized; enabled setting: " +
+                (prefs != null ? prefs.cpuWarmUpEnable : "prefs null"));
         // Set attributes that are queried in getCapabilities(). This must be done here
         // because getCapabilities() may be called before setup() in current versions of the common
         // library. The limitation of this is that we don't know whether we're using HEVC or AVC.
@@ -1324,15 +1326,16 @@ try {
                 final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
 //* Pin hot threads to big cluster *//
                 // Pin renderer thread to big cores if requested
-                try {
-                    int __tid = android.os.Process.myTid();
-                    String __allowedBefore = CpuAffinity.readAllowedCpuListForCurrentThread();
-                    LimeLog.info("RendererAffinity: tid=" + __tid
-                            + " allowed_before=" + __allowedBefore
-                            + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
-                } catch (Throwable ignored) {}
 
                 if (prefs != null && prefs.preferBigCores) {
+                    try {
+                        int __tid = android.os.Process.myTid();
+                        String __allowedBefore = CpuAffinity.readAllowedCpuListForCurrentThread();
+                        LimeLog.info("RendererAffinity: tid=" + __tid
+                                + " allowed_before=" + __allowedBefore
+                                + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
+                    } catch (Throwable ignored) {}
+
                     try {
                         // Pin current thread to big cores
                         CpuAffinity.pinCurrentThreadToBigCoresIf(true);
@@ -1508,19 +1511,21 @@ try {
                 }
 //* Pin hot threads to big cluster *//
 // Clear affinity on thread exit
-                try {
-                    CpuAffinity.clearAllThreadsAffinityAllOnline();
+                if (affinityPinned) {
+                    try {
+                        CpuAffinity.clearAllThreadsAffinityAllOnline();
 
-                    // Reset sticky-affinity state
-                    MediaCodecDecoderRenderer.this.affinityPinned = false;
-                    MediaCodecDecoderRenderer.this.lastAllowedMask = null;
-                    MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
-                    LimeLog.info("RendererAffinity: cleared to all online CPUs");
+                        // Reset sticky-affinity state
+                        MediaCodecDecoderRenderer.this.affinityPinned = false;
+                        MediaCodecDecoderRenderer.this.lastAllowedMask = null;
+                        MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
+                        LimeLog.info("RendererAffinity: cleared to all online CPUs");
 
-                    // Log final mask after clearing (debug)
-                    String __cleared = CpuAffinity.readAllowedCpuListForCurrentThread();
-                    LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
-                } catch (Throwable ignored) {}
+                        // Log final mask after clearing (debug)
+                        String __cleared = CpuAffinity.readAllowedCpuListForCurrentThread();
+                        LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
+                    } catch (Throwable ignored) {}
+                }
                 //* Pin hot threads to big cluster *//
             }
         };
@@ -1606,16 +1611,19 @@ try {
 
     @Override
     public void start() {
-        // Start CPU warm-up if enabled
-        if (prefs != null && prefs.preferBigCores && cpuWarmUp != null && !cpuWarmUpStarted) {
+
+
+        // Start CPU warm-up if enabled (independent of preferBigCores)
+        if (prefs != null && prefs.cpuWarmUpEnable && cpuWarmUp != null && !cpuWarmUpStarted) {
             try {
                 cpuWarmUp.start(activity, null, false);
                 cpuWarmUpStarted = true;
-                LimeLog.info("CpuWarmUp started for preferBigCores");
+                LimeLog.info("CpuWarmUp started");
             } catch (Throwable t) {
                 LimeLog.warning("CpuWarmUp start failed: " + t);
             }
         }
+
 
         startRendererThread();
         startChoreographerThread();
@@ -1634,6 +1642,7 @@ try {
             try {
                 cpuWarmUp.stop();
                 cpuWarmUpStarted = false;
+                LimeLog.info("CpuWarmUp stopped");
             } catch (Throwable t) {
                 LimeLog.warning("CpuWarmUp stop failed: " + t);
             }
