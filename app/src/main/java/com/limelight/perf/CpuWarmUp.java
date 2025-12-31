@@ -1,5 +1,7 @@
 package com.limelight.perf;
 
+import android.os.Process;
+
 /**
  * CpuWarmUp (MEDIUM): multi-thread warm-up to gently nudge DVFS.
  *  - 8 workers (clamped to available cores)
@@ -40,7 +42,7 @@ public final class CpuWarmUp {
     // Master switch (build-time kill switch if needed)
     private static final boolean ENABLE = true;
 
-    // 8 workers (clamped to available cores, never < 1)
+    // Workers count (clamped to available cores, never < 1)
     private static final int WORKERS = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
 
     // Base duty-cycle: ~2.5 ms spin + 2 ms sleep ≈ ~50%
@@ -59,21 +61,30 @@ public final class CpuWarmUp {
     private static final float T_HOT      = 45.0f;
     private static final float T_CRITICAL = 48.0f;
 
+    // ---- Architecture detection constants ----
+    // Use three-tier (Prime/Big/Little) only if we detect Prime cores
+    // Otherwise fall back to two-tier (Big/Little)
+    private static final int ARCH_3_TIER = 3;
+    private static final int ARCH_2_TIER = 2;
+
+    // Detected architecture (cached)
+    private static volatile int detectedArchitecture = -1;
+
     // ---- Affinity policy ----
     private static final int AFFINITY_BIG_ONLY = 0;
     private static final int AFFINITY_SPREAD   = 1;
     private static final int AFFINITY_NONE     = 2;
 
-    // DEFAULT: spread across clusters
+    // DEFAULT: spread across clusters based on detected architecture
     private static final int AFFINITY_MODE = AFFINITY_SPREAD;
 
     // Thread priorities per-bucket (to help scheduler):
-    //  bucket 0 (big)   -> FOREGROUND
-    //  bucket 1 (mid)   -> DEFAULT
-    //  bucket 2 (little)-> BACKGROUND
-    private static final int PRIO_BIG    = android.os.Process.THREAD_PRIORITY_FOREGROUND;
-    private static final int PRIO_MID    = android.os.Process.THREAD_PRIORITY_DEFAULT;
-    private static final int PRIO_LITTLE = android.os.Process.THREAD_PRIORITY_BACKGROUND;
+    //  bucket 0 (prime/big) -> FOREGROUND
+    //  bucket 1 (mid/big)   -> DEFAULT (for 3-tier), or little (for 2-tier)
+    //  bucket 2 (little)    -> BACKGROUND (only for 3-tier)
+    private static final int PRIO_PRIME   = Process.THREAD_PRIORITY_DEFAULT;
+    private static final int PRIO_BIG     = android.os.Process.THREAD_PRIORITY_DEFAULT;
+    private static final int PRIO_LITTLE  = Process.THREAD_PRIORITY_DEFAULT;
 
     // ---- thermal-aware dynamic knobs (per-instance, shared by workers) ----
     private volatile int  spinMicros       = BASE_SPIN_MICROS;   // reduced when hot
@@ -122,23 +133,24 @@ public final class CpuWarmUp {
         workers.clear();
 
         final int n = WORKERS;
-        logI("start(): mode=" + modeName(AFFINITY_MODE) + " spawn=" + n);
+        final int arch = getArchitecture();
+        logI("start(): mode=" + modeName(AFFINITY_MODE) + " spawn=" + n + " arch=" + arch + "-tier");
 
         for (int i = 0; i < n; i++) {
             final int id = i;
-            final int bucket = chooseBucketForWorker(id); // 0=big,1=mid,2=little
+            final int bucket = chooseBucketForWorker(id, arch);
             Thread t = new Thread(() -> {
                 // Priority by bucket (helps scheduler pick cluster)
-                try { android.os.Process.setThreadPriority(priorityForBucket(bucket)); } catch (Throwable ignored) {}
+                try { android.os.Process.setThreadPriority(priorityForBucket(bucket, arch)); } catch (Throwable ignored) {}
 
                 // Affinity by bucket (best-effort via reflection; falls back automatically)
-                pinWorkerToBucket(bucket);
+                pinWorkerToBucket(bucket, arch);
 
                 final String original = Thread.currentThread().getName();
-                try { Thread.currentThread().setName("CpuWarmUp-" + id + "-" + bucketName(bucket)); } catch (Throwable ignored) {}
+                try { Thread.currentThread().setName("CpuWarmUp-" + id + "-" + bucketName(bucket, arch)); } catch (Throwable ignored) {}
 
                 long lastBurstMs = android.os.SystemClock.uptimeMillis();
-                logI("worker-" + id + " started -> bucket=" + bucketName(bucket));
+                logI("worker-" + id + " started -> bucket=" + bucketName(bucket, arch));
 
                 while (running && !Thread.currentThread().isInterrupted()) {
                     // --- Improvement #1: only worker 0 samples thermals every THERMAL_SAMPLE_MS ---
@@ -186,7 +198,7 @@ public final class CpuWarmUp {
                     }
                 }
 
-                logI("worker-" + id + " exit (bucket=" + bucketName(bucket) + ")");
+                logI("worker-" + id + " exit (bucket=" + bucketName(bucket, arch) + ")");
                 try { Thread.currentThread().setName(original != null ? original : "CpuWarmUp-ended"); } catch (Throwable ignored) {}
             }, "CpuWarmUp-" + i);
 
@@ -222,6 +234,47 @@ public final class CpuWarmUp {
         logI("stop(): done");
     }
 
+    // ---------------- Architecture detection ----------------
+
+    /**
+     * Detect CPU architecture tier count.
+     * Returns 3 for Prime/Big/Little, 2 for Big/Little only.
+     * Uses reflection to query CpuAffinity helper if available.
+     */
+    private static int getArchitecture() {
+        if (detectedArchitecture != -1) return detectedArchitecture;
+
+        int arch = ARCH_2_TIER; // Conservative default
+
+        try {
+            // Try to detect via CpuAffinity helper if available
+            Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
+
+            // Method 1: Check for Prime core count method
+            try {
+                java.lang.reflect.Method m = cls.getMethod("getPrimeCoreCount");
+                Object result = m.invoke(null);
+                if (result instanceof Integer && (Integer)result > 0) {
+                    arch = ARCH_3_TIER;
+                }
+            } catch (NoSuchMethodException e) {
+                // Method 2: Try to pin to Prime cores to see if it works
+                if (tryCallCpuAffinity("pinCurrentThreadToPrimeCoresIf", true)) {
+                    arch = ARCH_3_TIER;
+                }
+            }
+
+            logI("Architecture detection: " + arch + "-tier");
+        } catch (Throwable t) {
+            // Fallback: Assume 2-tier for safety
+            arch = ARCH_2_TIER;
+            logI("Architecture detection failed, assuming 2-tier");
+        }
+
+        detectedArchitecture = arch;
+        return arch;
+    }
+
     // ---------------- Affinity helpers ----------------
 
     private static String modeName(int m) {
@@ -233,52 +286,85 @@ public final class CpuWarmUp {
         return "UNK";
     }
 
-    private static String bucketName(int b) {
-        switch (b) {
-            case 0: return "big";
-            case 1: return "mid";
-            case 2: return "little";
+    private static String bucketName(int b, int arch) {
+        if (arch == ARCH_3_TIER) {
+            switch (b) {
+                case 0: return "prime";
+                case 1: return "big";
+                case 2: return "little";
+            }
+        } else {
+            // 2-tier architecture
+            switch (b) {
+                case 0: return "big";
+                case 1: return "little";
+            }
         }
         return "any";
     }
 
-    /** 0=big, 1=mid, 2=little (for SPREAD). */
-    private static int chooseBucketForWorker(int id) {
-        if (AFFINITY_MODE == AFFINITY_SPREAD) return id % 3;
+    /** Choose bucket based on architecture tier count. */
+    private static int chooseBucketForWorker(int id, int arch) {
+        if (AFFINITY_MODE == AFFINITY_SPREAD) {
+            if (arch == ARCH_3_TIER) {
+                return id % 3; // 3-tier: prime(0), big(1), little(2)
+            } else {
+                return id % 2; // 2-tier: big(0), little(1)
+            }
+        }
         if (AFFINITY_MODE == AFFINITY_BIG_ONLY) return 0;
         return 0; // NONE -> treat as "any" (we won't pin)
     }
 
-    private static int priorityForBucket(int b) {
-        switch (b) {
-            case 0: return PRIO_BIG;
-            case 1: return PRIO_MID;
-            case 2: return PRIO_LITTLE;
+    private static int priorityForBucket(int b, int arch) {
+        if (arch == ARCH_3_TIER) {
+            switch (b) {
+                case 0: return PRIO_PRIME;
+                case 1: return PRIO_BIG;
+                case 2: return PRIO_LITTLE;
+            }
+        } else {
+            // 2-tier architecture
+            switch (b) {
+                case 0: return PRIO_BIG;      // big cores
+                case 1: return PRIO_LITTLE;   // little cores
+            }
         }
-        return PRIO_MID;
+        return PRIO_BIG;
     }
 
-    /** Try to pin current thread according to bucket. Falls back gracefully. */
-    private static void pinWorkerToBucket(int bucket) {
+    /** Try to pin current thread according to bucket and architecture. */
+    private static void pinWorkerToBucket(int bucket, int arch) {
         if (AFFINITY_MODE == AFFINITY_NONE) return;
 
-        // First: try explicit per-cluster helpers if available
-        switch (bucket) {
-            case 0: // big
-                if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
-                break;
-            case 1: // mid
-                // not all builds expose this; try mid -> big -> all
-                if (tryCallCpuAffinity("pinCurrentThreadToMidCoresIf", true)) return;
-                if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
-                break;
-            case 2: // little
-                if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return;
-                // fallback: lower prio without pinning tends to land on little
-                break;
+        if (arch == ARCH_3_TIER) {
+            // 3-tier: Prime/Big/Little
+            switch (bucket) {
+                case 0: // prime
+                    if (tryCallCpuAffinity("pinCurrentThreadToPrimeCoresIf", true)) return;
+                    // Fallback to big if prime not available
+                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                    break;
+                case 1: // big
+                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                    break;
+                case 2: // little
+                    if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return;
+                    break;
+            }
+        } else {
+            // 2-tier: Big/Little only
+            switch (bucket) {
+                case 0: // big
+                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                    break;
+                case 1: // little
+                    if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return;
+                    break;
+            }
         }
 
-        // Fallbacks: try “all cores” (so scheduler can spread), else do nothing
+        // Fallbacks: try "all cores" (so scheduler can spread), else do nothing
         if (tryCallCpuAffinity("pinCurrentThreadToAllCoresIf", true)) return;
 
         // Last resort: do nothing (scheduler decides)
