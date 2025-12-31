@@ -256,13 +256,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // --- OLED burn-in protection for Lite overlay (horizontal pixel/text shift) ---
     private static final long LITE_SHIFT_PERIOD_NS = 30_000_000_000L; // 30s
     // --- OLED "pixel refresh" blink for Lite overlay ---
-// Briefly blanks the Lite overlay to let OLED pixels rest (default: 250ms every 5 minutes).
+    // Briefly blanks the Lite overlay to let OLED pixels rest (default: 250ms every 5 minutes).
     private static final long LITE_BLINK_PERIOD_NS = 300_000_000_000L;   // 5 min
     private static final long LITE_BLINK_DURATION_NS = 250_000_000L;     // 250 ms
     private long liteBlinkNextStartNs = 0L;
     private long liteBlinkEndNs = 0L;
     private long liteShiftNextNs = 0L;
     private int liteShiftSpaces = 0; // 0..2
+    // end of lite blink\shift
+
+    // Fetchinputbuffer utils:
+    private long inputDequeueHangStartMs = 0L;
+    private int inputTryAgainStreak = 0;
+    private void resetInputBufferState() {
+        inputTryAgainStreak = 0;
+        inputDequeueHangStartMs = 0L;
+        nextInputBufferIndex = -1;
+        nextInputBuffer = null;
+    }
+    //
+
     private static final int CR_MAX_TRIES = 10;
     private static final int CR_RECOVERY_TYPE_NONE = 0;
     private static final int CR_RECOVERY_TYPE_FLUSH = 1;
@@ -1528,7 +1541,7 @@ try {
     }
 
     private boolean fetchNextInputBuffer() {
-        long startTime;
+        final long startNs = System.nanoTime();
         boolean codecRecovered;
 
         if (nextInputBuffer != null) {
@@ -1536,35 +1549,58 @@ try {
             return true;
         }
 
-        startTime = SystemClock.uptimeMillis();
-
         try {
             // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping) {
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+            if (nextInputBufferIndex < 0 && !stopping) {
+                // Initial attempt with 4 ms timeout
+                final long t0 = System.nanoTime();
+                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(4000);
+                final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
+
+                // Single quick retry if unavailable
+                if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    final int remainingUs = Math.max(0, 5000 - (int) elapsedUs);                    final int quickBackoffUs = Math.min(remainingUs, 1000); // up to 1 ms extra
+                    if (quickBackoffUs > 0) {
+                        nextInputBufferIndex = videoDecoder.dequeueInputBuffer(quickBackoffUs);
+                    }
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
             if (nextInputBufferIndex >= 0) {
+                // Reset tracking on success
+                inputTryAgainStreak = 0;
+                inputDequeueHangStartMs = 0L;
+
                 // Using the new getInputBuffer() API on Lollipop allows
                 // the framework to do some performance optimizations for us
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
-                        // According to the Android docs, getInputBuffer() can return null "if the
-                        // index is not a dequeued input buffer". I don't think this ever should
-                        // happen but if it does, let's try to get a new input buffer next time.
+                        // Treat null as codec contract violation
+                        inputTryAgainStreak = 0;
+                        inputDequeueHangStartMs = 0L;
                         nextInputBufferIndex = -1;
+
+                        // Trigger error handler
+                        handleDecoderException(new IllegalStateException(
+                                "getInputBuffer() returned null for index " + nextInputBufferIndex));
+                        return false;
                     }
                 }
                 else {
                     nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
-
                     // Clear old input data pre-Lollipop
                     nextInputBuffer.clear();
                 }
             }
         } catch (IllegalStateException e) {
+            // Reset tracking on exception
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
+
             handleDecoderException(e);
             return false;
         } finally {
@@ -1574,20 +1610,25 @@ try {
         // If codec recovery is required, always return false to ensure the caller will request
         // an IDR frame to complete the codec recovery.
         if (codecRecovered) {
+            // Reset tracking on recovery
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
             return false;
         }
 
-        int deltaMs = (int)(SystemClock.uptimeMillis() - startTime);
+        // Hung detection - check if we're still waiting after attempts
+        if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+            inputTryAgainStreak++;
+            final long nowMs = SystemClock.uptimeMillis();
 
-        if (deltaMs >= 20) {
-            LimeLog.warning("Dequeue input buffer ran long: " + deltaMs + " ms");
-        }
-
-        if (nextInputBuffer == null) {
-            // We've been hung for 5 seconds and no other exception was reported,
-            // so generate a decoder hung exception
-            if (deltaMs >= 5000 && initialException == null) {
-                DecoderHungException decoderHungException = new DecoderHungException(deltaMs);
+            if (inputDequeueHangStartMs == 0L) {
+                inputDequeueHangStartMs = nowMs;
+            } else if ((nowMs - inputDequeueHangStartMs) >= 5000 && initialException == null) {
+                // Decoder hung for 5 seconds total
+                DecoderHungException decoderHungException =
+                        new DecoderHungException((int) (nowMs - inputDequeueHangStartMs));
                 if (!reportedCrash) {
                     reportedCrash = true;
                     crashListener.notifyCrash(decoderHungException);
@@ -1595,12 +1636,25 @@ try {
                 throw new RendererException(this, decoderHungException);
             }
 
+            // Prevent busy-spin
+            Thread.yield();
+
+            return false;
+        }
+
+        // Log long dequeues (>20ms)
+        final long dtNs = System.nanoTime() - startNs;
+        if (dtNs >= 20_000_000L) { // 20 ms
+            LimeLog.warning("Dequeue input buffer ran long: " + (dtNs / 1_000_000L) + " ms");
+        }
+
+        if (nextInputBuffer == null) {
+            // Unexpected state: no TRY_AGAIN but no buffer available
             return false;
         }
 
         return true;
     }
-
     @Override
     public void start() {
 
@@ -1645,6 +1699,8 @@ try {
             rendererThread.interrupt();
         }
 
+        // Reset input buffer state to avoid stale state on next start
+        resetInputBufferState();
 
         // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
         try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
@@ -1690,6 +1746,9 @@ try {
             enqueueNsByPtsUs.clear();
         }
 
+        // Reset input buffer state to avoid stale state on next start
+        resetInputBufferState();
+
         // Wait for the Choreographer looper to shut down (if we have one)
         if (choreographerHandlerThread != null) {
             try {
@@ -1734,6 +1793,8 @@ try {
             enqueueNsByPtsUs.clear();
         }
 
+        // Reset input buffer state to avoid stale state on next start
+        resetInputBufferState();
 
         // Stop CpuWarmUp
         if (cpuWarmUp != null) {
