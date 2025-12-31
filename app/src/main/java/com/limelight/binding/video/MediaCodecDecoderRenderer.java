@@ -256,14 +256,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         SeqParameterSet savedSps;
         // Deferred exception reporting (rare)
         RendererException initialException;
-        long initialExceptionTimestamp;
+
     }
 
     private final ColdCodecConfig coldCfg = new ColdCodecConfig();
 
 
-    private boolean submittedCsd;
-    private byte[] currentHdrMetadata;
 
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
@@ -752,9 +750,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void configureAndStartDecoder(MediaFormat format) {
         // Set HDR metadata if present
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            if (currentHdrMetadata != null) {
+            if (coldCfg.currentHdrMetadata != null) {
                 ByteBuffer hdrStaticInfo = ByteBuffer.allocate(25).order(ByteOrder.LITTLE_ENDIAN);
-                ByteBuffer hdrMetadata = ByteBuffer.wrap(currentHdrMetadata).order(ByteOrder.LITTLE_ENDIAN);
+                ByteBuffer hdrMetadata = ByteBuffer.wrap(coldCfg.currentHdrMetadata).order(ByteOrder.LITTLE_ENDIAN);
 
                 // Create a HDMI Dynamic Range and Mastering InfoFrame as defined by CTA-861.3
                 hdrStaticInfo.put((byte) 0); // Metadata type
@@ -823,7 +821,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         configuredFormat = format;
 
         // After reconfiguration, we must resubmit CSD buffers
-        submittedCsd = false;
+        coldCfg.submittedCsd = false;
         coldCfg.vpsBuffers.clear();
         coldCfg.spsBuffers.clear();
         coldCfg.ppsBuffers.clear();
@@ -1251,13 +1249,13 @@ try {
             // throw the original exception again.
             //
             if (coldCfg.initialException != null) {
-                if (SystemClock.uptimeMillis() - coldCfg.initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
+                if (SystemClock.uptimeMillis() - initialExceptionTimestamp >= EXCEPTION_REPORT_DELAY_MS) {
                     crashListener.notifyCrash(coldCfg.initialException);
                     throw coldCfg.initialException;
                 }
             } else {
-                coldCfg.initialException = new RendererException(this, e);
-                coldCfg.initialExceptionTimestamp = SystemClock.uptimeMillis();
+                initialException = new RendererException(this, e);
+                initialExceptionTimestamp = SystemClock.uptimeMillis();
             }
         }
 
@@ -1839,11 +1837,11 @@ try {
         // HDR metadata is only supported in Android 7.0 and later, so don't bother
         // restarting the codec on anything earlier than that.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            if (currentHdrMetadata != null && (!enabled || hdrMetadata == null)) {
-                currentHdrMetadata = null;
+            if (coldCfg.currentHdrMetadata != null && (!enabled || hdrMetadata == null)) {
+                coldCfg.currentHdrMetadata = null;
             }
-            else if (enabled && hdrMetadata != null && !Arrays.equals(currentHdrMetadata, hdrMetadata)) {
-                currentHdrMetadata = hdrMetadata;
+            else if (enabled && hdrMetadata != null && !Arrays.equals(coldCfg.currentHdrMetadata, hdrMetadata)) {
+                coldCfg.currentHdrMetadata = hdrMetadata;
             }
             else {
                 // Nothing to do
@@ -2231,7 +2229,7 @@ try {
             else if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) != 0) {
                 // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
                 // submit the CSD blob in a separate input buffer for each IDR frame.
-                if (!submittedCsd || (!coldCfg.fusedIdrFrame && csdDirty)) {
+                if (!coldCfg.submittedCsd || (!coldCfg.fusedIdrFrame && csdDirty)) {
                     if (!fetchNextInputBuffer()) {
                         return MoonBridge.DR_NEED_IDR;
                     }
@@ -2263,7 +2261,7 @@ try {
                     csdSubmittedForThisFrame = true;
 
                     // Remember that we submitted CSD globally for this MediaCodec instance
-                    submittedCsd = true;
+                    coldCfg.submittedCsd = true;
                     csdDirty = false;
 
                     // If we are not using fused IDR frames, we don't need to keep per-IDR CSD around
@@ -2342,7 +2340,7 @@ try {
                     }
 
                     csdSubmittedForThisFrame = true;
-                    submittedCsd = true;
+                    coldCfg.submittedCsd = true;
                     csdDirty = false;
 
                     if (!fetchNextInputBuffer()) {
