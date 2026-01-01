@@ -270,7 +270,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 // Always-on on API 21+; fall back to sync below 21
     private static final boolean ENABLE_ASYNC_DECODING = true;
     private boolean useAsyncCodec = ENABLE_ASYNC_DECODING &&
-            (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP);
+            (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M);
 
     private android.os.HandlerThread codecCallbackThread;
 
@@ -1736,6 +1736,9 @@ try {
         // Clear async queues
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
 
+        // Clear frame pacing queue
+        outputBufferQueue.clear();
+
         // Clear decode latency tracking to prevent memory leaks
         enqueueNsByPtsUs.clear();
 
@@ -2990,10 +2993,14 @@ try {
             if (idx == null) return -1;
             synchronized (asyncOutInfo) {
                 android.media.MediaCodec.BufferInfo bi = asyncOutInfo.get(idx);
-                if (bi != null && outInfo != null) {
-                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                if (bi != null) {
+                    if (outInfo != null) {
+                        outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                    }
+                    asyncOutInfo.remove(idx);
+                } else {
+                    return -1; // Buffer info already removed/cleaned up
                 }
-                asyncOutInfo.remove(idx);
             }
             return idx;
         } catch (InterruptedException e) {
@@ -3118,8 +3125,13 @@ try {
                 try { asyncOutInfo.clear(); } catch (Throwable ignored) {}
             }
             if (codecCallbackThread != null) {
-                try { codecCallbackThread.quitSafely(); } catch (Throwable ignored) {}
-                codecCallbackThread = null;
+                try {
+                    codecCallbackThread.quitSafely();
+                    codecCallbackThread.join(1000); // Timeout 1 secondo
+                } catch (Throwable ignored) {}
+                finally {
+                    codecCallbackThread = null;
+                }
             }
         }
     }
