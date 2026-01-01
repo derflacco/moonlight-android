@@ -264,7 +264,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private final ColdCodecConfig coldCfg = new ColdCodecConfig();
 
+    // ColdCfg end
 
+    // ==== Async decoding ====
+// Always-on on API 21+; fall back to sync below 21
+    private static final boolean ENABLE_ASYNC_DECODING = true;
+    private boolean useAsyncCodec = ENABLE_ASYNC_DECODING &&
+            (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP);
+
+    private android.os.HandlerThread codecCallbackThread;
+
+    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue =
+            new java.util.concurrent.LinkedBlockingQueue<>(64);
+
+    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue =
+            new java.util.concurrent.LinkedBlockingQueue<>(8);
+
+    private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo =
+            new android.util.SparseArray<>(16);
+
+    private boolean preferLowerDelays = false; // Will be set based on frame pacing mode
+// ==== End async decoding ====
 
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
@@ -781,6 +801,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
+        // Enable async callbacks after start
+        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
+
         // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
         Surface __codecSurface = renderTarget;
         if (prefs != null && prefs.videoUpscaleEnable) {
@@ -1133,6 +1156,10 @@ try {
                 // Wake all quiesced threads and allow them to begin work again
                 codecRecoveryThreadQuiescedFlags = 0;
                 codecRecoveryMonitor.notifyAll();
+                // After successful restart/reconfigure, re-attach async
+                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_NONE && videoDecoder != null) {
+                    try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
+                }
             }
             else {
                 // If we haven't quiesced all threads yet, wait to be signalled after recovery.
@@ -1421,7 +1448,7 @@ try {
 //* Pin hot threads to big cluster *//
                     try {
                         // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
+                        int outIndex = nextOutputIndex(info, 50000);
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
@@ -1431,7 +1458,7 @@ try {
                             // Render the latest frame now if frame pacing isn't in balanced mode
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
+                                while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
                                     try {
                                         videoDecoder.releaseOutputBuffer(lastIndex, false);
                                     } catch (Throwable ignored) { }
@@ -1499,6 +1526,11 @@ try {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
                                     break;
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
+                                    // Note: In async mode, format changes are handled in callback
+                                    // But keep sync fallback
+                                    if (!useAsyncCodec) {
+                                        LimeLog.info("Output format changed (sync)");
+                                        outputFormat = videoDecoder.getOutputFormat();
                                     LimeLog.info("Output format changed");
                                     outputFormat = videoDecoder.getOutputFormat();
                                     try {
@@ -1526,6 +1558,7 @@ try {
                                         }
                                     } catch (Throwable ignored) {}
                                     LimeLog.info("New output format: " + outputFormat);
+                                    }
                                     break;
                                 default:
                                     break;
@@ -1581,7 +1614,7 @@ try {
             // If we don't have an input buffer index yet, fetch one now
             if (nextInputBufferIndex < 0 && !stopping) {
                 final long t0 = System.nanoTime();
-                nextInputBufferIndex = videoDecoder.dequeueInputBuffer(4000);
+                nextInputBufferIndex = nextInputIndex(4000);
                 final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
 
                 // Single quick retry if unavailable
@@ -1589,7 +1622,7 @@ try {
                     final int remainingUs = Math.max(0, 4000 - (int) elapsedUs);
                     final int quickBackoffUs = Math.min(remainingUs, 1000);
                     if (quickBackoffUs > 0) {
-                        nextInputBufferIndex = videoDecoder.dequeueInputBuffer(quickBackoffUs);
+                        nextInputBufferIndex = nextInputIndex(quickBackoffUs);
                     }
                 }
             }
@@ -1702,6 +1735,9 @@ try {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
 
+        // Clear async queues
+        try { detachAsyncCodec(); } catch (Throwable ignored) {}
+
         // Clear decode latency tracking to prevent memory leaks
         enqueueNsByPtsUs.clear();
 
@@ -1771,6 +1807,9 @@ try {
             enqueueNsByPtsUs.clear();
         }
 
+        // Final async cleanup
+        try { detachAsyncCodec(); } catch (Throwable ignored) {}
+
         // Reset input buffer state to avoid stale state on next start
         resetInputBufferState();
 
@@ -1817,6 +1856,9 @@ try {
         synchronized (enqueueNsLock) {
             enqueueNsByPtsUs.clear();
         }
+
+        // Ensure async resources are released
+        try { detachAsyncCodec(); } catch (Throwable ignored) {}
 
         // Clear CSD buffers
         coldCfg.vpsBuffers.clear();
@@ -2915,4 +2957,172 @@ try {
             minDecodeTimeFullLog = fullLog;
         }
     }
+
+    // Async Decoding Helpers
+    // Async decoding helper methods
+    private static android.media.MediaCodec.BufferInfo cloneInfo(android.media.MediaCodec.BufferInfo src) {
+        android.media.MediaCodec.BufferInfo dst = new android.media.MediaCodec.BufferInfo();
+        if (src != null) {
+            dst.set(src.offset, src.size, src.presentationTimeUs, src.flags);
+        }
+        return dst;
+    }
+
+    // Return next input index (async => from queue; sync => dequeueInputBuffer)
+    private int nextInputIndex(int timeoutUs) {
+        if (!useAsyncCodec || videoDecoder == null) {
+            return videoDecoder.dequeueInputBuffer(timeoutUs);
+        }
+        try {
+            Integer idx = asyncInputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
+            return (idx != null) ? idx : -1; // -1 == INFO_TRY_AGAIN_LATER
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return -1;
+        }
+    }
+
+    // Return next output index and fill outInfo (async => from queue; sync => dequeueOutputBuffer)
+    private int nextOutputIndex(android.media.MediaCodec.BufferInfo outInfo, int timeoutUs) {
+        if (!useAsyncCodec || videoDecoder == null) {
+            return videoDecoder.dequeueOutputBuffer(outInfo, timeoutUs);
+        }
+        try {
+            Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
+            if (idx == null) return -1;
+            synchronized (asyncOutInfo) {
+                android.media.MediaCodec.BufferInfo bi = asyncOutInfo.get(idx);
+                if (bi != null && outInfo != null) {
+                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                }
+                asyncOutInfo.remove(idx);
+            }
+            return idx;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return -1;
+        }
+    }
+    private void attachAsyncCodecIfNeeded() {
+        if (!useAsyncCodec || videoDecoder == null) return;
+
+        // Set preferLowerDelays based on frame pacing mode
+        preferLowerDelays = (prefs != null &&
+                prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED);
+
+        if (codecCallbackThread == null) {
+            codecCallbackThread = new android.os.HandlerThread(
+                    "CodecAsync", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            codecCallbackThread.start();
+        }
+        android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
+
+        videoDecoder.setCallback(new android.media.MediaCodec.Callback() {
+            @Override
+            public void onInputBufferAvailable(android.media.MediaCodec codec, int index) {
+                try {
+                    asyncInputQueue.put(index);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (Throwable ignored) { }
+            }
+
+            @Override
+            public void onOutputBufferAvailable(android.media.MediaCodec codec, int index,
+                                                android.media.MediaCodec.BufferInfo info) {
+                try {
+                    // Save BufferInfo for later retrieval
+                    synchronized (asyncOutInfo) { asyncOutInfo.put(index, cloneInfo(info)); }
+
+                    // PURE LFR/ULL path: keep latest only
+                    if (preferLowerDelays) {
+                        Integer old;
+                        while ((old = asyncOutputQueue.poll()) != null) {
+                            try { codec.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) { asyncOutInfo.remove(old); }
+                        }
+                        if (!asyncOutputQueue.offer(index)) {
+                            try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
+                        }
+                        return;
+                    }
+
+                    // Managed profiles: bounded queue, drop oldest if full
+                    if (!asyncOutputQueue.offer(index)) {
+                        Integer old = asyncOutputQueue.poll();
+                        if (old != null) {
+                            try { codec.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) { asyncOutInfo.remove(old); }
+                        }
+                        if (!asyncOutputQueue.offer(index)) {
+                            try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
+                        }
+                    }
+                } catch (Throwable ignored) { }
+            }
+
+            @Override
+            public void onOutputFormatChanged(android.media.MediaCodec codec,
+                                              android.media.MediaFormat format) {
+                try {
+                    outputFormat = codec.getOutputFormat();
+                    LimeLog.info("Output format changed (async): " + outputFormat);
+
+                    // HDR detection (copy from existing sync code)
+                    android.media.MediaFormat __fmt = outputFormat;
+                    int __std = -1, __tr = -1, __rng = -1;
+                    try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                    try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+                    try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+                    boolean __isHdr =
+                            (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
+                                    (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
+                                            || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
+                    hdrActive = __isHdr;
+                    try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
+
+                } catch (Throwable ignored) { }
+            }
+
+            @Override
+            public void onError(android.media.MediaCodec codec,
+                                android.media.MediaCodec.CodecException e) {
+                try { LimeLog.warning("[Video] MediaCodec async error: " + e); } catch (Throwable ignored) { }
+                // Async errors may still trigger recovery via existing mechanisms
+            }
+        }, cb);
+    }
+
+    private void detachAsyncCodec() {
+        try {
+            if (videoDecoder != null) {
+                try { videoDecoder.setCallback(null, null); } catch (Throwable ignored) {}
+            }
+        } finally {
+            try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
+            try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
+            synchronized (asyncOutInfo) {
+                try { asyncOutInfo.clear(); } catch (Throwable ignored) {}
+            }
+            if (codecCallbackThread != null) {
+                try { codecCallbackThread.quitSafely(); } catch (Throwable ignored) {}
+                codecCallbackThread = null;
+            }
+        }
+    }
+    public boolean isAsyncDecodingActive() {
+        return useAsyncCodec && codecCallbackThread != null && codecCallbackThread.isAlive();
+    }
+
+    public String getAsyncDecodingStatus() {
+        return "AsyncDecoding: " + (useAsyncCodec ? "ENABLED" : "DISABLED") +
+                " (API " + Build.VERSION.SDK_INT +
+                ", callbackThread=" + (codecCallbackThread != null ? "alive" : "null") +
+                ", inputQueue=" + asyncInputQueue.size() +
+                ", outputQueue=" + asyncOutputQueue.size() + ")";
+    }
+    // Async Decoding Helpers End
+
 }
