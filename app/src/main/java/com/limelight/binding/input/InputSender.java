@@ -39,7 +39,7 @@ public final class InputSender implements Closeable {
 
     /** Backwards-compatible ctor kept for existing call sites */
     public InputSender(Object unused) {
-        this("InputSender", PRIORITY_URGENT_INPUT);
+        this("InputSender", PRIORITY_HIGH_INPUT);
     }
 
     public InputSender(String name, int priority) {
