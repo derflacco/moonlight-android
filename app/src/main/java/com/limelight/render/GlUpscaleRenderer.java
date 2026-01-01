@@ -279,6 +279,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
             if (!isGlReady()) continue;
+            // Clear residual GL errors from previous frame
+            clearGlErrors();
             boolean newFrameAvailable = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -296,6 +298,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             boolean didUpdateTex = false;
             try {
                 if (decoderSurfaceTex != null && newFrameAvailable) {
+                    // Clear errors before updateTexImage
+                    clearGlErrors();
                     decoderSurfaceTex.updateTexImage();
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
                     didUpdateTex = true;
@@ -349,7 +353,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
             if (hdrActive && prefs != null && prefs.gpuPathMode) {
+                // Clear errors before drawing
+                clearGlErrors();
                 drawOesToScreen();
+                // Check errors after drawing (no log spam for 0x502)
+                checkGlErrorQuiet("HDR drawOesToScreen");
                 swapAndContinue();
                 sizeChangedSinceLastSwap = false;
                 continue;
@@ -433,6 +441,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void swapAndContinue() {
+        // Clear errors before swap
+        clearGlErrors();
         try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
         boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
         if (!__swapped) {
@@ -1227,5 +1237,21 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         final String mode = prefs.videoUpscaleMode;
         // FSR bypass
         return (mode == null || "none".equals(mode));
+    }
+    private void clearGlErrors() {
+        int error;
+        while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
+            // Do not log, just clear
+        }
+    }
+
+    private void checkGlErrorQuiet(String op) {
+        int error;
+        while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
+            // Only log non-0x502 errors to avoid spam
+            if (error != 0x502) {
+                LimeLog.warning(op + ": glError 0x" + Integer.toHexString(error));
+            }
+        }
     }
 }
