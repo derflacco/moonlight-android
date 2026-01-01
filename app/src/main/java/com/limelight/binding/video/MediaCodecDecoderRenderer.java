@@ -2720,14 +2720,9 @@ try {
             sb.append(" / ");
             sb.append(context.getString(R.string.perf_overlay_lite_dectime, decodeTimeMs));
 
-            // Advanced Lite: end-to-end latency
-            if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
-                sb.append(" / ");
-                sb.append(context.getString(R.string.perf_overlay_lite_e2e, endToEndTimeMs));
-                sb.append("  ");
-            }
 
             sb.append("\t");
+            sb.append(" ");
 
             // Packet loss percentage
             sb.append(context.getString(R.string.perf_overlay_lite_packet_loss)).append(": ");
@@ -2736,6 +2731,13 @@ try {
                 liteLossPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
             }
             sb.append(context.getString(R.string.perf_overlay_lite_netdrops, liteLossPct));
+
+            // Advanced Lite: end-to-end latency
+            if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
+                sb.append(" / ");
+                sb.append(context.getString(R.string.perf_overlay_lite_e2e, endToEndTimeMs));
+                sb.append("  ");
+            }
 
             // FPS
             sb.append("\t FPS：");
@@ -2773,7 +2775,6 @@ try {
 
             // Advanced Lite metrics: received/rendered FPS and HDR status
             if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
-                sb.append("  IN:").append((int) fps.receivedFps);
                 sb.append("  R:").append((int) fps.renderedFps);
                 sb.append("  ").append(hdrActive ? "HDR" : "SDR");
             }
