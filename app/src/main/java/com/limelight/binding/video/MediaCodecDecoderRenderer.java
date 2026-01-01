@@ -1705,6 +1705,9 @@ try {
         // Clear decode latency tracking to prevent memory leaks
         enqueueNsByPtsUs.clear();
 
+        // Clear output buffer queue
+        outputBufferQueue.clear();
+
         // Stop CPU warm-up
         if (cpuWarmUp != null && cpuWarmUpStarted) {
             try {
@@ -1815,8 +1818,16 @@ try {
             enqueueNsByPtsUs.clear();
         }
 
+        // Clear CSD buffers
+        coldCfg.vpsBuffers.clear();
+        coldCfg.spsBuffers.clear();
+        coldCfg.ppsBuffers.clear();
+
         // Reset input buffer state to avoid stale state on next start
         resetInputBufferState();
+
+        // Clear output buffer queue
+        outputBufferQueue.clear();
 
         // Stop CpuWarmUp
         if (cpuWarmUp != null) {
