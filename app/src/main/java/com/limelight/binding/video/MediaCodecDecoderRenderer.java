@@ -1567,6 +1567,11 @@ try {
         final long startNs = System.nanoTime();
         boolean codecRecovered;
 
+        //Check stopping first to avoid false "Hung" exceptions during shutdown
+        if (stopping) {
+            return false;
+        }
+
         if (nextInputBuffer != null) {
             // We already have an input buffer
             return true;
@@ -1575,14 +1580,14 @@ try {
         try {
             // If we don't have an input buffer index yet, fetch one now
             if (nextInputBufferIndex < 0 && !stopping) {
-                // Initial attempt with 4 ms timeout
                 final long t0 = System.nanoTime();
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(4000);
                 final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
 
                 // Single quick retry if unavailable
                 if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    final int remainingUs = Math.max(0, 5000 - (int) elapsedUs);                    final int quickBackoffUs = Math.min(remainingUs, 1000); // up to 1 ms extra
+                    final int remainingUs = Math.max(0, 4000 - (int) elapsedUs);
+                    final int quickBackoffUs = Math.min(remainingUs, 1000);
                     if (quickBackoffUs > 0) {
                         nextInputBufferIndex = videoDecoder.dequeueInputBuffer(quickBackoffUs);
                     }
@@ -1610,9 +1615,10 @@ try {
                                 "getInputBuffer() returned null for index " + nextInputBufferIndex));
                         return false;
                     }
+                    // Ensure clean buffer state on Lollipop+
+                    nextInputBuffer.clear();
                 } else {
                     nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
-
                     // Clear old input data pre-Lollipop
                     nextInputBuffer.clear();
                 }
@@ -1633,7 +1639,6 @@ try {
         // If codec recovery is required, always return false to ensure the caller will request
         // an IDR frame to complete the codec recovery.
         if (codecRecovered) {
-            // Reset tracking on recovery
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
@@ -1659,9 +1664,6 @@ try {
                 throw new RendererException(this, decoderHungException);
             }
 
-            // Prevent busy-spin
-            Thread.yield();
-
             return false;
         }
 
@@ -1671,13 +1673,10 @@ try {
             LimeLog.warning("Dequeue input buffer ran long: " + (dtNs / 1_000_000L) + " ms");
         }
 
-        if (nextInputBuffer == null) {
-            // Unexpected state: no TRY_AGAIN but no buffer available
-            return false;
-        }
-
-        return true;
+        // Return success if buffer obtained
+        return nextInputBuffer != null;
     }
+
     @Override
     public void start() {
 
