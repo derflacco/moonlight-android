@@ -1477,7 +1477,12 @@ try {
                                 if (lastIndex >= 0) {
                                     try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
                                 }
-
+                                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                    LimeLog.info("Output EOS received");
+                                    // Optional: signal stopping or completion
+                                    // stopping = true;
+                                    continue;
+                                }
 // --- Present policy per profilo di pacing ---
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
                                     // Immediate present using frame PTS; no decoder-side pacing
@@ -1521,6 +1526,13 @@ try {
                             }
                             // Measure decode latency AT DEQUEUE
                             try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
+                            if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                LimeLog.info("Output EOS received");
+                                // Optional: signal stopping or completion
+                                // stopping = true;
+                                continue;
+                            }
+
 //                           // Add delta time to the totals (excluding probable outliers)
 //                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
 //                            if (delta >= 0 && delta < 1000) {
@@ -2993,14 +3005,14 @@ try {
             if (idx == null) return -1;
             synchronized (asyncOutInfo) {
                 android.media.MediaCodec.BufferInfo bi = asyncOutInfo.get(idx);
-                if (bi != null) {
-                    if (outInfo != null) {
-                        outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
-                    }
-                    asyncOutInfo.remove(idx);
-                } else {
-                    return -1; // Buffer info already removed/cleaned up
+                if (bi == null) {
+                    // Already cleaned up, buffer likely released
+                    return -1;
                 }
+                if (outInfo != null) {
+                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                }
+                asyncOutInfo.remove(idx);
             }
             return idx;
         } catch (InterruptedException e) {
@@ -3119,22 +3131,33 @@ try {
                 try { videoDecoder.setCallback(null, null); } catch (Throwable ignored) {}
             }
         } finally {
+            // Clear queues first
             try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
             try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
+
+            // Clear asyncOutInfo with synchronization
             synchronized (asyncOutInfo) {
                 try { asyncOutInfo.clear(); } catch (Throwable ignored) {}
             }
+
+            // Safely stop and wait for callback thread
             if (codecCallbackThread != null) {
                 try {
                     codecCallbackThread.quitSafely();
-                    codecCallbackThread.join(1000); // Timeout 1 secondo
-                } catch (Throwable ignored) {}
-                finally {
+                    // Wait for thread to finish (max 1 second)
+                    codecCallbackThread.join(1000);
+                    if (codecCallbackThread.isAlive()) {
+                        LimeLog.warning("Codec callback thread did not terminate in time");
+                    }
+                } catch (Throwable t) {
+                    LimeLog.warning("Error stopping callback thread: " + t);
+                } finally {
                     codecCallbackThread = null;
                 }
             }
         }
     }
+
     public boolean isAsyncDecodingActive() {
         return useAsyncCodec && codecCallbackThread != null && codecCallbackThread.isAlive();
     }
