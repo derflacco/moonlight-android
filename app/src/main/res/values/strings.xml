@@ -423,7 +423,7 @@
     <string name="perf_overlay_lite_netdrops">%1$.2f%%</string>
     <string name="perf_overlay_lite_streamdetails">%1$s</string>
     <string name="perf_overlay_lite_fps">%1$.2f</string>
-    <string name="perf_overlay_lite_e2e">e2e: %.1fms</string>
+    <string name="perf_overlay_lite_e2e">Delay: %.1fms</string>
     <string name="perf_overlay_drawn_fps">GpuFPS:</string>
     <string name="perf_overlay_ai_fps">3DFPS:</string>
     <string name="perf_overlay_ai_delegate">Delegate:</string>
