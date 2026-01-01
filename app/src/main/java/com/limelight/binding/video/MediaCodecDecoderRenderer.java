@@ -1158,7 +1158,15 @@ try {
                 codecRecoveryMonitor.notifyAll();
                 // After successful restart/reconfigure, re-attach async
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_NONE && videoDecoder != null) {
-                    try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
+                    try {
+                        // Detach first to clean any stale state
+                        detachAsyncCodec();
+                        attachAsyncCodecIfNeeded();
+                        LimeLog.info("Re-attached async after recovery");
+                    } catch (Throwable t) {
+                        LimeLog.warning("Failed to re-attach async: " + t);
+                    }
+                    LimeLog.info("Decoder async setup: " + getAsyncDecodingStatus());
                 }
             }
             else {
@@ -1521,47 +1529,37 @@ try {
 //                                    activeWindowVideoStats.totalTimeMs += delta;
 //                                }
 //                            }
-                        } else {
-                            switch (outIndex) {
-                                case MediaCodec.INFO_TRY_AGAIN_LATER:
-                                    break;
-                                case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
-                                    // Note: In async mode, format changes are handled in callback
-                                    // But keep sync fallback
-                                    if (!useAsyncCodec) {
-                                        LimeLog.info("Output format changed (sync)");
-                                        outputFormat = videoDecoder.getOutputFormat();
-                                    LimeLog.info("Output format changed");
-                                    outputFormat = videoDecoder.getOutputFormat();
-                                    try {
-                                        android.media.MediaFormat __fmt = outputFormat;
-                                        int __std = -1, __tr = -1, __rng = -1;
-                                        try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                                        try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                                        try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
-                                        // BT.2020 + (PQ o HLG) => HDR
-                                        boolean __isHdr =
-                                                (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
-                                                        (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
-                                                                || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
-                                        // Update shared flag so overlays/renderer can see it
-                                        hdrActive = __isHdr;
-                                        // Notify window color mode (no-op <26)
-                                        try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
-                                        // Pass HDR static info to GL upscaler if available
-                                        java.nio.ByteBuffer __hdr = null;
-                                        try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
-                                        byte[] __hdrArr = null;
-                                        if (__hdr != null && __hdr.remaining() > 0) {
-                                            __hdrArr = new byte[__hdr.remaining()];
-                                            __hdr.get(__hdrArr);
-                                        }
-                                    } catch (Throwable ignored) {}
-                                    LimeLog.info("New output format: " + outputFormat);
+                        } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            // Only handle in sync mode (async handled in callback)
+                            if (!useAsyncCodec) {
+                                LimeLog.info("Output format changed (sync)");
+                                outputFormat = videoDecoder.getOutputFormat();
+                                // HDR detection
+                                try {
+                                    android.media.MediaFormat __fmt = outputFormat;
+                                    int __std = -1, __tr = -1, __rng = -1;
+                                    try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                                    try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+                                    try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+                                    // BT.2020 + (PQ o HLG) => HDR
+                                    boolean __isHdr =
+                                            (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
+                                                    (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
+                                                            || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
+                                    // Update shared flag so overlays/renderer can see it
+                                    hdrActive = __isHdr;
+                                    // Notify window color mode (no-op <26)
+                                    try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
+                                    // Pass HDR static info to GL upscaler if available
+                                    java.nio.ByteBuffer __hdr = null;
+                                    try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+                                    byte[] __hdrArr = null;
+                                    if (__hdr != null && __hdr.remaining() > 0) {
+                                        __hdrArr = new byte[__hdr.remaining()];
+                                        __hdr.get(__hdrArr);
                                     }
-                                    break;
-                                default:
-                                    break;
+                                } catch (Throwable ignored) {}
+                                LimeLog.info("New output format: " + outputFormat);
                             }
                         }
                     } catch (IllegalStateException e) {
@@ -3071,18 +3069,31 @@ try {
                     LimeLog.info("Output format changed (async): " + outputFormat);
 
                     // HDR detection (copy from existing sync code)
-                    android.media.MediaFormat __fmt = outputFormat;
-                    int __std = -1, __tr = -1, __rng = -1;
-                    try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                    try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                    try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
-                    boolean __isHdr =
-                            (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
-                                    (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
-                                            || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
-                    hdrActive = __isHdr;
-                    try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
-
+                    try {
+                        android.media.MediaFormat __fmt = outputFormat;
+                        int __std = -1, __tr = -1, __rng = -1;
+                        try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                        try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+                        try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+                        // BT.2020 + (PQ o HLG) => HDR
+                        boolean __isHdr =
+                                (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
+                                        (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
+                                                || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
+                        // Update shared flag so overlays/renderer can see it
+                        hdrActive = __isHdr;
+                        // Notify window color mode (no-op <26)
+                        try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
+                        // Pass HDR static info to GL upscaler if available
+                        java.nio.ByteBuffer __hdr = null;
+                        try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+                        byte[] __hdrArr = null;
+                        if (__hdr != null && __hdr.remaining() > 0) {
+                            __hdrArr = new byte[__hdr.remaining()];
+                            __hdr.get(__hdrArr);
+                        }
+                    } catch (Throwable ignored) {}
+                    LimeLog.info("New output format: " + outputFormat);
                 } catch (Throwable ignored) { }
             }
 
