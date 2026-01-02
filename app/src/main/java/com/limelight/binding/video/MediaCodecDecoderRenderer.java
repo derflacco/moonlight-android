@@ -2853,14 +2853,14 @@ try {
             sb.append(context.getString(R.string.perf_overlay_e2etime, endToEndTimeMs));
         }
 
-        // Append FSR upscaler info if available
+/*        // Append FSR upscaler info if available
         try {
             String __fsr = __fsrGetOverlayLine(glUpscaler);
             if (__fsr != null && !__fsr.isEmpty()) {
                 if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
                 sb.append(__fsr).append('\n');
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}*/
 
         String fullLog = sb.toString();
 
