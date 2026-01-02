@@ -1152,18 +1152,7 @@ try {
                 // Wake all quiesced threads and allow them to begin work again
                 codecRecoveryThreadQuiescedFlags = 0;
                 codecRecoveryMonitor.notifyAll();
-                // After successful restart/reconfigure, re-attach async
-                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_NONE && videoDecoder != null) {
-                    try {
-                        // Detach first to clean any stale state
-                        detachAsyncCodec();
-                        attachAsyncCodecIfNeeded();
-                        LimeLog.info("Re-attached async after recovery");
-                    } catch (Throwable t) {
-                        LimeLog.warning("Failed to re-attach async: " + t);
-                    }
-                    LimeLog.info("Decoder async setup: " + getAsyncDecodingStatus());
-                }
+
             }
             else {
                 // If we haven't quiesced all threads yet, wait to be signalled after recovery.
