@@ -233,7 +233,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         if (!isGlReady() || running.getAndSet(true)) return;
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
-        renderThread.setPriority(Thread.NORM_PRIORITY + 1);
+        renderThread.setPriority(Thread.NORM_PRIORITY + 2);
         renderThread.start();
     }
 
