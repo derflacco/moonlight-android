@@ -2762,8 +2762,9 @@ try {
             if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
                 sb.append("  R:").append((int) fps.renderedFps);
                 sb.append("  ").append(hdrActive ? "HDR" : "SDR");
-                // Single compact token: [R|P|B|Q] + optional [L] + optional [D]
-                sb.append(' ').append(getLitePacingGlyph(prefsSnapshot));
+                // Single compact token: [R|L|B|S|C|W|2] + optional [U] per FSR + optional [F] per GPU Path
+                boolean isFsrActive = prefsSnapshot.videoUpscaleEnable && glUpscaler != null;
+                sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
                 if (prefsSnapshot.gpuPathMode) {
                     sb.append('G');
                 }
@@ -3097,39 +3098,47 @@ try {
     }
     // Async Decoding Helpers End
 
-    // Lite pacing glyph (single char): R=GPU_RAW, P=Latency(EWMA), B=AdaptX Sync, Q=AdaptX Smooth.
-    private static char getLitePacingGlyph(final PreferenceConfiguration p) {
+// Lite pacing glyph
+    private static String getLitePacingGlyph(final PreferenceConfiguration p, final boolean isFsrActive) {
         if (p == null) {
-            return '?';
+            return "?";
         }
+
+        StringBuilder glyph = new StringBuilder(2);
 
         // GpuRaw
         if (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                return 'R';
-            }
-
+            glyph.append('R');
+        }
         // Latency
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) {
-            return 'L';
+        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) {
+            glyph.append('L');
         }
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            return 'B';
+        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            glyph.append('B');
         }
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-            return 'S';
+        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
+            glyph.append('S');
+        }
+        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+            glyph.append('C');
+        }
+        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP) {
+            glyph.append('W');
+        }
+        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2) {
+            glyph.append('2'); // W2 per differenziare
+        }
+        else {
+            glyph.append('?');
         }
 
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-            return 'C';
+        // Aggiungi 'U' se FSR è attivo
+        if (isFsrActive) {
+            glyph.append('U');
         }
 
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP) {
-            return 'w';
-        }
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2) {
-            return 'W';
-        }
-        return '?';
+        return glyph.toString();
     }
 
 }
