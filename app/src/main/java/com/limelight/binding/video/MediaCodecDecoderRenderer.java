@@ -1048,8 +1048,14 @@ try {
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
                 outputBufferQueue.clear();
+                asyncInputQueue.clear();
+                asyncOutputQueue.clear();
+                synchronized (asyncOutInfo) {
+                    asyncOutInfo.clear();
+                }
                 // Clear decode latency tracking during codec recovery
                 enqueueNsByPtsUs.clear();
+                csdDirty = false;
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
                     LimeLog.warning("Flushing decoder");
@@ -2940,7 +2946,6 @@ try {
     private void attachAsyncCodecIfNeeded() {
         if (!useAsyncCodec || videoDecoder == null) return;
 
-        // Set preferLowerDelays based on frame pacing mode
         preferLowerDelays = (prefs != null &&
                 prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED);
 
@@ -2961,37 +2966,55 @@ try {
                 } catch (Throwable ignored) { }
             }
 
+
             @Override
             public void onOutputBufferAvailable(android.media.MediaCodec codec, int index,
                                                 android.media.MediaCodec.BufferInfo info) {
                 try {
-                    // Save BufferInfo for later retrieval
-                    synchronized (asyncOutInfo) { asyncOutInfo.put(index, cloneInfo(info)); }
+                    synchronized (asyncOutInfo) {
+                        asyncOutInfo.put(index, cloneInfo(info));
+                    }
 
-                    // PURE LFR/ULL path: keep latest only
+                    // LFR/ULL path: keep only latest buffer
                     if (preferLowerDelays) {
                         Integer old;
                         while ((old = asyncOutputQueue.poll()) != null) {
-                            try { codec.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) { asyncOutInfo.remove(old); }
+                            try {
+                                codec.releaseOutputBuffer(old, false);
+                            } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) {
+                                asyncOutInfo.remove(old);
+                            }
                         }
                         if (!asyncOutputQueue.offer(index)) {
-                            try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
+                            try {
+                                codec.releaseOutputBuffer(index, false);
+                            } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) {
+                                asyncOutInfo.remove(index);
+                            }
                         }
                         return;
                     }
 
-                    // Managed profiles: bounded queue, drop oldest if full
+                    // Managed profiles: bounded queue with drop-oldest policy
                     if (!asyncOutputQueue.offer(index)) {
                         Integer old = asyncOutputQueue.poll();
                         if (old != null) {
-                            try { codec.releaseOutputBuffer(old, false); } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) { asyncOutInfo.remove(old); }
+                            try {
+                                codec.releaseOutputBuffer(old, false);
+                            } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) {
+                                asyncOutInfo.remove(old);
+                            }
                         }
                         if (!asyncOutputQueue.offer(index)) {
-                            try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) { asyncOutInfo.remove(index); }
+                            try {
+                                codec.releaseOutputBuffer(index, false);
+                            } catch (Throwable ignored) {}
+                            synchronized (asyncOutInfo) {
+                                asyncOutInfo.remove(index);
+                            }
                         }
                     }
                 } catch (Throwable ignored) { }
@@ -3036,8 +3059,19 @@ try {
             @Override
             public void onError(android.media.MediaCodec codec,
                                 android.media.MediaCodec.CodecException e) {
-                try { LimeLog.warning("[Video] MediaCodec async error: " + e); } catch (Throwable ignored) { }
-                // Async errors may still trigger recovery via existing mechanisms
+                try {
+                    LimeLog.warning("[Video] MediaCodec async error: " + e);
+
+                    // Integrate with existing recovery mechanism
+                    // CodecException extends IllegalStateException, compatible with handleDecoderException
+                    if (!handleDecoderException(e)) {
+                        // Non-transient error requires recovery
+                        // Recovery will be handled when threads call doCodecRecoveryIfRequired()
+                        LimeLog.info("Async error queued for recovery");
+                    }
+                } catch (Throwable t) {
+                    LimeLog.severe("Error in async error handler: " + t);
+                }
             }
         }, cb);
     }
