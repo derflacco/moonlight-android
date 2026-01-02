@@ -172,12 +172,12 @@ public class StreamSettings extends AppCompatActivity {
         SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
                 (sp, key) -> {
                     if (               "pref_video_upscale_enable".equals(key)       // FSR
-                                    || "pref_video_hdr_enable".equals(key)           // HDR (old)
-                                    || "pref_hdr_enable".equals(key)                 // HDR (legacy)
-                                    || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
-                                    || "frame_pacing".equals(key)                    // Legacy pacing list
-                                    || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
-                                    || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
+                            || "pref_video_hdr_enable".equals(key)           // HDR (old)
+                            || "pref_hdr_enable".equals(key)                 // HDR (legacy)
+                            || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
+                            || "frame_pacing".equals(key)                    // Legacy pacing list
+                            || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
+                            || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
 
                     ) {
                         // Re-evaluate UI locks and dependent visibility
@@ -198,30 +198,31 @@ public class StreamSettings extends AppCompatActivity {
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
-            // Read current pacing mode
-            String pacingStr = sp.getString("frame_pacing", "latency");
-            if (pacingStr == null) pacingStr = "latency";
+            // Leggi l'impostazione Vsync
+            boolean enableVsync = sp.getBoolean("checkbox_enable_vsync", false);
+
+            // Forza frame pacing in base a Vsync
+            String forcedPacing;
+            if (enableVsync) {
+                forcedPacing = "balanced"; // Forza balanced se Vsync è abilitato
+            } else {
+                forcedPacing = "gpu-raw"; // Altrimenti forza sempre gpu-raw
+            }
+
+            // Applica il frame pacing forzato
+            if (!sp.getString("frame_pacing", "latency").equals(forcedPacing)) {
+                sp.edit().putString("frame_pacing", forcedPacing).apply();
+            }
 
             // LFR preference
             boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
 
-            // Map pacing string to flags
-            boolean isMinLatency = "latency".equals(pacingStr);
-            boolean isGpuRaw     = "gpu-raw".equals(pacingStr);
-            boolean isWarp       = "warp".equals(pacingStr);
-            boolean isWarp2      = "warp2".equals(pacingStr);
-
-            // Effective GPU Path state - SEMPRE VERO ORA
-            boolean gpuPath = true; // Forzato sempre attivo
-
             // Dependency locks - FSR bloccato solo da HDR
             boolean lockFsrEn = hdrOn; // GPU Path non blocca più FSR
 
-            Preference pacingPref  = findPreference("frame_pacing");
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
             Preference fsrMode     = findPreference("pref_video_upscale_mode");
             Preference sharpness   = findPreference("pref_video_upscale_sharpness");
-
 
             // Determine FSR enabled state
             boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;
@@ -267,24 +268,24 @@ public class StreamSettings extends AppCompatActivity {
             }
         }
 
-@Override
-public void onResume() {
-    super.onResume();
-    SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
-    sp.registerOnSharedPreferenceChangeListener(lockWatcher);
-    // hideGpuPathToggle
-    hideGpuPathToggle();
-    // Force GPU Path enabled
-    forceGpuPathEnabled(sp);
-    updateLocks();
-}
+        @Override
+        public void onResume() {
+            super.onResume();
+            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
+            sp.registerOnSharedPreferenceChangeListener(lockWatcher);
+            // hideGpuPathToggle
+            hideGpuPathToggle();
+            // Force GPU Path enabled
+            forceGpuPathEnabled(sp);
+            updateLocks();
+        }
 
-@Override
-public void onPause() {
-    super.onPause();
-    SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
-    sp.unregisterOnSharedPreferenceChangeListener(lockWatcher);
-}
+        @Override
+        public void onPause() {
+            super.onPause();
+            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
+            sp.unregisterOnSharedPreferenceChangeListener(lockWatcher);
+        }
 
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
         // Track injected native/custom resolution values so warnings keep working even if the list is re-ordered.
@@ -954,7 +955,15 @@ public void onPause() {
                     screen.removePreference(category);
                 }
             }
-
+            // --- HIDE FRAME PACING ---
+            PreferenceCategory categoryVideo = (PreferenceCategory) findPreference("category_video_settings");
+            if (categoryVideo != null) {
+                Preference framePacingPref = findPreference("frame_pacing");
+                if (framePacingPref != null) {
+                    // Rimuovi completamente dalla UI
+                    categoryVideo.removePreference(framePacingPref);
+                }
+            }
             // Hide remote desktop mouse mode on pre-Oreo (which doesn't have pointer capture)
             // and NVIDIA SHIELD devices (which support raw mouse input in pointer capture mode)
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
@@ -1043,7 +1052,7 @@ public void onPause() {
                     }
                 }
             }
-            
+
             // Check custom refresh rate
             String customRefreshRateStr = prevPrefConfig.customRefreshRate;
             if (customRefreshRateStr != null && !customRefreshRateStr.isEmpty()) {
@@ -1506,7 +1515,7 @@ public void onPause() {
                     try {
                         int width = Integer.parseInt(resolutionSegments[0]);
                         int height = Integer.parseInt(resolutionSegments[1]);
-                        
+
                         if (width <= 0 || height <= 0) {
                             Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                             return false;
@@ -1536,14 +1545,14 @@ public void onPause() {
                         Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
-                    
+
                     try {
                         float refreshRate = Float.parseFloat(value);
                         if (refreshRate <= 0) {
                             Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                             return false;
                         }
-                        
+
                         // Format to max 3 decimal places
                         String formattedValue = String.format("%.3f", refreshRate);
                         // Remove trailing zeros
