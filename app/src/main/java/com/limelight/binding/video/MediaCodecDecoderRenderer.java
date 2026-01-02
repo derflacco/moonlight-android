@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.prefs.Preferences;
 
 import org.jcodec.codecs.h264.H264Utils;
 import org.jcodec.codecs.h264.io.model.SeqParameterSet;
@@ -2842,7 +2843,13 @@ try {
             if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
                 sb.append("  R:").append((int) fps.renderedFps);
                 sb.append("  ").append(hdrActive ? "HDR" : "SDR");
+                // Single compact token: [R|P|B|Q] + optional [L] + optional [D]
+                sb.append(' ').append(getLitePacingGlyph(prefsSnapshot));
+                if (prefsSnapshot.gpuPathMode) {
+                    sb.append('G');
+                }
             }
+
 
             // Stereo 3D renderer info if active
             if (Stereo3DRenderer.isActive) {
@@ -3170,5 +3177,39 @@ try {
                 ", outputQueue=" + asyncOutputQueue.size() + ")";
     }
     // Async Decoding Helpers End
+
+    // Lite pacing glyph (single char): R=GPU_RAW, P=Latency(EWMA), B=AdaptX Sync, Q=AdaptX Smooth.
+    private static char getLitePacingGlyph(final PreferenceConfiguration p) {
+        if (p == null) {
+            return '?';
+        }
+
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+            return 'R';
+        }
+
+        // Latency
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) {
+            return 'L';
+        }
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            return 'B';
+        }
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
+            return 'S';
+        }
+
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+            return 'C';
+        }
+
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP) {
+            return 'w';
+        }
+        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2) {
+            return 'W';
+        }
+        return '?';
+    }
 
 }

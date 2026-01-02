@@ -243,7 +243,8 @@ public boolean snappyInput = true;
     public static final int FRAME_PACING_CAP_FPS = 2;
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
     public static final int FRAME_PACING_GPU_RAW = 4;
-
+    public static final int FRAME_PACING_WARP = 5;
+    public static final int FRAME_PACING_WARP2 = 6;
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";
@@ -690,6 +691,12 @@ private static int getFramePacingValue(Context context) {
         }
         else if (str.equals("gpu-raw")) {
             return FRAME_PACING_GPU_RAW;
+        }
+        else if (str.equals("warp")) {
+                return FRAME_PACING_WARP;
+        }
+        else if (str.equals("warp2")) {
+            return FRAME_PACING_WARP2;
         }
         else {
             // Should never get here
