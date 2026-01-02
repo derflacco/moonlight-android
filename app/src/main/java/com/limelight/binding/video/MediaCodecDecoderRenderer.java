@@ -2940,130 +2940,136 @@ try {
         }
         android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
 
-        videoDecoder.setCallback(new android.media.MediaCodec.Callback() {
-            @Override
-            public void onInputBufferAvailable(android.media.MediaCodec codec, int index) {
-                try {
-                    asyncInputQueue.put(index);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (Throwable ignored) { }
-            }
-
-
-            @Override
-            public void onOutputBufferAvailable(android.media.MediaCodec codec, int index,
-                                                android.media.MediaCodec.BufferInfo info) {
-                try {
-                    synchronized (asyncOutInfo) {
-                        asyncOutInfo.put(index, cloneInfo(info));
-                    }
-
-                    // LFR/ULL path: keep only latest buffer
-                    if (preferLowerDelays) {
-                        Integer old;
-                        while ((old = asyncOutputQueue.poll()) != null) {
-                            try {
-                                codec.releaseOutputBuffer(old, false);
-                            } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) {
-                                asyncOutInfo.remove(old);
-                            }
-                        }
-                        if (!asyncOutputQueue.offer(index)) {
-                            try {
-                                codec.releaseOutputBuffer(index, false);
-                            } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) {
-                                asyncOutInfo.remove(index);
-                            }
-                        }
-                        return;
-                    }
-
-                    // Managed profiles: bounded queue with drop-oldest policy
-                    if (!asyncOutputQueue.offer(index)) {
-                        Integer old = asyncOutputQueue.poll();
-                        if (old != null) {
-                            try {
-                                codec.releaseOutputBuffer(old, false);
-                            } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) {
-                                asyncOutInfo.remove(old);
-                            }
-                        }
-                        if (!asyncOutputQueue.offer(index)) {
-                            try {
-                                codec.releaseOutputBuffer(index, false);
-                            } catch (Throwable ignored) {}
-                            synchronized (asyncOutInfo) {
-                                asyncOutInfo.remove(index);
-                            }
-                        }
-                    }
-                } catch (Throwable ignored) { }
-            }
-
-            @Override
-            public void onOutputFormatChanged(android.media.MediaCodec codec,
-                                              android.media.MediaFormat format) {
-                try {
-                    coldCfg.outputFormat = codec.getOutputFormat();
-                    LimeLog.info("Output format changed (async): " + coldCfg.outputFormat);
-
-                    // HDR detection (copy from existing sync code)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            videoDecoder.setCallback(new MediaCodec.Callback() {
+                @Override
+                public void onInputBufferAvailable(MediaCodec codec, int index) {
                     try {
-                        android.media.MediaFormat __fmt = coldCfg.outputFormat;
-                        int __std = -1, __tr = -1, __rng = -1;
-                        try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                        try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                        try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
-                        // BT.2020 + (PQ o HLG) => HDR
-                        boolean __isHdr =
-                                (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
-                                        (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
-                                                || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
-                        // Update shared flag so overlays/renderer can see it
-                        hdrActive = __isHdr;
-                        // Notify window color mode (no-op <26)
-                        try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
-                        // Pass HDR static info to GL upscaler if available
-                        java.nio.ByteBuffer __hdr = null;
-                        try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
-                        byte[] __hdrArr = null;
-                        if (__hdr != null && __hdr.remaining() > 0) {
-                            __hdrArr = new byte[__hdr.remaining()];
-                            __hdr.get(__hdrArr);
-                        }
-                    } catch (Throwable ignored) {}
-                    LimeLog.info("New output format: " + coldCfg.outputFormat);
-                } catch (Throwable ignored) { }
-            }
-
-            @Override
-            public void onError(android.media.MediaCodec codec,
-                                android.media.MediaCodec.CodecException e) {
-                try {
-                    LimeLog.warning("[Video] MediaCodec async error: " + e);
-
-                    // Integrate with existing recovery mechanism
-                    // CodecException extends IllegalStateException, compatible with handleDecoderException
-                    if (!handleDecoderException(e)) {
-                        // Non-transient error requires recovery
-                        // Recovery will be handled when threads call doCodecRecoveryIfRequired()
-                        LimeLog.info("Async error queued for recovery");
-                    }
-                } catch (Throwable t) {
-                    LimeLog.severe("Error in async error handler: " + t);
+                        asyncInputQueue.put(index);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } catch (Throwable ignored) { }
                 }
-            }
-        }, cb);
+
+
+                @Override
+                public void onOutputBufferAvailable(MediaCodec codec, int index,
+                                                    BufferInfo info) {
+                    try {
+                        synchronized (asyncOutInfo) {
+                            asyncOutInfo.put(index, cloneInfo(info));
+                        }
+
+                        // LFR/ULL path: keep only latest buffer
+                        if (preferLowerDelays) {
+                            Integer old;
+                            while ((old = asyncOutputQueue.poll()) != null) {
+                                try {
+                                    codec.releaseOutputBuffer(old, false);
+                                } catch (Throwable ignored) {}
+                                synchronized (asyncOutInfo) {
+                                    asyncOutInfo.remove(old);
+                                }
+                            }
+                            if (!asyncOutputQueue.offer(index)) {
+                                try {
+                                    codec.releaseOutputBuffer(index, false);
+                                } catch (Throwable ignored) {}
+                                synchronized (asyncOutInfo) {
+                                    asyncOutInfo.remove(index);
+                                }
+                            }
+                            return;
+                        }
+
+                        // Managed profiles: bounded queue with drop-oldest policy
+                        if (!asyncOutputQueue.offer(index)) {
+                            Integer old = asyncOutputQueue.poll();
+                            if (old != null) {
+                                try {
+                                    codec.releaseOutputBuffer(old, false);
+                                } catch (Throwable ignored) {}
+                                synchronized (asyncOutInfo) {
+                                    asyncOutInfo.remove(old);
+                                }
+                            }
+                            if (!asyncOutputQueue.offer(index)) {
+                                try {
+                                    codec.releaseOutputBuffer(index, false);
+                                } catch (Throwable ignored) {}
+                                synchronized (asyncOutInfo) {
+                                    asyncOutInfo.remove(index);
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) { }
+                }
+
+                @Override
+                public void onOutputFormatChanged(MediaCodec codec,
+                                                  MediaFormat format) {
+                    try {
+                        coldCfg.outputFormat = codec.getOutputFormat();
+                        LimeLog.info("Output format changed (async): " + coldCfg.outputFormat);
+
+                        // HDR detection (copy from existing sync code)
+                        try {
+                            MediaFormat __fmt = coldCfg.outputFormat;
+                            int __std = -1, __tr = -1, __rng = -1;
+                            try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                            try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+                            try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+                            // BT.2020 + (PQ o HLG) => HDR
+                            boolean __isHdr =
+                                    (__std == MediaFormat.COLOR_STANDARD_BT2020) &&
+                                            (__tr  == MediaFormat.COLOR_TRANSFER_ST2084
+                                                    || __tr  == MediaFormat.COLOR_TRANSFER_HLG);
+                            // Update shared flag so overlays/renderer can see it
+                            hdrActive = __isHdr;
+                            // Notify window color mode (no-op <26)
+                            try { Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
+                            // Pass HDR static info to GL upscaler if available
+                            ByteBuffer __hdr = null;
+                            try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+                            byte[] __hdrArr = null;
+                            if (__hdr != null && __hdr.remaining() > 0) {
+                                __hdrArr = new byte[__hdr.remaining()];
+                                __hdr.get(__hdrArr);
+                            }
+                        } catch (Throwable ignored) {}
+                        LimeLog.info("New output format: " + coldCfg.outputFormat);
+                    } catch (Throwable ignored) { }
+                }
+
+                @Override
+                public void onError(MediaCodec codec,
+                                    CodecException e) {
+                    try {
+                        LimeLog.warning("[Video] MediaCodec async error: " + e);
+
+                        // Integrate with existing recovery mechanism
+                        // CodecException extends IllegalStateException, compatible with handleDecoderException
+                        if (!handleDecoderException(e)) {
+                            // Non-transient error requires recovery
+                            // Recovery will be handled when threads call doCodecRecoveryIfRequired()
+                            LimeLog.info("Async error queued for recovery");
+                        }
+                    } catch (Throwable t) {
+                        LimeLog.severe("Error in async error handler: " + t);
+                    }
+                }
+            }, cb);
+        }
     }
 
     private void detachAsyncCodec() {
         try {
             if (videoDecoder != null) {
-                try { videoDecoder.setCallback(null, null); } catch (Throwable ignored) {}
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        videoDecoder.setCallback(null, null);
+                    }
+                } catch (Throwable ignored) {}
             }
         } finally {
             // Clear queues first
