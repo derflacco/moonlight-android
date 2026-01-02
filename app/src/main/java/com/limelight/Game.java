@@ -1458,6 +1458,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean mayReduceRefreshRate() {
         return prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW ||
                 (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED && prefConfig.reduceRefreshRate);
     }
 
