@@ -45,7 +45,6 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import com.limelight.perf.CpuWarmUp;
-import com.limelight.utils.CpuAffinity;
 import android.os.Looper;
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
@@ -1384,77 +1383,14 @@ try {
 
             @Override
             public void run() {
-                // Boost thread priority to reduce decoding latency
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
                 BufferInfo info = new BufferInfo();
                 final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
-//* Pin hot threads to big cluster *//
-                // Pin renderer thread to big cores if requested
 
-                if (prefs != null && prefs.preferBigCores) {
-                    try {
-                        int __tid = android.os.Process.myTid();
-                        String __allowedBefore = CpuAffinity.readAllowedCpuListForCurrentThread();
-                        LimeLog.info("RendererAffinity: tid=" + __tid
-                                + " allowed_before=" + __allowedBefore
-                                + " preferBigCores=" + (prefs != null && prefs.preferBigCores));
-                    } catch (Throwable ignored) {}
-
-                    try {
-                        // Pin current thread to big cores
-                        CpuAffinity.pinCurrentThreadToBigCoresIf(true);
-
-                        // Optional: set high priority
-                        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY); } catch (Throwable ignored) {}
-
-                        // Log the result
-                        int[] __bigNative = CpuAffinity.detectBigCoresForDebug();
-                        String __allowedAfter = CpuAffinity.readAllowedCpuListForCurrentThread();
-                        LimeLog.info("RendererAffinity: nativeLoaded=" + CpuAffinity.isNativeLoaded()
-                                + " big_native=" + java.util.Arrays.toString(__bigNative)
-                                + " allowed_after=" + __allowedAfter);
-
-                        // Store for periodic refresh
-                        lastAllowedMask = __allowedAfter;
-                        affinityPinned = true;
-                        lastAffinityRefreshNs = android.os.SystemClock.elapsedRealtimeNanos();
-
-                        // Log current CPU
-                        int __cpu = CpuAffinity.getCurrentCpuOrMinus1();
-                        LimeLog.info("RendererAffinity: current_cpu=" + __cpu);
-                    } catch (Throwable t) {
-                        LimeLog.warning("RendererAffinity pinning failed: " + t);
-                    }
-                }
-
-                android.os.PerformanceHintManager.Session __hs = null;
-
-
-//* Pin hot threads to big cluster *//
                 while (!stopping) {
-                    //* Pin hot threads to big cluster *//
-                    // Periodic sticky affinity refresh (cheap): re-pin if mask changed
-                    if (prefs != null && prefs.preferBigCores) {
-                        final long __now = android.os.SystemClock.elapsedRealtimeNanos();
-                        if (__now - lastAffinityRefreshNs >= AFFINITY_REFRESH_NS) {
-                            try {
-                                String __maskBefore = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                                if (lastAllowedMask == null || !__maskBefore.equals(lastAllowedMask)) {
-                                    com.limelight.utils.CpuAffinity.pinCurrentThreadToBigCoresIf(true);
-                                    String __maskAfter = com.limelight.utils.CpuAffinity.readAllowedCpuListForCurrentThread();
-                                    if (BuildConfig.DEBUG) {
-                                    LimeLog.info("RendererAffinity: refresh_pin allowed_before=" + __maskBefore + " allowed_after=" + __maskAfter);
-                                    }
-                                    lastAllowedMask = __maskAfter;
-                                }
-                            } catch (Throwable ignored) {}
-                            lastAffinityRefreshNs = __now;
-                        }
-                    }
+
                     // Periodic cleanup of latency tracking data to prevent memory accumulation
                     cleanupOldLatencyTrackingEntries();
 
-//* Pin hot threads to big cluster *//
                     try {
                         // Try to output a frame
                         int outIndex = nextOutputIndex(info, 50000);
@@ -1581,24 +1517,7 @@ try {
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
                 }
-//* Pin hot threads to big cluster *//
-// Clear affinity on thread exit
-                if (affinityPinned) {
-                    try {
-                        CpuAffinity.clearAllThreadsAffinityAllOnline();
 
-                        // Reset sticky-affinity state
-                        MediaCodecDecoderRenderer.this.affinityPinned = false;
-                        MediaCodecDecoderRenderer.this.lastAllowedMask = null;
-                        MediaCodecDecoderRenderer.this.lastAffinityRefreshNs = 0L;
-                        LimeLog.info("RendererAffinity: cleared to all online CPUs");
-
-                        // Log final mask after clearing (debug)
-                        String __cleared = CpuAffinity.readAllowedCpuListForCurrentThread();
-                        LimeLog.info("RendererAffinity: cleared_mask=" + __cleared);
-                    } catch (Throwable ignored) {}
-                }
-                //* Pin hot threads to big cluster *//
             }
         };
 
@@ -3184,9 +3103,10 @@ try {
             return '?';
         }
 
+        // GpuRaw
         if (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-            return 'R';
-        }
+                return 'R';
+            }
 
         // Latency
         if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) {
