@@ -332,11 +332,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int codecRecoveryThreadQuiescedFlags = 0;
     private int codecRecoveryAttempts = 0;
 
-    private MediaFormat inputFormat;
-    private MediaFormat outputFormat;
-    private MediaFormat configuredFormat;
-
-
     private RendererException initialException;
     private static final int EXCEPTION_REPORT_DELAY_MS = 3000;
 
@@ -833,7 +828,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
 
-        configuredFormat = format;
+        coldCfg.configuredFormat = format;
 
         // After reconfiguration, we must resubmit CSD buffers
         coldCfg.submittedCsd = false;
@@ -847,8 +842,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             // This will contain the actual accepted input format attributes
-            inputFormat = videoDecoder.getInputFormat();
-            LimeLog.info("Input format: "+inputFormat);
+            coldCfg.inputFormat = videoDecoder.getInputFormat();
+            LimeLog.info("Input format: "+coldCfg.inputFormat);
         }
 
         videoDecoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
@@ -1082,7 +1077,7 @@ try {
                     LimeLog.warning("Trying to restart decoder after CodecException");
                     try {
                         videoDecoder.stop();
-                        configureAndStartDecoder(configuredFormat);
+                        configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
@@ -1105,7 +1100,7 @@ try {
                     LimeLog.warning("Trying to reset decoder after CodecException");
                     try {
                         videoDecoder.reset();
-                        configureAndStartDecoder(configuredFormat);
+                        configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
@@ -1467,10 +1462,10 @@ try {
                             // Only handle in sync mode (async handled in callback)
                             if (!useAsyncCodec) {
                                 LimeLog.info("Output format changed (sync)");
-                                outputFormat = videoDecoder.getOutputFormat();
+                                coldCfg.outputFormat = videoDecoder.getOutputFormat();
                                 // HDR detection
                                 try {
-                                    android.media.MediaFormat __fmt = outputFormat;
+                                    android.media.MediaFormat __fmt = coldCfg.outputFormat;
                                     int __std = -1, __tr = -1, __rng = -1;
                                     try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
                                     try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
@@ -1493,7 +1488,7 @@ try {
                                         __hdr.get(__hdrArr);
                                     }
                                 } catch (Throwable ignored) {}
-                                LimeLog.info("New output format: " + outputFormat);
+                                LimeLog.info("New output format: " + coldCfg.outputFormat);
                             }
                         }
                     } catch (IllegalStateException e) {
@@ -2496,10 +2491,10 @@ try {
             else if (renderer.numPpsIn > 0 && renderer.numFramesIn == 0) {
                 str = "PreIFrameError";
             }
-            else if (renderer.numFramesIn > 0 && renderer.outputFormat == null) {
+            else if (renderer.numFramesIn > 0 && renderer.coldCfg.outputFormat == null) {
                 str = "PreOutputConfigError";
             }
-            else if (renderer.outputFormat != null && renderer.numFramesOut == 0) {
+            else if (renderer.coldCfg.outputFormat != null && renderer.numFramesOut == 0) {
                 str = "PreOutputError";
             }
             else if (renderer.numFramesOut <= renderer.refreshRate * 30) {
@@ -2549,9 +2544,9 @@ try {
                     }
                 }
             }
-            str += "Configured format: "+renderer.configuredFormat+DELIMITER;
-            str += "Input format: "+renderer.inputFormat+DELIMITER;
-            str += "Output format: "+renderer.outputFormat+DELIMITER;
+            str += "Configured format: "+renderer.coldCfg.configuredFormat+DELIMITER;
+            str += "Input format: "+renderer.coldCfg.inputFormat+DELIMITER;
+            str += "Output format: "+renderer.coldCfg.outputFormat+DELIMITER;
             str += "Adaptive playback: "+renderer.coldCfg.adaptivePlayback+DELIMITER;
             str += "GL Renderer: "+renderer.glRenderer+DELIMITER;
             //str += "Build fingerprint: "+Build.FINGERPRINT+DELIMITER;
@@ -3013,12 +3008,12 @@ try {
             public void onOutputFormatChanged(android.media.MediaCodec codec,
                                               android.media.MediaFormat format) {
                 try {
-                    outputFormat = codec.getOutputFormat();
-                    LimeLog.info("Output format changed (async): " + outputFormat);
+                    coldCfg.outputFormat = codec.getOutputFormat();
+                    LimeLog.info("Output format changed (async): " + coldCfg.outputFormat);
 
                     // HDR detection (copy from existing sync code)
                     try {
-                        android.media.MediaFormat __fmt = outputFormat;
+                        android.media.MediaFormat __fmt = coldCfg.outputFormat;
                         int __std = -1, __tr = -1, __rng = -1;
                         try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
                         try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
@@ -3041,7 +3036,7 @@ try {
                             __hdr.get(__hdrArr);
                         }
                     } catch (Throwable ignored) {}
-                    LimeLog.info("New output format: " + outputFormat);
+                    LimeLog.info("New output format: " + coldCfg.outputFormat);
                 } catch (Throwable ignored) { }
             }
 
