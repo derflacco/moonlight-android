@@ -171,14 +171,13 @@ public class StreamSettings extends AppCompatActivity {
         // --- UI state listeners ---
         SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
                 (sp, key) -> {
-                    if ("checkbox_gpu_path_mode".equals(key)                 // Direct Present
-                            || "pref_video_upscale_enable".equals(key)       // FSR
-                            || "pref_video_hdr_enable".equals(key)           // HDR (old)
-                            || "pref_hdr_enable".equals(key)                 // HDR (legacy)
-                            || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
-                            || "frame_pacing".equals(key)                    // Legacy pacing list
-                            || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
-                            || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
+                    if (               "pref_video_upscale_enable".equals(key)       // FSR
+                                    || "pref_video_hdr_enable".equals(key)           // HDR (old)
+                                    || "pref_hdr_enable".equals(key)                 // HDR (legacy)
+                                    || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
+                                    || "frame_pacing".equals(key)                    // Legacy pacing list
+                                    || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
+                                    || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
 
                     ) {
                         // Re-evaluate UI locks and dependent visibility
@@ -186,14 +185,11 @@ public class StreamSettings extends AppCompatActivity {
                     }
                 };
 
-
-
-
         private void updateLocks() {
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-            // Persisted GPU Path state
-            boolean gpuPathStored = sp.getBoolean("checkbox_gpu_path_mode", false);
+            // GPU Path è SEMPRE attivo di default, non leggere più dall'UI
+            boolean gpuPathStored = true; // Forzato sempre true
 
             // Aggregate HDR state
             boolean hdrOn =
@@ -215,11 +211,11 @@ public class StreamSettings extends AppCompatActivity {
             boolean isWarp       = "warp".equals(pacingStr);
             boolean isWarp2      = "warp2".equals(pacingStr);
 
-            // Effective GPU Path state
-            boolean gpuPath = gpuPathStored;
+            // Effective GPU Path state - SEMPRE VERO ORA
+            boolean gpuPath = true; // Forzato sempre attivo
 
-            // Dependency locks
-            boolean lockFsrEn = gpuPath || hdrOn;
+            // Dependency locks - FSR bloccato solo da HDR
+            boolean lockFsrEn = hdrOn; // GPU Path non blocca più FSR
 
             Preference pacingPref  = findPreference("frame_pacing");
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
@@ -255,7 +251,7 @@ public class StreamSettings extends AppCompatActivity {
                 sharpness.setEnabled(fsrEnabled);
             }
 
-            // Enforce mutual exclusion (disable FSR if locked)
+            // Enforce mutual exclusion (disable FSR only if locked by HDR)
             if (lockFsrEn) {
                 if (fsrEn instanceof CheckBoxPreference) {
                     CheckBoxPreference cb = (CheckBoxPreference) fsrEn;
@@ -276,6 +272,10 @@ public void onResume() {
     super.onResume();
     SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
     sp.registerOnSharedPreferenceChangeListener(lockWatcher);
+    // hideGpuPathToggle
+    hideGpuPathToggle();
+    // Force GPU Path enabled
+    forceGpuPathEnabled(sp);
     updateLocks();
 }
 
@@ -932,6 +932,8 @@ public void onPause() {
         @Override
         public void onCreatePreferences(Bundle bundle, String s) {
             initializePreferences();
+            // hideGpuPathToggle
+            hideGpuPathToggle();
         }
 
         public void initializePreferences() {
@@ -1728,6 +1730,25 @@ public void onPause() {
                 return null;
             }
             return file1;
+        }
+        private void hideGpuPathToggle() {
+            Preference gpuPathPref = findPreference("checkbox_gpu_path_mode");
+            if (gpuPathPref != null) {
+                // Nascondi completamente dalla UI
+                gpuPathPref.setVisible(false);
+                gpuPathPref.setEnabled(false);
+
+                // Se è una CheckBoxPreference, forza a checked
+                if (gpuPathPref instanceof CheckBoxPreference) {
+                    ((CheckBoxPreference) gpuPathPref).setChecked(true);
+                }
+            }
+        }
+        private void forceGpuPathEnabled(SharedPreferences sp) {
+            // Forza GPU Path abilitato nelle SharedPreferences per retrocompatibilità
+            if (!sp.getBoolean("checkbox_gpu_path_mode", true)) {
+                sp.edit().putBoolean("checkbox_gpu_path_mode", true).apply();
+            }
         }
     }
 }

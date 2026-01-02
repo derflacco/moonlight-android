@@ -1084,7 +1084,7 @@ private static int getFramePacingValue(Context context) {
 
 
 
-        // FSR-like video upscaling prefs
+// FSR-like video upscaling prefs
         config.videoUpscaleEnable    = prefs.getBoolean(VIDEO_UPSCALE_ENABLE_PREF_STRING, false);
         config.videoUpscaleMode      = prefs.getString(VIDEO_UPSCALE_MODE_PREF_STRING, DEFAULT_VIDEO_UPSCALE_MODE);
         try {
@@ -1095,14 +1095,12 @@ private static int getFramePacingValue(Context context) {
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
         }
 
-        // GPU Path Mode (forces FSR None and GPU_RAW pacing)
-        try {
-            config.gpuPathMode = prefs.getBoolean(CHECKBOX_GPU_PATH_MODE, false);
-        } catch (Throwable ignored) { config.gpuPathMode = false; }
-        if (config.gpuPathMode) {
-            config.videoUpscaleEnable = false;
-            config.videoUpscaleMode = "none";
-
+// Forza GPU path quando FSR è disabilitato o in modalità "none"
+// Nota: gpuPathMode non è più una preferenza utente, ma uno stato derivato.
+        if (!config.videoUpscaleEnable ) {
+            config.gpuPathMode = true;
+        } else {
+            config.gpuPathMode = false;
         }
 
         return config;
