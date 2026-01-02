@@ -1459,7 +1459,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW ||
-                (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED && prefConfig.reduceRefreshRate);
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_WARP ||
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2 ||
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ||
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED ||
+                prefConfig.reduceRefreshRate ;
     }
 
     public boolean isOnExternalDisplay() {
