@@ -48,16 +48,6 @@ import com.limelight.perf.CpuWarmUp;
 import android.os.Looper;
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
-
-    // --- Sticky CPU affinity (keep pin alive for whole streaming session) ---
-    // We periodically verify that the allowed CPU mask didn't shrink/flip due to cpusets
-    // and re-apply pinning to big cores if needed. Lightweight, runs every few seconds.
-    private static final long AFFINITY_REFRESH_NS = 10_000_000_000L; // 10s (was 2s)
-    private volatile long lastAffinityRefreshNs = 0L;
-    private volatile String lastAllowedMask = null;
-    private volatile boolean affinityPinned = false;
-
-
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
     // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
     private static void __fsrCall(Object upscaler, String method) {
