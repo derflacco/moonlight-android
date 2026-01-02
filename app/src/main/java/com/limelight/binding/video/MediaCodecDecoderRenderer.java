@@ -264,11 +264,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private android.os.HandlerThread codecCallbackThread;
 
-    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncInputQueue =
-            new java.util.concurrent.LinkedBlockingQueue<>(64);
-
-    private final java.util.concurrent.LinkedBlockingQueue<Integer> asyncOutputQueue =
-            new java.util.concurrent.LinkedBlockingQueue<>(8);
+    private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncInputQueue =
+            new java.util.concurrent.ArrayBlockingQueue<>(64);
+    private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncOutputQueue =
+            new java.util.concurrent.ArrayBlockingQueue<>(8);
 
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo =
             new android.util.SparseArray<>(16);
@@ -2953,14 +2952,18 @@ try {
 
 
                 @Override
-                public void onOutputBufferAvailable(MediaCodec codec, int index,
-                                                    BufferInfo info) {
+                public void onOutputBufferAvailable(MediaCodec codec, int index, BufferInfo info) {
+                    // CRITICAL FIX: Create a defensive copy; the system reuses 'info' for the next frame
+                    BufferInfo copy = new BufferInfo();
+                    copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
+
                     try {
+                        // Store info synchronously to prevent race conditions with the renderer thread
                         synchronized (asyncOutInfo) {
-                            asyncOutInfo.put(index, cloneInfo(info));
+                            asyncOutInfo.put(index, copy);
                         }
 
-                        // LFR/ULL path: keep only latest buffer
+                        // LFR/ULL path: keep only latest buffer for minimal latency
                         if (preferLowerDelays) {
                             Integer old;
                             while ((old = asyncOutputQueue.poll()) != null) {
