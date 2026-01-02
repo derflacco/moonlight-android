@@ -364,7 +364,8 @@
     <string name="pacing_gpu_raw">Gpu Raw</string>
     <string name="gpu_path_mode_title">Fast Gl Path</string>
     <string name="gpu_path_mode_summary">Enable a minimal fast Gl Path. Forces FSR off. Disable to use FSR; </string>
-
+    <string name="Vsync_title">V-Sync</string>
+    <string name="Vsync_summary">Enable V-sync alignment. Increases latency slightly.</string>
 
 
     <string name="keyboard_service_label">Artemis Physical keyboard</string>

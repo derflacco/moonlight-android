@@ -331,6 +331,8 @@ public boolean snappyInput = true;
     public boolean enableNewAnalogStick;
 
     public boolean enableFullExDisplay;
+    // Vsync settings
+    public boolean enableVsync = false;
 
     //串流画面顶部居中显示
     public boolean alignDisplayTopCenter;
@@ -425,6 +427,8 @@ public boolean snappyInput = true;
     private static final String BALANCE_SHIFT = "balance_shift";
     private static final String NUMBER_PAN_OFFSET_X = "number_pan_offset_x";
     private static final String NUMBER_PAN_OFFSET_Y = "number_pan_offset_y";
+
+    private static final String PREF_VSYNC = "checkbox_Vsync";
 
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option
@@ -1102,6 +1106,14 @@ private static int getFramePacingValue(Context context) {
         } else {
             config.gpuPathMode = false;
         }
+        // Leggi l'impostazione Vsync
+        config.enableVsync = prefs.getBoolean(PREF_VSYNC, false);
+
+        // Se Vsync è abilitato, forza il frame pacing a balanced
+        if (config.enableVsync) {
+            config.framePacing = FRAME_PACING_BALANCED;
+        }
+
 
         return config;
     }
