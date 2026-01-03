@@ -697,7 +697,17 @@ public class MediaCodecHelper {
                 }
             }
         }
-
+        // derflacco — final best-effort vendor extras (QTI/OMX.qcom/NVIDIA), like MTK block above
+        try {
+            final String __decName = (decoderInfo != null) ? decoderInfo.getName() : null;
+            if (__decName != null) {
+                final String __dn = __decName.toLowerCase(java.util.Locale.US);
+                if (isNvidiaDecoder(__decName) || isQualcommDecoder(__decName) || __dn.startsWith("omx.qcom")) {
+                    applyExtraVendorOptions(videoFormat, __decName);
+                    setNewOption = true;
+                }
+            }
+        } catch (Throwable ignored) {}
         return setNewOption;
     }
 
