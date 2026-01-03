@@ -67,6 +67,13 @@
             app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
+            android:key="checkbox_immediate_frame_delivery"
+            android:title="@string/immediate_frame_delivery_title"
+            android:summary="@string/immediate_frame_delivery_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
             android:key="checkbox_gpu_path_mode"
             android:title="@string/gpu_path_mode_title"
             android:summary="@string/gpu_path_mode_summary"

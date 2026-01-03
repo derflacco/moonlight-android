@@ -1429,49 +1429,49 @@ try {
         });
     }
 
-    private void startRendererThread()
-    {
-        rendererThread = new Thread() {
+            private void startRendererThread()
+            {
+                rendererThread = new Thread() {
+                    @Override
+                    public void run() {
+                        BufferInfo info = new BufferInfo();
+                        final android.media.MediaCodec.BufferInfo lfrInfo =
+                                new android.media.MediaCodec.BufferInfo();
 
-            @Override
-            public void run() {
-                BufferInfo info = new BufferInfo();
-                final android.media.MediaCodec.BufferInfo lfrInfo = new android.media.MediaCodec.BufferInfo();
+                        // Determine timeout based on frame delivery preference
+                        final int decodeTimeout = prefs.immediateFrameDelivery ? 0 : 50000;
 
-                while (!stopping) {
+                        while (!stopping) {
+                            cleanupOldLatencyTrackingEntries();
 
-                    // Periodic cleanup of latency tracking data to prevent memory accumulation
-                    cleanupOldLatencyTrackingEntries();
+                            try {
+                                // Attempt to retrieve next output buffer
+                                int outIndex = nextOutputIndex(info, decodeTimeout);
+                                if (outIndex >= 0) {
+                                    long presentationTimeUs = info.presentationTimeUs;
+                                    int lastIndex = outIndex;
 
-                    try {
-                        // Try to output a frame
-                        int outIndex = nextOutputIndex(info, 50000);
-                        if (outIndex >= 0) {
-                            long presentationTimeUs = info.presentationTimeUs;
-                            int lastIndex = outIndex;
-
-                            numFramesOut++;
-
-                            // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                // Get the last output buffer in the queue
-                                while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
-                                    try {
-                                        videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                    } catch (Throwable ignored) { }
                                     numFramesOut++;
-                                    lastIndex = outIndex;
-                                    presentationTimeUs = info.presentationTimeUs;
-                                }
-                                if (lastIndex >= 0) {
-                                    try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
-                                }
-                                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                    LimeLog.info("Output EOS received");
-                                    // Optional: signal stopping or completion
-                                    // stopping = true;
-                                    continue;
-                                }
+
+                                    // Skip frame buffering when not in balanced pacing mode
+                                    if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                                        // Process all available output buffers immediately
+                                        while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
+                                            try {
+                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                            } catch (Throwable ignored) { }
+                                            numFramesOut++;
+                                            lastIndex = outIndex;
+                                            presentationTimeUs = info.presentationTimeUs;
+                                        }
+                                        if (lastIndex >= 0) {
+                                            try { updateDecodeLatencyStats(presentationTimeUs); }
+                                            catch (Throwable ignored) {}
+                                        }
+                                        if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                            LimeLog.info("Output EOS received");
+                                            continue;
+                                        }
                                 // --- Update Pacing State ---
                                 updatePacingMode(presentationTimeUs);
 
@@ -3022,7 +3022,8 @@ try {
         if (!useAsyncCodec || videoDecoder == null) return;
 
         preferLowerDelays = (prefs != null &&
-                prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED);
+                (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED ||
+                        prefs.immediateFrameDelivery));
 
         if (codecCallbackThread == null) {
             codecCallbackThread = new android.os.HandlerThread(

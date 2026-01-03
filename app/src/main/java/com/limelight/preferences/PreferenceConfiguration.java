@@ -10,9 +10,15 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
-// Snappy Input
-public boolean snappyInput = true;
-// CpuWarmUp (read from prefs)
+     // Snappy Input
+    public boolean snappyInput = true;
+
+    // Immediate frame delivery
+    public boolean immediateFrameDelivery = false; // Skip decoder wait for lower latency
+    private static final String IMMEDIATE_FRAME_DELIVERY_PREF_STRING = "checkbox_immediate_frame_delivery";
+    private static final boolean DEFAULT_IMMEDIATE_FRAME_DELIVERY = false;
+
+    // CpuWarmUp (read from prefs)
     public boolean cpuWarmUpEnable;
 
     // Video upscaling (FSR-like)
@@ -1068,7 +1074,7 @@ private static int getFramePacingValue(Context context) {
         config.enableRumble = prefs.getBoolean(ENABLE_RUMBLE_PREF_STRING, DEFAULT_ENABLE_RUMBLE);
         config.preventPacketLoss = prefs.getBoolean(PREVENT_PACKET_LOSS_PREF_STRING, DEFAULT_PREVENT_PACKET_LOSS);
         config.snappyInput = prefs.getBoolean(SNAPPY_INPUT_PREF_STRING, DEFAULT_SNAPPY_INPUT);
-
+        config.immediateFrameDelivery = prefs.getBoolean(IMMEDIATE_FRAME_DELIVERY_PREF_STRING, DEFAULT_IMMEDIATE_FRAME_DELIVERY);
         // Read custom values
         config.customResolution = prefs.getString(CUSTOM_RESOLUTION_PREF_STRING, null);
         config.customRefreshRate = prefs.getString(CUSTOM_REFRESH_RATE_PREF_STRING, null);

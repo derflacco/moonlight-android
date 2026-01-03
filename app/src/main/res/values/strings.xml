@@ -782,4 +782,7 @@
     <string name="text_upscaling_unavailable_dialog">Upscaling cannot be enabled while Direct Present or HDR is enabled. Disable those options first.</string>
     <string name="pref_cpu_warmup_enable_title">Hack: CPU-Boost </string>
     <string name="pref_cpu_warmup_enable_summary">Boost the CPU. Increases power/thermals. Use at your own risk..</string>
+    <!-- Immediate Frame Delivery -->
+    <string name="immediate_frame_delivery_title">Immediate Frame Delivery</string>
+    <string name="immediate_frame_delivery_summary">Skip decoder wait for lower latency (may increase power consumption)</string>
 </resources>
