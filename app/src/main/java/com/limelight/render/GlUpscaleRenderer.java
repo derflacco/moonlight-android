@@ -279,8 +279,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
             if (!isGlReady()) continue;
-            // Clear residual GL errors from previous frame
-            clearGlErrors();
             boolean newFrameAvailable = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -319,7 +317,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             if (fbW <= 0 || fbH <= 0) continue;
 
-            optimizeForTileBased(fbW, fbH, false);
             ensureViewport(fbW, fbH);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
@@ -353,11 +350,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
             if (hdrActive && prefs != null && prefs.gpuPathMode) {
-                // Clear errors before drawing
-                clearGlErrors();
                 drawOesToScreen();
-                // Check errors after drawing (no log spam for 0x502)
-                checkGlErrorQuiet("HDR drawOesToScreen");
                 swapAndContinue();
                 sizeChangedSinceLastSwap = false;
                 continue;
@@ -441,8 +434,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void swapAndContinue() {
-        // Clear errors before swap
-        clearGlErrors();
         try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
         boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
         if (!__swapped) {
@@ -474,8 +465,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private boolean drawRcasOnlySafe(int dstW, int dstH, float sharp) {
         checkRcasOesHealthOnce(dstW, dstH);
-        // apply tilebased optimizations
-        optimizeForTileBased(dstW, dstH, true);
         // Prefer direct OES sharpening when program is available
         if (progRcasOes != 0 && rcasOesHealthy) {
             if (__fsr.enabled) { __fsr.sampling = "RCAS_OES"; }
@@ -542,7 +531,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp) {
         // apply tilebased optimizations
-        optimizeForTileBased(dstW, dstH, true);
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
         if (!ensureFbo(dstW, dstH)) return false;
 
@@ -809,31 +797,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
-        try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
-        try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
-    }
-    /**
-     * Optimizations for tile-based GPUs (all mobile GPUs).
-     * Reduces bandwidth and improves rendering efficiency for Mali, Adreno, PowerVR.
-     */
-    private void optimizeForTileBased(int dstW, int dstH, boolean isPostProcess) {
-        // 1. Reduce unnecessary state changes
         GLES20.glDisable(GLES20.GL_STENCIL_TEST);
         GLES20.glDisable(GLES20.GL_CULL_FACE);
-        GLES20.glDisable(GLES20.GL_SCISSOR_TEST); // Disable unless we use partial updates
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
 
-        // 2. Use optimal blend equation for simple blending (if needed)
         GLES20.glBlendEquation(GLES20.GL_FUNC_ADD);
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ZERO);
 
-             // 4. Use framebuffer invalidation where possible (GLES3.0+)
-        // This tells the GPU we don't need to preserve framebuffer contents
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
-            try {
-                // Only invalidate after read operations (like health check)
-                // Don't call during normal rendering as it would discard our output
-            } catch (Throwable ignored) {}
-        }
+        try { GLES20.glDisable(GLES20.GL_DITHER); } catch (Throwable ignored) {}
+        try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
     }
 
     private void setTex2DFilter(boolean toNearest) {
