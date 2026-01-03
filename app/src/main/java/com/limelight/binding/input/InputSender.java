@@ -206,7 +206,7 @@ public final class InputSender implements Closeable {
     }
 
     private void waitForThreadTermination() {
-        // Avoid deadlock if called from the worker itself
+        // Avoid deadlock if called from worker itself
         if (Thread.currentThread() == thread) {
             Log.w(TAG, "shutdown() called on input thread; skipping join");
             return;
@@ -217,7 +217,6 @@ public final class InputSender implements Closeable {
         }
 
         final long deadline = System.currentTimeMillis() + SHUTDOWN_TIMEOUT_MS;
-        boolean interrupted = false;
 
         try {
             long remaining;
@@ -229,9 +228,11 @@ public final class InputSender implements Closeable {
                         return; // Thread terminated successfully
                     }
                 } catch (InterruptedException e) {
-                    interrupted = true;
-                    // Preserve interrupt status but continue waiting
+                    // If interrupted during shutdown, stop waiting immediately
+                    // Don't keep retrying as we are being told to stop NOW
                     Thread.currentThread().interrupt();
+                    Log.w(TAG, "Shutdown interrupted, exiting join loop");
+                    return; // <--- IMPORTANTE: Esci subito
                 }
             }
 
@@ -243,9 +244,9 @@ public final class InputSender implements Closeable {
                 Log.e(TAG, "No permission to interrupt thread", e);
             }
         } finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
+            // Not strictly needed if we return immediately on interrupt,
+            // but kept as safety net if logic changes.
+            // if (Thread.currentThread().isInterrupted()) ...
         }
     }
 
