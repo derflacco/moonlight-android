@@ -366,7 +366,8 @@
     <string name="gpu_path_mode_summary">Enable a minimal fast Gl Path. Forces FSR off. Disable to use FSR; </string>
     <string name="Vsync_title">V-Sync</string>
     <string name="Vsync_summary">Enable V-sync alignment. Increases latency slightly.</string>
-
+    <string name="fastVsync_title">Fast V-Sync</string>
+    <string name="fastVsync_summary">Enable Fast V-sync alignment. Increases latency slightly.</string>
 
     <string name="keyboard_service_label">Artemis Physical keyboard</string>
     <string name="accessibility_description_text">Only used when physical keyboard shortcut were intercepted by system. In some systems, several keyboard shortcut are defind and used by the Android system, causing them not being able to be passed through to the host PC. Artemis will not look through your input, nor collecting your password, credit card number or any other private information.</string>

@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 import java.util.prefs.Preferences;
 
 import org.jcodec.codecs.h264.H264Utils;
@@ -274,6 +275,77 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private boolean preferLowerDelays = false; // Will be set based on frame pacing mode
 // ==== End async decoding ====
+
+
+    // ==== Nano Pacer ====
+
+    private long lastInputPtsUs = 0;
+    private boolean isOneToOneMode = false;
+    private long nextPacingDeadlineNs = 0;
+    private int paceStateCounter = 0;
+    private static final int PACE_STABILITY_THRESHOLD = 6; // Richiede 6 frame (~100ms) stabili per cambiare
+    private static final long PACE_TOLERANCE_US = 3000;     // Tolleranza aumentata a 3ms per gestire meglio il jitter
+    private int streamTargetFps = 60;
+    private void updatePacingMode(long presentationTimeUs) {
+        // Fast VSync gate
+        if (!prefs.fastVsync) {
+            // Disabled: bypass detection, force sync off
+            if (isOneToOneMode) {
+                isOneToOneMode = false;
+            }
+            // Reset state machine
+            paceStateCounter = 0;
+            lastInputPtsUs = 0;
+            return;
+        }
+
+        // Active: Run detection logic
+        if (lastInputPtsUs == 0) {
+            lastInputPtsUs = presentationTimeUs;
+            return;
+        }
+
+        // Calc intervals
+        long intervalUs = presentationTimeUs - lastInputPtsUs;
+        lastInputPtsUs = presentationTimeUs;
+
+        // Adaptive Rate Selection
+        // Prioritize stream target (e.g., 90) if it's lower than display refresh rate (e.g., 120)
+        // to maintain sync on sub-refresh rate streams.
+        int rateToCheck = (streamTargetFps > 0 && streamTargetFps < refreshRate) ? streamTargetFps : refreshRate;
+        long targetIntervalUs = 1000000 / rateToCheck;
+
+        // Check rate match (within tolerance)
+        boolean isMatchingRate = Math.abs(intervalUs - targetIntervalUs) < PACE_TOLERANCE_US;
+
+        if (isOneToOneMode) {
+            // 1:1 active: Check stability
+            if (!isMatchingRate) {
+                paceStateCounter++;
+                if (paceStateCounter > PACE_STABILITY_THRESHOLD) {
+                    isOneToOneMode = false;
+                    paceStateCounter = 0;
+                    LimeLog.info("Nano-Pacer: Rate mismatch. Disabling sync.");
+                }
+            } else {
+                paceStateCounter = 0;
+            }
+        } else {
+            // High FPS active: Check for 1:1 match
+            if (isMatchingRate) {
+                paceStateCounter++;
+                if (paceStateCounter > PACE_STABILITY_THRESHOLD) {
+                    isOneToOneMode = true;
+                    paceStateCounter = 0;
+                    LimeLog.info("Nano-Pacer: Stable " + streamTargetFps + " fps detected. Enforcing sync.");
+                }
+            } else {
+                paceStateCounter = 0;
+            }
+        }
+    }
+
+// ==== End Nano Pacer ====
 
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
@@ -544,7 +616,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                      boolean meteredData, boolean requestedHdr, boolean invertResolution,
                                      String glRenderer, PerfOverlayListener perfListener) {
         //dumpDecoders();
-
+        this.streamTargetFps = (int) prefs.fps;
         this.context = activity;
         this.activity = activity;
         this.prefs = prefs;
@@ -1399,15 +1471,34 @@ try {
                                     // stopping = true;
                                     continue;
                                 }
-// --- Present policy per profilo di pacing ---
+                                // --- Update Pacing State ---
+                                updatePacingMode(presentationTimeUs);
+
+                                // --- Nano-Pacer Enforcement ---
+                                // Enforce sync if mode is 1:1 (handles fastVsync internally)
+                                if (isOneToOneMode) {
+                                    long now = System.nanoTime();
+                                    if (nextPacingDeadlineNs == 0) nextPacingDeadlineNs = now;
+
+                                    long timeUntilDeadline = nextPacingDeadlineNs - now;
+                                    if (timeUntilDeadline > 0) {
+                                        LockSupport.parkNanos(timeUntilDeadline);
+                                    } else {
+                                        // Missed deadline, reset to prevent drift
+                                        nextPacingDeadlineNs = now;
+                                    }
+                                    nextPacingDeadlineNs += (1000000000L / refreshRate);
+                                }
+
+                                // --- Present Policy ---
+                                // Release buffer according to specific profile settings
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    // Immediate present using frame PTS; no decoder-side pacing
                                     if (lastIndex >= 0) {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                             final long tsNs = presentationTimeUs * 1000L;
                                             videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
                                         } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, /*render*/ true);
+                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
                                         }
                                     }
                                 }

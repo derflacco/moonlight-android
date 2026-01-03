@@ -333,6 +333,9 @@ public boolean snappyInput = true;
     // Vsync settings
     public boolean enableVsync = false;
 
+    // FastVsync settings
+    public boolean fastVsync = false;
+
     //串流画面顶部居中显示
     public boolean alignDisplayTopCenter;
 
@@ -425,7 +428,7 @@ public boolean snappyInput = true;
     private static final String NUMBER_PAN_OFFSET_Y = "number_pan_offset_y";
 
     private static final String PREF_VSYNC = "checkbox_Vsync";
-
+    private static final String PREF_FASTVSYNC = "checkbox_fastVsync";
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option
         if (width == 640 && height == 360) {
@@ -1107,7 +1110,8 @@ private static int getFramePacingValue(Context context) {
         if (config.enableVsync) {
             config.framePacing = FRAME_PACING_BALANCED;
         }
-
+ // FastVsync
+        config.fastVsync = prefs.getBoolean(PREF_FASTVSYNC, false);
 
         return config;
     }
