@@ -9,8 +9,6 @@ import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
-import java.util.prefs.Preferences;
-
 import org.jcodec.codecs.h264.H264Utils;
 import org.jcodec.codecs.h264.io.model.SeqParameterSet;
 import org.jcodec.codecs.h264.io.model.VUIParameters;
@@ -127,6 +125,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Update stats using both decode time (enqueue->dequeue) and end-to-end latency (uptime - PTS)
 
     private void updateDecodeLatencyStats(long presentationTimeUs) {
+        updateDecodeLatencyStats(presentationTimeUs, System.nanoTime());
+    }
+
+    private void updateDecodeLatencyStats(long presentationTimeUs, long endNs) {
         Long enqNs;
 
         // Thread-safe retrieval and removal
@@ -141,7 +143,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-           long decNs = System.nanoTime() - enqNs;
+        // Use provided end time instead of current System.nanoTime()
+        long decNs = endNs - enqNs;
         long decMs = decNs / 1_000_000L;
 
         // Also calculate old end-to-end latency for comparison
@@ -278,7 +281,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 
 // ==== Nano Pacer ====
-
+    private static final long PARK_MIN_THRESHOLD_NS = 2_000_000L;  // 2ms min for reliable park
+    private static final long SPIN_MAX_NS = 100_000L;             // 100µs max spin
     private static final int PACE_STABILITY_THRESHOLD = 6;
     private static final float TOLERANCE_PERCENT = 0.15f;
     private static final float EMA_ALPHA = 0.2f;
@@ -1491,104 +1495,129 @@ try {
         });
     }
 
-            private void startRendererThread()
-            {
-                rendererThread = new Thread() {
-                    @Override
-                    public void run() {
-                        BufferInfo info = new BufferInfo();
-                        final android.media.MediaCodec.BufferInfo lfrInfo =
-                                new android.media.MediaCodec.BufferInfo();
+    private void startRendererThread() {
+        rendererThread = new Thread() {
+            @Override
+            public void run() {
+                BufferInfo info = new BufferInfo();
+                final android.media.MediaCodec.BufferInfo lfrInfo =
+                        new android.media.MediaCodec.BufferInfo();
 
-                        // Determine timeout based on frame delivery preference
-                        final int decodeTimeout = prefs.immediateFrameDelivery ? 0 : 50000;
+                // Timeout: 0 for immediate delivery, otherwise a small wait to reduce busy looping
+                final int decodeTimeout = prefs.immediateFrameDelivery ? 0 : 50000;
 
-                        while (!stopping) {
-                            cleanupOldLatencyTrackingEntries();
+                // Cleanup throttling to avoid GC spikes
+                long lastCleanupNs = System.nanoTime();
+                final long CLEANUP_INTERVAL_NS = 1_000_000_000L; // 1 second
 
-                            try {
-                                // Attempt to retrieve next output buffer
-                                int outIndex = nextOutputIndex(info, decodeTimeout);
-                                if (outIndex >= 0) {
-                                    long presentationTimeUs = info.presentationTimeUs;
-                                    int lastIndex = outIndex;
+                while (!stopping) {
+                    // Throttle cleanup to avoid performance spikes
+                    long nowNs = System.nanoTime();
+                    if (nowNs - lastCleanupNs > CLEANUP_INTERVAL_NS) {
+                        cleanupOldLatencyTrackingEntries();
+                        lastCleanupNs = nowNs;
+                    }
+
+                    try {
+                        // Attempt to retrieve next output buffer
+                        int outIndex = nextOutputIndex(info, decodeTimeout);
+                        if (outIndex >= 0) {
+                            long presentationTimeUs = info.presentationTimeUs;
+                            int lastFlags = info.flags;
+                            int lastIndex = outIndex;
+
+                            numFramesOut++;
+
+                            final boolean isBalanced =
+                                    (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+
+                            if (!isBalanced) {
+// Track dequeue time for the newest output buffer (latest-only)
+                                long lastDequeueTimeNs = System.nanoTime();
+
+// Latest-only: drain all available buffers, keep only the newest
+                                while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
+                                    final long thisDequeueTimeNs = System.nanoTime();
+
+                                    try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
+                                    catch (Throwable ignored) { }
 
                                     numFramesOut++;
+                                    lastIndex = outIndex;
+                                    presentationTimeUs = info.presentationTimeUs;
+                                    lastFlags = info.flags;
 
-                                    // Skip frame buffering when not in balanced pacing mode
-                                    if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                        // Process all available output buffers immediately
-                                        while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
-                                            try {
-                                                videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                            } catch (Throwable ignored) { }
-                                            numFramesOut++;
-                                            lastIndex = outIndex;
-                                            presentationTimeUs = info.presentationTimeUs;
-                                        }
-                                        if (lastIndex >= 0) {
-                                            try { updateDecodeLatencyStats(presentationTimeUs); }
-                                            catch (Throwable ignored) {}
-                                        }
-                                        if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                            LimeLog.info("Output EOS received");
-                                            continue;
-                                        }
-                                // --- Update Pacing State ---
+                                    lastDequeueTimeNs = thisDequeueTimeNs;
+                                }
+
+// Measure decode latency using the dequeue time of the newest buffer
+                                try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
+                                catch (Throwable ignored) {}
+
+
+
+                                final boolean eos =
+                                        (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+
+                                // Update pacing state using the newest frame only
                                 updatePacingMode(presentationTimeUs);
 
-                                // --- Nano-Pacer Enforcement ---
-                                // Enforce sync if mode is 1:1 (handles fastVsync internally)
+                                // Nano-pacer enforcement (1:1) - synchronized to prevent race conditions
                                 if (isOneToOneMode) {
-                                    long now = System.nanoTime();
+                                    synchronized (pacingLock) {
+                                        final float rr = (refreshRate > 0f) ? refreshRate : 60f;
+                                        final long framePeriodNs = (long) (1_000_000_000.0 / (double) rr);
+                                        final long nowNsLocal = System.nanoTime();
 
-                                    if (nextPacingDeadlineNs == 0) {
-                                        nextPacingDeadlineNs = now;
-                                    }
+                                        // Initialize first deadline
+                                        if (nextPacingDeadlineNs == 0L) {
+                                            nextPacingDeadlineNs = nowNsLocal;
+                                        }
 
-                                    long timeUntilDeadline = nextPacingDeadlineNs - now;
-                                    if (timeUntilDeadline > 0) {
-                                        LockSupport.parkNanos(timeUntilDeadline);
-                                    } else {
-                                        // Hard miss → resync to now (no accumulation)
-                                        nextPacingDeadlineNs = now;
-                                    }
+                                        long waitNs = nextPacingDeadlineNs - nowNsLocal;
 
-                                    nextPacingDeadlineNs += (1_000_000_000L / refreshRate);
-                                }
+                                        // Coarse wait for bulk intervals (>2ms)
+                                        if (waitNs > PARK_MIN_THRESHOLD_NS) {
+                                            long parkNs = waitNs - SPIN_MAX_NS;
+                                            if (parkNs > 0) {
+                                                LockSupport.parkNanos(parkNs);
+                                                waitNs = nextPacingDeadlineNs - System.nanoTime();
+                                            }
+                                        }
 
-                                // --- Present Policy ---
-                                // Release buffer according to specific profile settings
-                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-                                    if (lastIndex >= 0) {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                            final long tsNs = presentationTimeUs * 1000L;
-                                            videoDecoder.releaseOutputBuffer(lastIndex, tsNs);
+                                        // Precision spin for remaining micro-window
+                                        if (waitNs > 0) {
+                                            final long spinDeadlineNs = nextPacingDeadlineNs;
+                                            while (System.nanoTime() < spinDeadlineNs) {
+                                                // Busy-wait for maximum precision
+                                            }
+                                            nextPacingDeadlineNs += framePeriodNs;
                                         } else {
-                                            videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                            // Deadline missed - adaptive recovery
+                                            long slipNs = -waitNs;
+                                            if (slipNs < (framePeriodNs * 3L) / 2L) {
+                                                // Minor slip: maintain cadence, skip one slot
+                                                nextPacingDeadlineNs += framePeriodNs;
+                                            } else {
+                                                // Major slip: full resynchronization
+                                                nextPacingDeadlineNs = nowNsLocal + framePeriodNs;
+                                            }
                                         }
                                     }
                                 }
-                                else
-                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // Never-drop policy (do not hold output buffers)
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        videoDecoder.releaseOutputBuffer(lastIndex, 0);
-                                    } else {
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                    }
-                                } else {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
-                                    } else {
-                                        videoDecoder.releaseOutputBuffer(lastIndex, true);
-                                    }
-                                }
+
+                                // Present/release newest buffer
+                                releaseBufferAccordingToMode(lastIndex, presentationTimeUs);
 
                                 activeWindowVideoStats.totalFramesRendered++;
+
+                                // EOS must be handled only after the last buffer is released
+                                if (eos) {
+                                    LimeLog.info("Output EOS received");
+                                    continue;
+                                }
                             } else {
-                                // Balanced: enqueue for Choreographer
+                                // Balanced: enqueue for Choreographer (bounded queue)
                                 if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
                                         videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
@@ -1596,56 +1625,28 @@ try {
                                         return;
                                     } catch (Throwable ignored) { }
                                 }
+
                                 outputBufferQueue.add(lastIndex);
-                            }
-                            // Measure decode latency AT DEQUEUE
-                            try { updateDecodeLatencyStats(presentationTimeUs); } catch (Throwable ignored) {}
-                            if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                LimeLog.info("Output EOS received");
-                                // Optional: signal stopping or completion
-                                // stopping = true;
-                                continue;
+
+                                // Measure decode latency at dequeue time
+                                try { updateDecodeLatencyStats(presentationTimeUs); }
+                                catch (Throwable ignored) {}
+
+                                final boolean eos =
+                                        (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+
+                                // EOS after enqueue
+                                if (eos) {
+                                    LimeLog.info("Output EOS received");
+                                    continue;
+                                }
                             }
 
-//                           // Add delta time to the totals (excluding probable outliers)
-//                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
-//                            if (delta >= 0 && delta < 1000) {
-//                                activeWindowVideoStats.decoderTimeMs += delta;
-//                                if (!USE_FRAME_RENDER_TIME) {
-//                                    activeWindowVideoStats.totalTimeMs += delta;
-//                                }
-//                            }
+                            // Legacy end-to-end timing intentionally disabled here
                         } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                             // Only handle in sync mode (async handled in callback)
                             if (!useAsyncCodec) {
-                                LimeLog.info("Output format changed (sync)");
-                                coldCfg.outputFormat = videoDecoder.getOutputFormat();
-                                // HDR detection
-                                try {
-                                    android.media.MediaFormat __fmt = coldCfg.outputFormat;
-                                    int __std = -1, __tr = -1, __rng = -1;
-                                    try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                                    try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                                    try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
-                                    // BT.2020 + (PQ o HLG) => HDR
-                                    boolean __isHdr =
-                                            (__std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
-                                                    (__tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084
-                                                            || __tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
-                                    // Update shared flag so overlays/renderer can see it
-                                    hdrActive = __isHdr;
-                                    // Notify window color mode (no-op <26)
-                                    try { com.limelight.Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
-                                    // Pass HDR static info to GL upscaler if available
-                                    java.nio.ByteBuffer __hdr = null;
-                                    try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
-                                    byte[] __hdrArr = null;
-                                    if (__hdr != null && __hdr.remaining() > 0) {
-                                        __hdrArr = new byte[__hdr.remaining()];
-                                        __hdr.get(__hdrArr);
-                                    }
-                                } catch (Throwable ignored) {}
-                                LimeLog.info("New output format: " + coldCfg.outputFormat);
+                                handleOutputFormatChangeSync();
                             }
                         }
                     } catch (IllegalStateException e) {
@@ -3326,6 +3327,68 @@ try {
             glyph.append('V');
         }
         return glyph.toString();
+    }
+
+    // Helper method for buffer release based on mode
+    private void releaseBufferAccordingToMode(int bufferIndex, long presentationTimeUs) {
+        if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                final long tsNs = System.nanoTime();
+                videoDecoder.releaseOutputBuffer(bufferIndex, tsNs);
+            } else {
+                videoDecoder.releaseOutputBuffer(bufferIndex, true);
+            }
+        } else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
+                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+            // Never-drop policy (do not hold output buffers)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                videoDecoder.releaseOutputBuffer(bufferIndex, 0);
+            } else {
+                videoDecoder.releaseOutputBuffer(bufferIndex, true);
+            }
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                videoDecoder.releaseOutputBuffer(bufferIndex, System.nanoTime());
+            } else {
+                videoDecoder.releaseOutputBuffer(bufferIndex, true);
+            }
+        }
+    }
+
+    // Output format change handler (extracted for readability)
+    private void handleOutputFormatChangeSync() {
+        LimeLog.info("Output format changed (sync)");
+        coldCfg.outputFormat = videoDecoder.getOutputFormat();
+
+        // HDR detection
+        try {
+            android.media.MediaFormat fmt = coldCfg.outputFormat;
+            int std = -1, tr = -1, rng = -1;
+            try { std = fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+            try { tr  = fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
+            try { rng = fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+
+            // BT.2020 + (PQ or HLG) => HDR
+            boolean isHdr = (std == android.media.MediaFormat.COLOR_STANDARD_BT2020) &&
+                    (tr  == android.media.MediaFormat.COLOR_TRANSFER_ST2084 ||
+                            tr  == android.media.MediaFormat.COLOR_TRANSFER_HLG);
+
+            hdrActive = isHdr;
+
+            // Notify window color mode
+            try { com.limelight.Game.updateHdrWindowMode(isHdr); } catch (Throwable ignored) {}
+
+            // Pass HDR static info to GL upscaler if available
+            java.nio.ByteBuffer hdr = null;
+            try { hdr = fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
+            byte[] hdrArr = null;
+            if (hdr != null && hdr.remaining() > 0) {
+                hdrArr = new byte[hdr.remaining()];
+                hdr.get(hdrArr);
+            }
+        } catch (Throwable ignored) {}
+
+        LimeLog.info("New output format: " + coldCfg.outputFormat);
     }
 
 }
