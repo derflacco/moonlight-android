@@ -277,71 +277,118 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 // ==== End async decoding ====
 
 
-    // ==== Nano Pacer ====
+// ==== Nano Pacer ====
 
-    private long lastInputPtsUs = 0;
-    private boolean isOneToOneMode = false;
+    private static final int PACE_STABILITY_THRESHOLD = 6;
+    private static final float TOLERANCE_PERCENT = 0.15f;
+    private static final float EMA_ALPHA = 0.2f;
+    private static final long MIN_EVALUATION_INTERVAL_NS = 5_000_000L; // 5ms
+
+    private final Object pacingLock = new Object();
+
     private long nextPacingDeadlineNs = 0;
-    private int paceStateCounter = 0;
-    private static final int PACE_STABILITY_THRESHOLD = 6; // Richiede 6 frame (~100ms) stabili per cambiare
-    private static final long PACE_TOLERANCE_US = 3000;     // Tolleranza aumentata a 3ms per gestire meglio il jitter
+    private boolean isOneToOneMode = false;
+    private long lastFrameTimeNs = 0;
+    private long emaIntervalNs = 0;
+    private int stableCounter = 0;
+    private int unstableCounter = 0;
     private int streamTargetFps = 60;
+    private long lastEvaluationNs = 0;
+
     private void updatePacingMode(long presentationTimeUs) {
-        // Fast VSync gate
-        if (!prefs.fastVsync) {
-            // Disabled: bypass detection, force sync off
-            if (isOneToOneMode) {
+        synchronized (pacingLock) {
+            // Fast VSync gate
+            if (!prefs.fastVsync) {
                 isOneToOneMode = false;
+                stableCounter = 0;
+                unstableCounter = 0;
+                lastFrameTimeNs = 0;
+                emaIntervalNs = 0;
+                nextPacingDeadlineNs = 0;
+                lastEvaluationNs = 0;
+                return;
             }
-            // Reset state machine
-            paceStateCounter = 0;
-            lastInputPtsUs = 0;
-            return;
-        }
 
-        // Active: Run detection logic
-        if (lastInputPtsUs == 0) {
-            lastInputPtsUs = presentationTimeUs;
-            return;
-        }
+            // Throttle evaluation rate (5ms minimum)
+            long nowNs = System.nanoTime();
+            if (nowNs - lastEvaluationNs < MIN_EVALUATION_INTERVAL_NS) {
+                return;
+            }
+            lastEvaluationNs = nowNs;
 
-        // Calc intervals
-        long intervalUs = presentationTimeUs - lastInputPtsUs;
-        lastInputPtsUs = presentationTimeUs;
+            // Initial frame timing
+            if (lastFrameTimeNs == 0) {
+                lastFrameTimeNs = nowNs;
+                return;
+            }
 
-        // Adaptive Rate Selection
-        // Prioritize stream target (e.g., 90) if it's lower than display refresh rate (e.g., 120)
-        // to maintain sync on sub-refresh rate streams.
-        int rateToCheck = (streamTargetFps > 0 && streamTargetFps < refreshRate) ? streamTargetFps : refreshRate;
-        long targetIntervalUs = 1000000 / rateToCheck;
+            // Calculate real frame interval
+            long intervalNs = nowNs - lastFrameTimeNs;
+            lastFrameTimeNs = nowNs;
 
-        // Check rate match (within tolerance)
-        boolean isMatchingRate = Math.abs(intervalUs - targetIntervalUs) < PACE_TOLERANCE_US;
+            // Skip dropped frame outliers
+            int rateToCheck = getCheckedRate();
+            long targetIntervalNs = 1_000_000_000L / rateToCheck;
 
-        if (isOneToOneMode) {
-            // 1:1 active: Check stability
-            if (!isMatchingRate) {
-                paceStateCounter++;
-                if (paceStateCounter > PACE_STABILITY_THRESHOLD) {
-                    isOneToOneMode = false;
-                    paceStateCounter = 0;
-                    LimeLog.info("Nano-Pacer: Rate mismatch. Disabling sync.");
-                }
+            if (intervalNs > targetIntervalNs * 2.5f) {
+                return; // Likely a dropped frame, ignore
+            }
+
+            // Initialize or update EMA
+            if (emaIntervalNs == 0) {
+                emaIntervalNs = targetIntervalNs; // Start with theoretical target
             } else {
-                paceStateCounter = 0;
+                emaIntervalNs = (long) (EMA_ALPHA * intervalNs +
+                        (1f - EMA_ALPHA) * emaIntervalNs);
             }
-        } else {
-            // High FPS active: Check for 1:1 match
+
+            // Dynamic tolerance based on target interval
+            long dynamicToleranceNs = (long) (targetIntervalNs * TOLERANCE_PERCENT);
+            boolean isMatchingRate = Math.abs(emaIntervalNs - targetIntervalNs) <= dynamicToleranceNs;
+
+            // Update state counters
             if (isMatchingRate) {
-                paceStateCounter++;
-                if (paceStateCounter > PACE_STABILITY_THRESHOLD) {
-                    isOneToOneMode = true;
-                    paceStateCounter = 0;
-                    LimeLog.info("Nano-Pacer: Stable " + streamTargetFps + " fps detected. Enforcing sync.");
-                }
+                stableCounter++;
+                unstableCounter = 0;
             } else {
-                paceStateCounter = 0;
+                unstableCounter++;
+                stableCounter = 0;
             }
+
+            // State transitions
+            if (!isOneToOneMode && stableCounter >= PACE_STABILITY_THRESHOLD) {
+                isOneToOneMode = true;
+                stableCounter = 0;
+                nextPacingDeadlineNs = nowNs + targetIntervalNs;
+                LimeLog.info("Nano-Pacer: 1:1 pacing enabled (" + rateToCheck + " fps)");
+            }
+
+            if (isOneToOneMode && unstableCounter >= PACE_STABILITY_THRESHOLD) {
+                isOneToOneMode = false;
+                unstableCounter = 0;
+                LimeLog.info("Nano-Pacer: 1:1 pacing disabled");
+            }
+        }
+    }
+
+    private int getCheckedRate() {
+        // Validate stream target FPS
+        if (streamTargetFps <= 0 || streamTargetFps > 1000) {
+            return refreshRate;
+        }
+
+        // Prefer stream FPS when below display refresh rate
+        return (streamTargetFps < refreshRate) ? streamTargetFps : refreshRate;
+    }
+
+    // Optional: Call this when display refresh rate changes
+    public void updateRefreshRate(int newRefreshRate) {
+        synchronized (pacingLock) {
+            refreshRate = newRefreshRate;
+            // Reset detection to adapt to new rate
+            stableCounter = 0;
+            unstableCounter = 0;
+            emaIntervalNs = 0;
         }
     }
 
@@ -385,6 +432,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         nextInputBuffer = null;
     }
     //
+
+    // reset nano pacer
+    private void resetNanoPacerState() {
+
+        // ---- Nano-Pacer reset ----
+        isOneToOneMode = false;
+        stableCounter = 0;
+        unstableCounter = 0;
+        lastFrameTimeNs = 0;
+        emaIntervalNs = 0;
+        nextPacingDeadlineNs = 0;
+        lastEvaluationNs = 0;
+    }
 
     private static final int CR_MAX_TRIES = 10;
     private static final int CR_RECOVERY_TYPE_NONE = 0;
@@ -1479,16 +1539,20 @@ try {
                                 // Enforce sync if mode is 1:1 (handles fastVsync internally)
                                 if (isOneToOneMode) {
                                     long now = System.nanoTime();
-                                    if (nextPacingDeadlineNs == 0) nextPacingDeadlineNs = now;
+
+                                    if (nextPacingDeadlineNs == 0) {
+                                        nextPacingDeadlineNs = now;
+                                    }
 
                                     long timeUntilDeadline = nextPacingDeadlineNs - now;
                                     if (timeUntilDeadline > 0) {
                                         LockSupport.parkNanos(timeUntilDeadline);
                                     } else {
-                                        // Missed deadline, reset to prevent drift
+                                        // Hard miss → resync to now (no accumulation)
                                         nextPacingDeadlineNs = now;
                                     }
-                                    nextPacingDeadlineNs += (1000000000L / refreshRate);
+
+                                    nextPacingDeadlineNs += (1_000_000_000L / refreshRate);
                                 }
 
                                 // --- Present Policy ---
@@ -1767,6 +1831,9 @@ try {
         // Reset input buffer state to avoid stale state on next start
         resetInputBufferState();
 
+        // Reset NanoPacer
+        resetNanoPacerState();
+
         // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
         try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
         glUpscaler = null;
@@ -1816,6 +1883,9 @@ try {
 
         // Reset input buffer state to avoid stale state on next start
         resetInputBufferState();
+
+        // Reset NanoPacer
+        resetNanoPacerState();
 
         // Wait for the Choreographer looper to shut down (if we have one)
         if (choreographerHandlerThread != null) {
@@ -1871,6 +1941,9 @@ try {
 
         // Reset input buffer state to avoid stale state on next start
         resetInputBufferState();
+
+        // Reset NanoPacer
+        resetNanoPacerState();
 
         // Clear output buffer queue
         outputBufferQueue.clear();
