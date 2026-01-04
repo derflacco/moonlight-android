@@ -282,8 +282,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int PACE_STABILITY_THRESHOLD = 6;
     private static final float TOLERANCE_PERCENT = 0.15f;
     private static final float EMA_ALPHA = 0.2f;
-    private static final long MIN_EVALUATION_INTERVAL_NS = 5_000_000L; // 5ms
-
     private final Object pacingLock = new Object();
 
     private long nextPacingDeadlineNs = 0;
@@ -309,9 +307,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 return;
             }
 
-            // Throttle evaluation rate (5ms minimum)
+// Throttle evaluation rate (adaptive, tied to target interval)
             long nowNs = System.nanoTime();
-            if (nowNs - lastEvaluationNs < MIN_EVALUATION_INTERVAL_NS) {
+
+            int rateToCheck = getCheckedRate();
+            long targetIntervalNs = 1_000_000_000L / rateToCheck;
+
+// Evaluate at most twice per frame interval
+            long minEvalIntervalNs = targetIntervalNs / 2;
+
+            if (lastEvaluationNs != 0 && (nowNs - lastEvaluationNs) < minEvalIntervalNs) {
                 return;
             }
             lastEvaluationNs = nowNs;
@@ -325,10 +330,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Calculate real frame interval
             long intervalNs = nowNs - lastFrameTimeNs;
             lastFrameTimeNs = nowNs;
-
-            // Skip dropped frame outliers
-            int rateToCheck = getCheckedRate();
-            long targetIntervalNs = 1_000_000_000L / rateToCheck;
 
             if (intervalNs > targetIntervalNs * 2.5f) {
                 return; // Likely a dropped frame, ignore
@@ -366,6 +367,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (isOneToOneMode && unstableCounter >= PACE_STABILITY_THRESHOLD) {
                 isOneToOneMode = false;
                 unstableCounter = 0;
+                nextPacingDeadlineNs = 0;
                 LimeLog.info("Nano-Pacer: 1:1 pacing disabled");
             }
         }
@@ -3320,7 +3322,9 @@ try {
         if (isFsrActive) {
             glyph.append('U');
         }
-
+        if (p.fastVsync) {
+            glyph.append('V');
+        }
         return glyph.toString();
     }
 
