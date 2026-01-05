@@ -198,21 +198,8 @@ public class StreamSettings extends AppCompatActivity {
                             (sp.contains("pref_hdr_enable") && sp.getBoolean("pref_hdr_enable", false)) ||
                             (sp.contains("pref_hdr_pipeline_enable") && sp.getBoolean("pref_hdr_pipeline_enable", false));
 
-            // Leggi l'impostazione Vsync
-            boolean enableVsync = sp.getBoolean("checkbox_enable_vsync", false);
-
-            // Forza frame pacing in base a Vsync
-            String forcedPacing;
-            if (enableVsync) {
-                forcedPacing = "balanced"; // Forza balanced se Vsync è abilitato
-            } else {
-                forcedPacing = "gpu-raw"; // Altrimenti forza sempre gpu-raw
-            }
-
-            // Applica il frame pacing forzato
-            if (!sp.getString("frame_pacing", "latency").equals(forcedPacing)) {
-                sp.edit().putString("frame_pacing", forcedPacing).apply();
-            }
+            // Do not force "frame_pacing" from the UI layer.
+            // Frame pacing must remain user-controlled and be applied by the streaming session.
 
             // LFR preference
             boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
@@ -955,15 +942,7 @@ public class StreamSettings extends AppCompatActivity {
                     screen.removePreference(category);
                 }
             }
-            // --- HIDE FRAME PACING ---
-            PreferenceCategory categoryVideo = (PreferenceCategory) findPreference("category_video_settings");
-            if (categoryVideo != null) {
-                Preference framePacingPref = findPreference("frame_pacing");
-                if (framePacingPref != null) {
-                    // Rimuovi completamente dalla UI
-                    categoryVideo.removePreference(framePacingPref);
-                }
-            }
+
             // Hide remote desktop mouse mode on pre-Oreo (which doesn't have pointer capture)
             // and NVIDIA SHIELD devices (which support raw mouse input in pointer capture mode)
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
