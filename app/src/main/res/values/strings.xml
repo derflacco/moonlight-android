@@ -785,4 +785,15 @@
     <!-- Immediate Frame Delivery -->
     <string name="immediate_frame_delivery_title">Immediate Frame Delivery</string>
     <string name="immediate_frame_delivery_summary">Skip decoder wait for lower latency (may increase power consumption)</string>
+    <!-- Decoder dequeue and drain  -->
+    <string name="decoder_output_dequeue_timeout_title">Decoder output dequeue timeout</string>
+    <string name="decoder_output_dequeue_timeout_summary">MediaCodec output dequeue timeout (µs) when Immediate frame delivery is OFF.</string>
+    <string name="decoder_output_dequeue_timeout_dialog">Sets MediaCodec output dequeue timeout in microseconds. Lower can reduce latency but increases CPU usage.</string>
+
+    <string name="decoder_output_drain_timeout_title">Decoder output drain timeout</string>
+    <string name="decoder_output_drain_timeout_summary">Timeout (µs) used in the latest-only drain loop. 0 = non-blocking.</string>
+    <string name="decoder_output_drain_timeout_dialog">Sets the timeout used while draining additional output buffers. Non-zero values can increase latency.</string>
+
+    <string name="unit_microseconds">µs</string>
+
 </resources>
