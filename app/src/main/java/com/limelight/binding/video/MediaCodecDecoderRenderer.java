@@ -27,6 +27,9 @@ import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
+import androidx.preference.PreferenceManager;
+import com.limelight.profiles.ProfilesManager;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
@@ -480,6 +483,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int lastFrameNumber;
     private int refreshRate;
     private PreferenceConfiguration prefs;
+    // ---- Runtime frame pacing refresh (overlay-first, UI fallback) ----
+    private static final long FRAME_PACING_POLL_INTERVAL_NS = 250_000_000L; // 250 ms
+    private long nextFramePacingPollNs = 0L;
+    private int appliedFramePacing = Integer.MIN_VALUE;
 
     private float minDecodeTime = Float.MAX_VALUE;
     private String minDecodeTimeFullLog = "";
@@ -1477,16 +1484,21 @@ try {
 
     private void startChoreographerThread() {
         if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            // Not using Choreographer in this pacing mode
             return;
         }
 
-        // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE);
-        choreographerHandlerThread.start();
+        // Create the thread once; re-post callbacks on re-entry to Balanced.
+        if (choreographerHandlerThread == null) {
+            choreographerHandlerThread = new HandlerThread(
+                    "Video - Choreographer",
+                    Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE
+            );
+            choreographerHandlerThread.start();
+            choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
+        } else if (choreographerHandler == null) {
+            choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
+        }
 
-        // Start the frame callbacks
-        choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
         choreographerHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -1494,6 +1506,7 @@ try {
             }
         });
     }
+
 
     private void startRendererThread() {
         rendererThread = new Thread() {
@@ -1503,16 +1516,20 @@ try {
                 final android.media.MediaCodec.BufferInfo lfrInfo =
                         new android.media.MediaCodec.BufferInfo();
 
-                // Timeout: 0 for immediate delivery, otherwise a small wait to reduce busy looping
-                final int decodeTimeout = prefs.immediateFrameDelivery ? 0 : 50000;
-
                 // Cleanup throttling to avoid GC spikes
                 long lastCleanupNs = System.nanoTime();
                 final long CLEANUP_INTERVAL_NS = 1_000_000_000L; // 1 second
 
                 while (!stopping) {
+
+                    // Apply settings changes while streaming (frame pacing hot-reload)
+                    maybeApplyRuntimeFramePacing();
+
+                    // Timeout: 0 for immediate delivery, otherwise a small wait to reduce busy looping
+                    final int decodeTimeout = (prefs != null && prefs.immediateFrameDelivery) ? 0 : 50000;
+
                     // Throttle cleanup to avoid performance spikes
-                    long nowNs = System.nanoTime();
+                    final long nowNs = System.nanoTime();
                     if (nowNs - lastCleanupNs > CLEANUP_INTERVAL_NS) {
                         cleanupOldLatencyTrackingEntries();
                         lastCleanupNs = nowNs;
@@ -1793,7 +1810,8 @@ try {
             }
         }
 
-
+        // Ensure initial frame pacing reflects settings (overlay-first, UI fallback)
+        initFramePacingFromSettings();
         startRendererThread();
         startChoreographerThread();
     }
@@ -1864,6 +1882,111 @@ try {
             });
         }
     }
+
+    private static int mapFramePacingNameToMode(String v) {
+        if (v == null) return PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
+
+        if ("latency".equals(v)) return PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
+        if ("balanced".equals(v)) return PreferenceConfiguration.FRAME_PACING_BALANCED;
+        if ("cap-fps".equals(v)) return PreferenceConfiguration.FRAME_PACING_CAP_FPS;
+        if ("smoothness".equals(v)) return PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
+        if ("gpu-raw".equals(v)) return PreferenceConfiguration.FRAME_PACING_GPU_RAW;
+        if ("warp".equals(v)) return PreferenceConfiguration.FRAME_PACING_WARP;
+        if ("warp2".equals(v)) return PreferenceConfiguration.FRAME_PACING_WARP2;
+
+        return PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
+    }
+
+    private String readFramePacingNameOverlayFirst() {
+        try {
+            final SharedPreferences overlay = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+            if (overlay != null && overlay.contains("frame_pacing")) {
+                final String v = overlay.getString("frame_pacing", "latency");
+                if (v != null) return v;
+            }
+
+            final SharedPreferences ui = PreferenceManager.getDefaultSharedPreferences(context);
+            final String v2 = (ui != null) ? ui.getString("frame_pacing", "latency") : "latency";
+            return (v2 != null) ? v2 : "latency";
+        } catch (Throwable ignored) {
+            return "latency";
+        }
+    }
+
+    private int readFramePacingModeOverlayFirst() {
+        return mapFramePacingNameToMode(readFramePacingNameOverlayFirst());
+    }
+
+    private void drainOutputBufferQueueNoRender() {
+        Integer idx;
+        while ((idx = outputBufferQueue.poll()) != null) {
+            try {
+                if (videoDecoder != null) {
+                    videoDecoder.releaseOutputBuffer(idx, false);
+                }
+            } catch (Throwable ignored) { }
+        }
+    }
+
+    private void applyFramePacingTransition(int oldPacing, int newPacing) {
+        if (prefs != null) {
+            prefs.framePacing = newPacing;
+        }
+
+        // Leaving Balanced: release queued buffers immediately.
+        if (oldPacing == PreferenceConfiguration.FRAME_PACING_BALANCED
+                && newPacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            drainOutputBufferQueueNoRender();
+            lastRenderedFrameTimeNanos = 0L;
+        }
+
+        // Entering Balanced: ensure queue is clean and Choreographer is running.
+        if (newPacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            outputBufferQueue.clear();
+            lastRenderedFrameTimeNanos = 0L;
+            startChoreographerThread();
+        }
+
+        // Reset pacing state so deadlines/counters don't carry across modes.
+        resetNanoPacerState();
+    }
+
+    private void initFramePacingFromSettings() {
+        final int selected = readFramePacingModeOverlayFirst();
+
+        // Respect the existing Vsync override policy (if prefs already forced Balanced).
+        final int effective = (prefs != null && prefs.enableVsync)
+                ? PreferenceConfiguration.FRAME_PACING_BALANCED
+                : selected;
+
+        appliedFramePacing = effective;
+        nextFramePacingPollNs = 0L;
+
+        if (prefs != null) {
+            prefs.framePacing = effective;
+        }
+    }
+
+    private void maybeApplyRuntimeFramePacing() {
+        final long nowNs = System.nanoTime();
+        if (nowNs < nextFramePacingPollNs) {
+            return;
+        }
+        nextFramePacingPollNs = nowNs + FRAME_PACING_POLL_INTERVAL_NS;
+
+        final int selected = readFramePacingModeOverlayFirst();
+        final int effective = (prefs != null && prefs.enableVsync)
+                ? PreferenceConfiguration.FRAME_PACING_BALANCED
+                : selected;
+
+        if (effective == appliedFramePacing) {
+            return;
+        }
+
+        applyFramePacingTransition(appliedFramePacing, effective);
+        appliedFramePacing = effective;
+    }
+
 
     @Override
     public void stop() {

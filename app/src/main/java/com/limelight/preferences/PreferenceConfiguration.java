@@ -8,6 +8,7 @@ import android.view.Display;
 
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.profiles.ProfilesManager;
+import androidx.preference.PreferenceManager;
 
 public class PreferenceConfiguration {
      // Snappy Input
@@ -666,49 +667,83 @@ public class PreferenceConfiguration {
         }
     }
 
+    private static SharedPreferences getUiSharedPreferences(Context context) {
+        return PreferenceManager.getDefaultSharedPreferences(context);
+    }
+
+    private static String getStringPrefOverlayFirst(Context context, String key, String def) {
+        final SharedPreferences overlay = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        if (overlay != null && overlay.contains(key)) {
+            return overlay.getString(key, def);
+        }
+
+        final SharedPreferences ui = getUiSharedPreferences(context);
+        return ui.getString(key, def);
+    }
+
+    private static boolean getBooleanPrefOverlayFirst(Context context, String key, boolean def) {
+        final SharedPreferences overlay = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        if (overlay != null && overlay.contains(key)) {
+            return overlay.getBoolean(key, def);
+        }
+
+        final SharedPreferences ui = getUiSharedPreferences(context);
+        return ui.getBoolean(key, def);
+    }
+
     public static String getSelectedFramePacingName(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
-        return prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
+        return getStringPrefOverlayFirst(context, FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
     }
 
 
 
-private static int getFramePacingValue(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
 
-        // Migrate legacy never drop frames option to the new location
-        if (prefs.contains(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)) {
-            boolean legacyNeverDropFrames = prefs.getBoolean(LEGACY_DISABLE_FRAME_DROP_PREF_STRING, false);
-            prefs.edit()
+
+    private static int getFramePacingValue(Context context) {
+        final SharedPreferences overlay = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        final SharedPreferences ui = getUiSharedPreferences(context);
+
+        // Migrate legacy never drop frames option in the store where it exists.
+        if (overlay != null && overlay.contains(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)) {
+            boolean legacyNeverDropFrames = overlay.getBoolean(LEGACY_DISABLE_FRAME_DROP_PREF_STRING, false);
+            overlay.edit()
+                    .remove(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)
+                    .putString(FRAME_PACING_PREF_STRING, legacyNeverDropFrames ? "balanced" : "latency")
+                    .apply();
+        } else if (ui != null && ui.contains(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)) {
+            boolean legacyNeverDropFrames = ui.getBoolean(LEGACY_DISABLE_FRAME_DROP_PREF_STRING, false);
+            ui.edit()
                     .remove(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)
                     .putString(FRAME_PACING_PREF_STRING, legacyNeverDropFrames ? "balanced" : "latency")
                     .apply();
         }
 
-        String str = prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
-        if (str.equals("latency")) {
+        // Overlay has priority; fallback to UI prefs if overlay doesn't define the key.
+        SharedPreferences src = overlay;
+        if ((src == null || !src.contains(FRAME_PACING_PREF_STRING))
+                && ui != null && ui.contains(FRAME_PACING_PREF_STRING)) {
+            src = ui;
+        }
+
+        final String str = (src != null)
+                ? src.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING)
+                : DEFAULT_FRAME_PACING;
+
+        if ("latency".equals(str)) {
             return FRAME_PACING_MIN_LATENCY;
-        }
-        else if (str.equals("balanced")) {
+        } else if ("balanced".equals(str)) {
             return FRAME_PACING_BALANCED;
-        }
-        else if (str.equals("cap-fps")) {
+        } else if ("cap-fps".equals(str)) {
             return FRAME_PACING_CAP_FPS;
-        }
-        else if (str.equals("smoothness")) {
+        } else if ("smoothness".equals(str)) {
             return FRAME_PACING_MAX_SMOOTHNESS;
-        }
-        else if (str.equals("gpu-raw")) {
+        } else if ("gpu-raw".equals(str)) {
             return FRAME_PACING_GPU_RAW;
-        }
-        else if (str.equals("warp")) {
-                return FRAME_PACING_WARP;
-        }
-        else if (str.equals("warp2")) {
+        } else if ("warp".equals(str)) {
+            return FRAME_PACING_WARP;
+        } else if ("warp2".equals(str)) {
             return FRAME_PACING_WARP2;
-        }
-        else {
-            // Should never get here
+        } else {
             return FRAME_PACING_MIN_LATENCY;
         }
     }
@@ -1110,7 +1145,8 @@ private static int getFramePacingValue(Context context) {
             config.gpuPathMode = false;
         }
         // Leggi l'impostazione Vsync
-        config.enableVsync = prefs.getBoolean(PREF_VSYNC, false);
+        config.enableVsync = getBooleanPrefOverlayFirst(context, PREF_VSYNC, false);
+
 
         // Se Vsync è abilitato, forza il frame pacing a balanced
         if (config.enableVsync) {
