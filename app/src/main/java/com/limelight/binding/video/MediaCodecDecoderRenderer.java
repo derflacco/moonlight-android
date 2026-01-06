@@ -3251,9 +3251,10 @@ try {
                 // Single compact token: [R|L|B|S|C|W|2] + optional [U] per FSR + optional [F] per GPU Path
                 boolean isFsrActive = prefsSnapshot.videoUpscaleEnable && glUpscaler != null;
                 sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
-                if (prefsSnapshot.gpuPathMode) {
+                //not needed in this branch, we are forcing it anyway
+/*                if (prefsSnapshot.gpuPathMode) {
                     sb.append('G');
-                }
+                }*/
             }
 
 
