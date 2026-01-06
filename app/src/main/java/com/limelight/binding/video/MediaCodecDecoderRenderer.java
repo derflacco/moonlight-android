@@ -1857,7 +1857,7 @@ try {
         final long startNs = System.nanoTime();
         boolean codecRecovered;
 
-        //Check stopping first to avoid false "Hung" exceptions during shutdown
+        // Check stopping first to avoid false "Hung" exceptions during shutdown
         if (stopping) {
             return false;
         }
@@ -1868,16 +1868,44 @@ try {
         }
 
         try {
+            int dequeueTimeoutUs;
+
+            final float wantedFps =
+                    (streamTargetFps > 0f)
+                            ? streamTargetFps
+                            : ((prefs != null && prefs.fps > 0f) ? prefs.fps : 60f);
+
+            // Consider 1:1 scenario and vsync alignment
+            if (isOneToOneMode && !preferLowerDelays && !prefs.immediateFrameDelivery) {
+                // Timeout più lungo per scenari 1:1 con allineamento vsync
+                dequeueTimeoutUs = 4_000;
+            }
+            else if (prefs.immediateFrameDelivery) {
+                dequeueTimeoutUs = 0;
+            } else if (wantedFps >= 90f) {
+                // High FPS
+                dequeueTimeoutUs = 2_000;
+            } else {
+                // 60 Hz / Default
+                dequeueTimeoutUs = 3_000;
+            }
+
             // If we don't have an input buffer index yet, fetch one now
             if (nextInputBufferIndex < 0 && !stopping) {
                 final long t0 = System.nanoTime();
-                nextInputBufferIndex = nextInputIndex(4000);
+                nextInputBufferIndex = nextInputIndex(dequeueTimeoutUs);
                 final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
 
-                // Single quick retry if unavailable
-                if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    final int remainingUs = Math.max(0, 4000 - (int) elapsedUs);
-                    final int quickBackoffUs = Math.min(remainingUs, 1000);
+                // Log per scenari 1:1 lenti
+                if (isOneToOneMode && elapsedUs > 2000) {
+                    LimeLog.warning("Input dequeue slow in 1:1: " + elapsedUs + "μs");
+                }
+
+                // Single quick retry
+                if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER && !preferLowerDelays) {
+                    final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
+                    final int quickBackoffUs = Math.min(remainingUs, 1_000);
+
                     if (quickBackoffUs > 0) {
                         nextInputBufferIndex = nextInputIndex(quickBackoffUs);
                     }
@@ -1890,8 +1918,7 @@ try {
                 inputTryAgainStreak = 0;
                 inputDequeueHangStartMs = 0L;
 
-                // Using the new getInputBuffer() API on Lollipop allows
-                // the framework to do some performance optimizations for us
+                // Using the new getInputBuffer() API on Lollipop
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
@@ -1936,7 +1963,7 @@ try {
             return false;
         }
 
-        // Hung detection - check if we're still waiting after attempts
+        // --- HUNG DETECTION + ULL BACKOFF ---
         if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
             inputTryAgainStreak++;
             final long nowMs = SystemClock.uptimeMillis();
@@ -1954,12 +1981,24 @@ try {
                 throw new RendererException(this, decoderHungException);
             }
 
+            // --- LOGICA BACKOFF PER ULL ---
+            // Se siamo in modalità preferLowerDelays (timeout 0), evitiamo il busy-spin
+            if (preferLowerDelays && prefs.immediateFrameDelivery) {
+                if (inputTryAgainStreak >= 256) {
+                    LockSupport.parkNanos(500_000L); // 0.5 ms
+                } else if (inputTryAgainStreak >= 32) {
+                    LockSupport.parkNanos(200_000L); // 0.2 ms
+                } else {
+                    Thread.yield();
+                }
+            }
+
             return false;
         }
 
         // Log long dequeues (>20ms)
         final long dtNs = System.nanoTime() - startNs;
-        if (dtNs >= 20_000_000L) { // 20 ms
+        if (dtNs >= 20_000_000L) {
             LimeLog.warning("Dequeue input buffer ran long: " + (dtNs / 1_000_000L) + " ms");
         }
 
