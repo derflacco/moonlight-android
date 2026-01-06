@@ -1136,7 +1136,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         coldCfg.ppsBuffers.clear();
 
 // Clear decode latency tracking when decoder is reconfigured
-        enqueueNsByPtsUs.clear();
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
+        }
         csdDirty = false;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -1349,7 +1351,9 @@ try {
                     asyncOutInfo.clear();
                 }
                 // Clear decode latency tracking during codec recovery
-                enqueueNsByPtsUs.clear();
+                synchronized (enqueueNsLock) {
+                    enqueueNsByPtsUs.clear();
+                }
                 csdDirty = false;
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
@@ -1996,7 +2000,9 @@ try {
         outputBufferQueue.clear();
 
         // Clear decode latency tracking to prevent memory leaks
-        enqueueNsByPtsUs.clear();
+        synchronized (enqueueNsLock) {
+            enqueueNsByPtsUs.clear();
+        }
 
         // Clear output buffer queue
         outputBufferQueue.clear();
