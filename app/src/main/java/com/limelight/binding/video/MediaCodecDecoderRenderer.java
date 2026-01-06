@@ -1871,7 +1871,7 @@ try {
 
         try {
             // If we don't have an input buffer index yet, fetch one now
-            if (nextInputBufferIndex < 0 && !stopping) {
+            if (nextInputBuffer == null && nextInputBufferIndex < 0 && !stopping) {
                 final long t0 = System.nanoTime();
                 nextInputBufferIndex = nextInputIndex(dequeueTimeoutUs);
                 final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
@@ -2328,14 +2328,12 @@ try {
             nextInputBuffer = null;
         } catch (IllegalStateException e) {
             if (handleDecoderException(e)) {
-                // We encountered a transient error. In this case, just hold onto the buffer
-                // (to avoid leaking it), clear it, and keep it for the next frame. We'll return
-                // false to trigger an IDR frame to recover.
-                nextInputBuffer.clear();
-            }
-            else {
-                // We encountered a non-transient error. In this case, we will simply leak the
-                // buffer because we cannot be sure we will ever succeed in queuing it.
+                // Transient error: keep the buffer to avoid leaking it, and clear it for reuse.
+                if (nextInputBuffer != null) {
+                    nextInputBuffer.clear();
+                }
+            } else {
+                // Non-transient error: discard state; we can't reliably queue this buffer anymore.
                 nextInputBufferIndex = -1;
                 nextInputBuffer = null;
             }
@@ -2344,19 +2342,18 @@ try {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
 
-        // If codec recovery is required, always return false to ensure the caller will request
-        // an IDR frame to complete the codec recovery.
+        // If codec recovery is required, always return false to ensure the caller will request an IDR.
         if (codecRecovered) {
             return false;
         }
 
-        // Fetch a new input buffer now while we have some time between frames
-        // to have it ready immediately when the next frame arrives.
-        //
-        // We must propagate the return value here in order to properly handle
-        // codec recovery happening in fetchNextInputBuffer(). If we don't, we'll
-        // never get an IDR frame to complete the recovery process.
-        return prefetchNextInputBuffer();
+        // Best-effort prefetch: ok if no buffer is available yet.
+        // Only propagate "false" to trigger IDR/recovery when needed.
+        if (!prefetchNextInputBuffer()) {
+            return false;
+        }
+
+        return true;
     }
 
     private void doProfileSpecificSpsPatching(SeqParameterSet sps) {
