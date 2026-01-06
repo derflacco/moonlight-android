@@ -273,50 +273,51 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Main render loop ======
     private void renderLoop() {
         while (running.get()) {
+            // quick skip if EGL lost
             if (!isGlReady()) {
-                synchronized (this) {
-                    initEglAndGl();
-                }
+                synchronized (this) { initEglAndGl(); }
+                if (!isGlReady()) continue;
             }
-            if (!isGlReady()) continue;
-            boolean newFrameAvailable = false;
+
+            boolean newFrame = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
-                    try { frameLock.wait(33); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    try { frameLock.wait(25); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
                 }
-                newFrameAvailable = frameAvailable;
+                newFrame = frameAvailable;
                 frameAvailable = false;
             }
-            if (!isGlReady()) continue;
-            if (EGL14.eglGetCurrentContext() != eglContext ||
-                    EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
+
+            // only rebind context if EGL lost (prevents redundant eglMakeCurrent calls)
+            if (EGL14.eglGetCurrentContext() != eglContext) {
                 EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
             }
 
             boolean didUpdateTex = false;
             try {
-                if (decoderSurfaceTex != null && newFrameAvailable) {
-                    // Clear errors before updateTexImage
+                if (decoderSurfaceTex != null && newFrame) {
                     clearGlErrors();
                     decoderSurfaceTex.updateTexImage();
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
                     didUpdateTex = true;
                 }
-            } catch (Throwable t) { /* ignore */ }
-
-            long __now = System.nanoTime();
-            if (fbW <= 0 || (__now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
-                int oldFbW = fbW, oldFbH = fbH;
-                refreshWindowSize();
-                if (fbW != oldFbW || fbH != oldFbH) {
-                    sizeChangedSinceLastSwap = true;
-                }
-                lastSizeQueryNs = __now;
+            } catch (Throwable t) {
+                // prevent SurfaceTexture crash loop
+                LimeLog.warning("updateTexImage failed: " + t);
             }
-            if (fbW <= 0 || fbH <= 0) continue;
+
+            // window refresh only every ~0.5s
+            long now = System.nanoTime();
+            if (fbW <= 0 || (now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
+                int prevW = fbW, prevH = fbH;
+                refreshWindowSize();
+                if (fbW != prevW || fbH != prevH) sizeChangedSinceLastSwap = true;
+                lastSizeQueryNs = now;
+            }
 
             if (fbW <= 0 || fbH <= 0) continue;
 
+            // ensure viewport only when changed
             ensureViewport(fbW, fbH);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
@@ -434,17 +435,25 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void swapAndContinue() {
-        try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) {}
-        boolean __swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
-        if (!__swapped) {
+        try {
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime());
+        } catch (Throwable ignored) {}
+
+        boolean ok = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+        if (!ok) {
             int err = EGL14.eglGetError();
-            try { com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " (streak=" + swapFailStreak + ")"); } catch (Throwable ignored) {}
             swapFailStreak++;
-            if (windowSurfaceInput == null || !windowSurfaceInput.isValid() || swapFailStreak >= 8) {
-                running.set(false);
+            LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " streak=" + swapFailStreak);
+
+            if (swapFailStreak >= 6) {
+                LimeLog.warning("FSR: EGL surface unstable, reinitializing");
+                destroyGl();
+                destroyEgl();
+                initEglAndGl();
+                swapFailStreak = 0;
             }
         } else {
-            if (swapFailStreak != 0) swapFailStreak = 0;
+            swapFailStreak = 0;
         }
     }
 
@@ -608,9 +617,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void ensureViewport(int w, int h) {
+        if (w <= 0 || h <= 0) return;
         if (w != curVpW || h != curVpH) {
             GLES20.glViewport(0, 0, w, h);
-            curVpW = w; curVpH = h;
+            curVpW = w;
+            curVpH = h;
         }
     }
 
@@ -671,29 +682,51 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             try {
                 eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
+                if (eglDisplay == EGL14.EGL_NO_DISPLAY)
+                    throw new RuntimeException("No EGL display");
+
                 int[] v = new int[2];
-                if (!EGL14.eglInitialize(eglDisplay, v, 0, v, 1)) throw new RuntimeException("eglInitialize failed");
+                if (!EGL14.eglInitialize(eglDisplay, v, 0, v, 1))
+                    throw new RuntimeException("eglInitialize failed");
+
+                // prefer ES3 config if possible, fallback to ES2
+                final int EGL_OPENGL_ES3_BIT_KHR = 0x00000040; // from EGL/eglplatform.h
+                int renderableType = EGL_OPENGL_ES3_BIT_KHR;
                 int[] cfg = {
-                        EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT | 4 /* ES3 */,
-                        EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
+                        EGL14.EGL_RENDERABLE_TYPE, renderableType,
+                        EGL14.EGL_RED_SIZE, 8,
+                        EGL14.EGL_GREEN_SIZE, 8,
+                        EGL14.EGL_BLUE_SIZE, 8,
+                        EGL14.EGL_ALPHA_SIZE, 8,
                         EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
                         EGL14.EGL_NONE
                 };
+
                 EGLConfig[] out = new EGLConfig[1];
                 int[] num = new int[1];
-                if (!EGL14.eglChooseConfig(eglDisplay, cfg, 0, out, 0, 1, num, 0)) throw new RuntimeException("eglChooseConfig failed");
+                if (!EGL14.eglChooseConfig(eglDisplay, cfg, 0, out, 0, 1, num, 0) || num[0] <= 0)
+                    throw new RuntimeException("eglChooseConfig failed");
+
                 EGLConfig eglConfig = out[0];
+
                 int[] ctx = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE};
                 eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, ctx, 0);
+                if (eglContext == null || eglContext == EGL14.EGL_NO_CONTEXT)
+                    throw new RuntimeException("eglCreateContext failed");
+
                 int[] sattr = {EGL14.EGL_NONE};
                 eglWindowSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, windowSurfaceInput, sattr, 0);
-                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+                if (eglWindowSurface == null || eglWindowSurface == EGL14.EGL_NO_SURFACE)
+                    throw new RuntimeException("eglCreateWindowSurface failed");
+
+                if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext))
+                    throw new RuntimeException("eglMakeCurrent failed");
+
             } catch (Throwable t) {
                 LimeLog.warning("GL init failed: " + t);
                 destroyEgl();
                 return;
             }
-
             float[] POS = {-1,-1, 1,-1, -1,1, 1,1};
             float[] UV  = { 0, 0, 1, 0,  0,1, 1,1};
             quadPos = ByteBuffer.allocateDirect(POS.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
@@ -768,16 +801,20 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         try {
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+                if (eglWindowSurface != EGL14.EGL_NO_SURFACE)
+                    EGL14.eglDestroySurface(eglDisplay, eglWindowSurface);
+                if (eglContext != EGL14.EGL_NO_CONTEXT)
+                    EGL14.eglDestroyContext(eglDisplay, eglContext);
+                EGL14.eglTerminate(eglDisplay);
             }
-            if (eglWindowSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglWindowSurface);
-            if (eglContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(eglDisplay, eglContext);
-            EGL14.eglTerminate(eglDisplay);
-        } catch (Throwable ignored) {}
-        eglDisplay = EGL14.EGL_NO_DISPLAY;
-        eglContext = EGL14.EGL_NO_CONTEXT;
-        eglWindowSurface = EGL14.EGL_NO_SURFACE;
+        } catch (Throwable t) {
+            LimeLog.warning("EGL destroy failed: " + t);
+        } finally {
+            eglDisplay = EGL14.EGL_NO_DISPLAY;
+            eglContext = EGL14.EGL_NO_CONTEXT;
+            eglWindowSurface = EGL14.EGL_NO_SURFACE;
+        }
     }
-
     private void bindQuad(int prog) {
         if (hasVao && vao != 0) {
             try { GLES30.glBindVertexArray(vao); return; } catch (Throwable ignored) { /* fallback */ }
