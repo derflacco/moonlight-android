@@ -1894,6 +1894,7 @@ try {
                     if (dequeueTimeoutUs == 0) {
                         // Non-blocking path: avoid busy spin
                         inputNonBlockingBackoff();
+                        // Keep TRY_AGAIN so hung detection can track prolonged starvation.
                     } else {
                         // Blocking path: allow a single quick retry if budget remains
                         final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
@@ -1958,7 +1959,7 @@ try {
             return false;
         }
 
-        // Hung detection - check if we're still waiting after attempts
+// Hung detection - check if we're still waiting after attempts
         if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
             inputTryAgainStreak++;
             final long nowMs = SystemClock.uptimeMillis();
@@ -1974,6 +1975,9 @@ try {
                 }
                 throw new RendererException(this, decoderHungException);
             }
+
+            // Reset only after hung tracking
+            nextInputBufferIndex = -1;
 
             return false;
         }
