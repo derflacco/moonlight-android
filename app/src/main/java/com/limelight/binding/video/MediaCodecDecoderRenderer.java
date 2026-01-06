@@ -3623,31 +3623,35 @@ try {
     }
     // Async Decoding Helpers End
 
-// Lite pacing glyph
+    // Lite pacing glyph
     private static String getLitePacingGlyph(final PreferenceConfiguration p, final boolean isFsrActive) {
         if (p == null) {
             return "?";
         }
 
-        StringBuilder glyph = new StringBuilder(2);
+        StringBuilder glyph = new StringBuilder(3);
 
-        // GpuRaw
+        // GPU Raw
         if (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
             glyph.append('R');
         }
-        // Latency
+        // Min Latency
         else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) {
             glyph.append('L');
         }
+        // Balanced
         else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
             glyph.append('B');
         }
+        // Smoothness
         else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
             glyph.append('S');
         }
+        // FPS Cap
         else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
             glyph.append('C');
         }
+        // Warp modes
         else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP) {
             glyph.append('W');
         }
@@ -3658,15 +3662,24 @@ try {
             glyph.append('?');
         }
 
-        // Aggiungi 'U' se FSR è attivo
+        // Add 'U' if FSR is active
         if (isFsrActive) {
             glyph.append('U');
         }
-        if (p.fastVsync) {
+
+        // Add 'V' if standard VSync is enabled
+        if (p.enableVsync) {
             glyph.append('V');
         }
+
+        // Add 'F' if FastVSync is enabled
+        if (p.fastVsync) {
+            glyph.append('F');
+        }
+
         return glyph.toString();
     }
+
 
     // Helper method for buffer release based on mode
     private void releaseBufferAccordingToMode(int bufferIndex, long presentationTimeUs) {
