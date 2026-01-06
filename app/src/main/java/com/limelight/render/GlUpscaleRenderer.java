@@ -226,6 +226,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         decoderSurfaceTex.setOnFrameAvailableListener(this);
         decoderInputSurface = new Surface(decoderSurfaceTex);
+        // Reset GL trackers — new SurfaceTexture means new OES texture binding
+        lastTexture = -1;
+        lastProgram = -1;
         return decoderInputSurface;
     }
 
@@ -282,12 +285,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 synchronized (this) { initEglAndGl(); }
                 if (!isGlReady()) continue;
             }
-
+// Ensure EGL context is current (protect against invalid surface reattach)
+            if (EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
+                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+            }
             boolean newFrame = false;
             synchronized (frameLock) {
-            // Wait only when necessary to avoid CPU wakeups
                 if (!frameAvailable) {
-                    try { frameLock.wait(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    try {
+                        // Wait at most ~33ms (≈30fps) to prevent ANR if decoder stalls
+                        frameLock.wait(33);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
                 newFrame = frameAvailable;
                 frameAvailable = false;
@@ -307,8 +317,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     didUpdateTex = true;
                 }
             } catch (Throwable t) {
-                // prevent SurfaceTexture crash loop
+                // Prevent SurfaceTexture crash loop if decoderSurfaceTex is invalid or detached
                 LimeLog.warning("updateTexImage failed: " + t);
+                continue; // Skip this frame safely, avoid drawing invalid texture
             }
 
             // window refresh only every ~0.5s
