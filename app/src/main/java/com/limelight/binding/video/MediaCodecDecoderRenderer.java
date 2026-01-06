@@ -3669,7 +3669,7 @@ try {
         }
 
         // Add 'V' if standard VSync is enabled
-        if (p.enableVsync) {
+        if (p.enableVsync && p.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
             glyph.append('V');
         }
 
