@@ -1862,7 +1862,7 @@ try {
             return false;
         }
 
-// Prefetched buffer fast path (validate invariant: buffer implies valid index)
+        // Prefetched buffer fast path (validate invariant: buffer implies valid index)
         if (nextInputBuffer != null) {
             if (nextInputBufferIndex >= 0) {
                 inputTryAgainStreak = 0;
@@ -1894,7 +1894,9 @@ try {
                     if (dequeueTimeoutUs == 0) {
                         // Non-blocking path: avoid busy spin
                         inputNonBlockingBackoff();
-                        // Keep TRY_AGAIN so hung detection can track prolonged starvation.
+                        // Reset to -1 so next call will retry, and avoid hung detection.
+                        nextInputBufferIndex = -1;
+                        return false;
                     } else {
                         // Blocking path: allow a single quick retry if budget remains
                         final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
@@ -1959,7 +1961,7 @@ try {
             return false;
         }
 
-// Hung detection - check if we're still waiting after attempts
+        // Hung detection - check if we're still waiting after attempts (blocking path only)
         if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
             inputTryAgainStreak++;
             final long nowMs = SystemClock.uptimeMillis();
@@ -1976,7 +1978,7 @@ try {
                 throw new RendererException(this, decoderHungException);
             }
 
-            // Reset only after hung tracking
+            // Reset for next iteration
             nextInputBufferIndex = -1;
 
             return false;
@@ -3709,9 +3711,9 @@ try {
 
         LimeLog.info("New output format: " + coldCfg.outputFormat);
     }
+
     // Non-blocking best-effort prefetch to avoid stalling the input thread.
     // Returns false only when codec recovery (or a hard decoder exception) requires the caller to request an IDR.
-
     private boolean prefetchNextInputBuffer() {
         if (stopping) {
             return false;
@@ -3733,6 +3735,7 @@ try {
                     // Avoid busy spin when no buffer is available yet.
                     inputNonBlockingBackoff();
                     // Not an error: leave state as-is and let fetch() retry when needed.
+                    return true;
                 }
             }
 
@@ -3778,10 +3781,12 @@ try {
             handleDecoderException(pendingException);
             return false;
         }
+
         // Best-effort: it's OK if no buffer is available right now.
         // The real fetchNextInputBuffer() will try again when the buffer is actually needed.
         return true;
     }
+
     // Derive input dequeue timeout from the *effective* policy, not from pacing-profile flags.
     private int getInputDequeueTimeoutUs() {
         final PreferenceConfiguration p = prefs;
