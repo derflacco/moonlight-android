@@ -2349,7 +2349,7 @@ try {
         // We must propagate the return value here in order to properly handle
         // codec recovery happening in fetchNextInputBuffer(). If we don't, we'll
         // never get an IDR frame to complete the recovery process.
-        return fetchNextInputBuffer();
+        return prefetchNextInputBuffer();
     }
 
     private void doProfileSpecificSpsPatching(SeqParameterSet sps) {
@@ -3686,6 +3686,69 @@ try {
         } catch (Throwable ignored) {}
 
         LimeLog.info("New output format: " + coldCfg.outputFormat);
+    }
+    // Non-blocking best-effort prefetch to avoid stalling the input thread.
+// Returns false only when codec recovery (or a hard decoder exception) requires the caller to request an IDR.
+    private boolean prefetchNextInputBuffer() {
+        boolean codecRecovered;
+
+        if (stopping) {
+            return false;
+        }
+
+        if (nextInputBuffer != null) {
+            return true;
+        }
+
+        try {
+            // Best-effort: never block here.
+            if (nextInputBufferIndex < 0) {
+                nextInputBufferIndex = nextInputIndex(0); // 0us = non-blocking
+            }
+
+            if (nextInputBufferIndex >= 0) {
+                // Reset tracking on success
+                inputTryAgainStreak = 0;
+                inputDequeueHangStartMs = 0L;
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                    if (nextInputBuffer == null) {
+                        final int badIndex = nextInputBufferIndex;
+                        nextInputBufferIndex = -1;
+                        nextInputBuffer = null;
+                        throw new IllegalStateException("getInputBuffer() returned null for index " + badIndex);
+                    }
+                    nextInputBuffer.clear();
+                } else {
+                    nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
+                    nextInputBuffer.clear();
+                }
+            }
+        } catch (IllegalStateException e) {
+            // Do not start hung tracking here; treat as hard decoder exception
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
+
+            handleDecoderException(e);
+            return false;
+        } finally {
+            codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+        }
+
+        if (codecRecovered) {
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
+            return false;
+        }
+
+        // Best-effort: it's OK if no buffer is available right now.
+        // The real fetchNextInputBuffer() will try again when the buffer is actually needed.
+        return true;
     }
 
 }
