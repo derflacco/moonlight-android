@@ -1169,11 +1169,14 @@ public class PreferenceConfiguration {
         } else {
             config.gpuPathMode = false;
         }
-        // Vsync
-        config.enableVsync = getBooleanPrefOverlayFirst(context, PREF_VSYNC, false);
 
- // FastVsync
-        config.fastVsync = prefs.getBoolean(PREF_FASTVSYNC, false);
+        config.enableVsync = getBooleanPrefOverlayFirst(context, PREF_VSYNC, false);
+        config.fastVsync = getBooleanPrefOverlayFirst(context, PREF_FASTVSYNC, false);
+
+// Enforce mutual exclusion
+        if (config.fastVsync && config.enableVsync) {
+            config.enableVsync = false;
+        }
 
 
         return config;
