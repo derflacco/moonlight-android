@@ -51,51 +51,143 @@ import android.os.Looper;
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
     // --- FSR-like upscaler reflection helpers (no hard dependency) ---
-    // Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
+// Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
+    private static final class UpscalerReflect {
+        private static volatile java.lang.reflect.Constructor<?> sCtor;
+        private static volatile java.lang.reflect.Method sCreateInputSurface;
+        private static volatile java.lang.reflect.Method sSetDebugEnabled;
+        private static volatile java.lang.reflect.Method sGetOverlayLine;
+        private static volatile java.lang.reflect.Method sSetPresentationHint;
+
+        private static final java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method> sNoArg =
+                new java.util.concurrent.ConcurrentHashMap<>(4);
+
+        private static java.lang.reflect.Constructor<?> ctor() throws Throwable {
+            java.lang.reflect.Constructor<?> c = sCtor;
+            if (c != null) return c;
+            synchronized (UpscalerReflect.class) {
+                c = sCtor;
+                if (c == null) {
+                    Class<?> cls = Class.forName("com.limelight.render.GlUpscaleRenderer");
+                    c = cls.getConstructor(Surface.class, int.class, int.class, PreferenceConfiguration.class);
+                    sCtor = c;
+                }
+            }
+            return c;
+        }
+
+        private static java.lang.reflect.Method noArg(Object upscaler, String name) throws Throwable {
+            java.lang.reflect.Method m = sNoArg.get(name);
+            if (m != null) return m;
+            m = upscaler.getClass().getMethod(name);
+            java.lang.reflect.Method prev = sNoArg.putIfAbsent(name, m);
+            return (prev != null) ? prev : m;
+        }
+
+        private static java.lang.reflect.Method createInputSurface(Object upscaler) throws Throwable {
+            java.lang.reflect.Method m = sCreateInputSurface;
+            if (m != null) return m;
+            synchronized (UpscalerReflect.class) {
+                m = sCreateInputSurface;
+                if (m == null) {
+                    m = upscaler.getClass().getMethod("createDecoderInputSurface");
+                    sCreateInputSurface = m;
+                }
+            }
+            return m;
+        }
+
+        private static java.lang.reflect.Method setDebugEnabled(Object upscaler) throws Throwable {
+            java.lang.reflect.Method m = sSetDebugEnabled;
+            if (m != null) return m;
+            synchronized (UpscalerReflect.class) {
+                m = sSetDebugEnabled;
+                if (m == null) {
+                    m = upscaler.getClass().getMethod("setFsrDebugEnabled", boolean.class);
+                    sSetDebugEnabled = m;
+                }
+            }
+            return m;
+        }
+
+        private static java.lang.reflect.Method getOverlayLine(Object upscaler) throws Throwable {
+            java.lang.reflect.Method m = sGetOverlayLine;
+            if (m != null) return m;
+            synchronized (UpscalerReflect.class) {
+                m = sGetOverlayLine;
+                if (m == null) {
+                    m = upscaler.getClass().getMethod("getFsrOverlayLine");
+                    sGetOverlayLine = m;
+                }
+            }
+            return m;
+        }
+
+        private static java.lang.reflect.Method setPresentationHint(Object upscaler) throws Throwable {
+            java.lang.reflect.Method m = sSetPresentationHint;
+            if (m != null) return m;
+            synchronized (UpscalerReflect.class) {
+                m = sSetPresentationHint;
+                if (m == null) {
+                    m = upscaler.getClass().getMethod(
+                            "setPresentationSizeHintFromContext",
+                            android.content.Context.class);
+                    sSetPresentationHint = m;
+                }
+            }
+            return m;
+        }
+    }
+
     private static void __fsrCall(Object upscaler, String method) {
         if (upscaler == null) return;
         try {
-            java.lang.reflect.Method m = upscaler.getClass().getMethod(method);
-            m.invoke(upscaler);
+            UpscalerReflect.noArg(upscaler, method).invoke(upscaler);
         } catch (Throwable ignored) {}
     }
+
     private static Surface __fsrCreateInputSurface(Object upscaler) {
         if (upscaler == null) return null;
         try {
-            java.lang.reflect.Method m = upscaler.getClass().getMethod("createDecoderInputSurface");
-            Object s = m.invoke(upscaler);
+            Object s = UpscalerReflect.createInputSurface(upscaler).invoke(upscaler);
             return (Surface) s;
         } catch (Throwable t) {
             return null;
         }
     }
+
     private static Object __fsrMaybeCreate(Object existing, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
         if (existing != null) return existing;
         try {
-            Class<?> cls = Class.forName("com.limelight.render.GlUpscaleRenderer");
-            java.lang.reflect.Constructor<?> c = cls.getConstructor(Surface.class, int.class, int.class, PreferenceConfiguration.class);
-            return c.newInstance(windowSurface, srcW, srcH, prefs);
+            return UpscalerReflect.ctor().newInstance(windowSurface, srcW, srcH, prefs);
         } catch (Throwable t) {
             LimeLog.warning("GL upscaler unavailable: " + t);
             return null;
         }
     }
-    // FSR overlay reflection helpers (appended)
+
     private static void __fsrSetDebugEnabled(Object upscaler, boolean enabled) {
         if (upscaler == null) return;
         try {
-            java.lang.reflect.Method m = upscaler.getClass().getMethod("setFsrDebugEnabled", boolean.class);
-            m.invoke(upscaler, enabled);
+            UpscalerReflect.setDebugEnabled(upscaler).invoke(upscaler, enabled);
         } catch (Throwable ignored) {}
     }
+
     private static String __fsrGetOverlayLine(Object upscaler) {
         if (upscaler == null) return "";
         try {
-            java.lang.reflect.Method m = upscaler.getClass().getMethod("getFsrOverlayLine");
-            Object s = m.invoke(upscaler);
+            Object s = UpscalerReflect.getOverlayLine(upscaler).invoke(upscaler);
             return (s != null) ? s.toString() : "";
         } catch (Throwable ignored) { return ""; }
     }
+
+    private static void __fsrSetPresentationHintFromContext(Object upscaler, android.content.Context ctx) {
+        if (upscaler == null || ctx == null) return;
+        try {
+            UpscalerReflect.setPresentationHint(upscaler).invoke(upscaler, ctx);
+        } catch (Throwable ignored) {}
+    }
+
     // Prefix the overlay text with a small, slowly changing number of spaces to nudge its position.
     private static String __applyLiteShift(String text, int spaces) {
         if (text == null || text.isEmpty() || spaces <= 0) return text;
@@ -1546,7 +1638,7 @@ try {
     }
 
     private void startChoreographerThread() {
-        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        if (prefs == null || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
             return;
         }
 
