@@ -1795,15 +1795,18 @@ try {
                                 }
                             } else {
                                 // Balanced: enqueue for Choreographer (bounded queue)
-                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                    // Non-blocking trimming to avoid size()/take() races
+                                while (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                    Integer old = outputBufferQueue.poll();
+                                    if (old == null) {
+                                        break;
+                                    }
                                     try {
-                                        videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
-                                    } catch (InterruptedException e) {
-                                        return;
+                                        videoDecoder.releaseOutputBuffer(old, false);
                                     } catch (Throwable ignored) { }
                                 }
 
-                                outputBufferQueue.add(lastIndex);
+                                outputBufferQueue.offer(lastIndex);
 
                                 // Measure decode latency at dequeue time
                                 try { updateDecodeLatencyStats(presentationTimeUs); }
