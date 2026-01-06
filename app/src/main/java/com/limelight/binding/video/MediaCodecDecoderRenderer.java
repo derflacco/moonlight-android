@@ -1880,10 +1880,14 @@ try {
                 // Timeout più lungo per scenari 1:1 con allineamento vsync
                 dequeueTimeoutUs = 4_000;
             }
-            else if (prefs.immediateFrameDelivery) {
-                dequeueTimeoutUs = 0;
+            else if (preferLowerDelays) {
+                if (prefs.immediateFrameDelivery) {
+                    dequeueTimeoutUs = 0;
+                } else {
+                    dequeueTimeoutUs = 2_500;
+                }
             } else if (wantedFps >= 90f) {
-                // High FPS
+                // High FPS standard
                 dequeueTimeoutUs = 2_000;
             } else {
                 // 60 Hz / Default
