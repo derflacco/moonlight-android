@@ -1597,7 +1597,12 @@ try {
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
         long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
+
+        // Use stream FPS if available, otherwise display refresh rate
+        final float streamFps = (prefs.fps > 0) ? prefs.fps : (refreshRate > 0 ? refreshRate : 60f);
+        final long expectedFrameTimeDeltaNs =
+                (long) (800_000_000.0 / Math.max(1f, streamFps)); // ~80% of stream period
+
         if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
             // Render up to one frame when in frame pacing mode.
             //
