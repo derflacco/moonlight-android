@@ -107,13 +107,14 @@
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
-        <!--GpuRaw Vsync -->
+        <!--Vsync -->
         <CheckBoxPreference
             android:key="checkbox_Vsync"
             android:title="@string/Vsync_title"
             android:summary="@string/Vsync_summary"
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
+
         <!--fastVsync -->
         <CheckBoxPreference
             android:key="checkbox_fastVsync"

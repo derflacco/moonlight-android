@@ -1106,6 +1106,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Start GL upscaler loop if present
         try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
+        // Apply user VSync setting (checkbox_Vsync)
+        try {
+            java.lang.reflect.Method m = glUpscaler.getClass().getMethod("applyVsyncSetting");
+            m.invoke(glUpscaler);
+        } catch (Throwable ignored) {
+            // Safe reflection fallback if method not available
+        }
+
         try {
             if (glUpscaler != null) {
                 boolean dbg = false;

@@ -1169,14 +1169,9 @@ public class PreferenceConfiguration {
         } else {
             config.gpuPathMode = false;
         }
-        // Leggi l'impostazione Vsync
+        // Vsync
         config.enableVsync = getBooleanPrefOverlayFirst(context, PREF_VSYNC, false);
 
-
-        // Se Vsync è abilitato, forza il frame pacing a balanced
-        if (config.enableVsync) {
-            config.framePacing = FRAME_PACING_BALANCED;
-        }
  // FastVsync
         config.fastVsync = prefs.getBoolean(PREF_FASTVSYNC, false);
 

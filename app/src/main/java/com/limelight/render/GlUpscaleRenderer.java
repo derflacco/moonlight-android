@@ -760,10 +760,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext))
                     throw new RuntimeException("eglMakeCurrent failed");
+                // Apply user VSync preference (checkbox_Vsync)
                 try {
-                    // Disable vsync to reduce blocking; frame pacing is controlled elsewhere
-                    EGL14.eglSwapInterval(eglDisplay, 0);
-                } catch (Throwable ignored) {}
+                    int swapInterval = (prefs != null && prefs.enableVsync) ? 1 : 0;
+                    EGL14.eglSwapInterval(eglDisplay, swapInterval);
+                    LimeLog.info("FSR: VSync " + (swapInterval == 1 ? "ENABLED (smooth pacing)" : "DISABLED (low latency)"));
+                } catch (Throwable ignored) {
+                    // Some devices may ignore eglSwapInterval, no harm.
+                }
 
             } catch (Throwable t) {
                 LimeLog.warning("GL init failed: " + t);
@@ -1294,6 +1298,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // FSR bypass
         return (mode == null || "none".equals(mode));
     }
+    public void applyVsyncSetting() {
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            try {
+                boolean enable = (prefs != null && prefs.enableVsync);
+                boolean gpuPath = (prefs != null && prefs.gpuPathMode);
+                EGL14.eglSwapInterval(eglDisplay, enable ? 1 : 0);
+                LimeLog.info("FSR: applyVsyncSetting() gpuPathMode=" + gpuPath + " vsync=" + enable);
+            } catch (Throwable ignored) {}
+        }
+    }
+
     private void clearGlErrors() {
         int error;
         while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
