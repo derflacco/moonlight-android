@@ -53,7 +53,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean rcasOesHealthy = false;
     private int lastProgram = -1;
     private int lastTexture = -1;
-
+    private volatile int pendingSwapInterval = -1;
     // ===== FSR Telemetry (lightweight) =====
     private static final class FsrTelemetry {
         boolean enabled = false;
@@ -307,8 +307,25 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (EGL14.eglGetCurrentContext() != eglContext) {
                 EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
             }
+            // Context was rebound: cached state is invalid now
+            lastProgram = -1;
+            lastTexture = -1;
+            curVpW = -1;
+            curVpH = -1;
+            twoDNearest = false;
+            oesNearest = false;
+
+            // Apply pending swap interval on the render thread (EGL context must be current)
+            final int interval = pendingSwapInterval;
+            if (interval >= 0) {
+                try {
+                    EGL14.eglSwapInterval(eglDisplay, interval);
+                } catch (Throwable ignored) { }
+                pendingSwapInterval = -1;
+            }
 
             boolean didUpdateTex = false;
+
             try {
                 if (decoderSurfaceTex != null && newFrame) {
                     clearGlErrors();
@@ -475,11 +492,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " streak=" + swapFailStreak);
 
             if (swapFailStreak >= 6) {
-                LimeLog.warning("FSR: EGL surface unstable, reinitializing");
-                destroyGl();
-                destroyEgl();
-                initEglAndGl();
-                swapFailStreak = 0;
+                LimeLog.warning("FSR: eglSwapBuffers failing repeatedly, stopping renderer to allow clean restart");
+                running.set(false);
             }
         } else {
             swapFailStreak = 0;
@@ -489,7 +503,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Draw operations ======
     private void drawOesToScreen() {
         if (lastProgram != progBlit) {
-            GLES20.glUseProgram(progBlit);
+            UseProgram(progBlit);
             lastProgram = progBlit;
         }
         bindQuad(progBlit);
@@ -514,7 +528,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (__fsr.enabled) { __fsr.sampling = "RCAS_OES"; }
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             ensureViewport(dstW, dstH);
-            GLES20.glUseProgram(progRcasOes);
+            UseProgram(progRcasOes);
             bindQuad(progRcasOes);
 
             GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / dstW, 1.0f / dstH);
@@ -546,7 +560,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         ensureViewport(dstW, dstH);
 // OES -> upscaledTex (adaptive)
         if (lastProgram != progBlit) {
-            GLES20.glUseProgram(progBlit);
+            UseProgram(progBlit);
             lastProgram = progBlit;
         }
         bindQuad(progBlit);
@@ -566,7 +580,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // RCAS: upscaledTex -> screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
-        GLES20.glUseProgram(progRcas);
+        UseProgram(progRcas);
         bindQuad(progRcas);
         if (__fsr.enabled) { __fsr.ticRcas(); }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -594,7 +608,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         ensureViewport(dstW, dstH);
         // EASU (lite)
-        GLES20.glUseProgram(progEasu);
+        UseProgram(progEasu);
         bindQuad(progEasu);
         if (__fsr.enabled) { __fsr.ticEasu(); }
 
@@ -617,7 +631,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 // RCAS → screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
-        GLES20.glUseProgram(progRcas);
+        UseProgram(progRcas);
         bindQuad(progRcas);
 
         if (__fsr.enabled) { __fsr.ticRcas(); }
@@ -674,10 +688,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private boolean ensureFbo(int w, int h) {
         if (w <= 0 || h <= 0) return false;
-        // Reuse existing FBO if big enough (prevents realloc)
-        if (upscaledTex != 0 && fbo != 0 && w <= fbW && h <= fbH) {
+
+        // Safe: FBO must match the requested output size unless you also scale UVs in shader.
+        if (upscaledTex != 0 && fbo != 0 && w == fbW && h == fbH) {
             return true;
         }
+
         createOrResizeFbo(w, h);
         return (upscaledTex != 0 && fbo != 0);
     }
@@ -771,6 +787,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext))
                     throw new RuntimeException("eglMakeCurrent failed");
+
+                // Reset cached GL state for the new EGL context
+                lastProgram = -1;
+                lastTexture = -1;
+                curVpW = -1;
+                curVpH = -1;
+                twoDNearest = false;
+                oesNearest = false;
+
                 // Apply user VSync preference (checkbox_Vsync)
                 try {
                     int swapInterval = (prefs != null && prefs.enableVsync) ? 1 : 0;
@@ -853,6 +878,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
         if (progEasu != 0) { GLES20.glDeleteProgram(progEasu); progEasu = 0; }
         if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
+        // Reset cached GL bindings/state (context resources no longer valid)
+        lastProgram = -1;
+        lastTexture = -1;
+        curVpW = -1;
+        curVpH = -1;
+        twoDNearest = false;
+        oesNearest = false;
     }
 
     private void destroyEgl() {
@@ -1259,7 +1291,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (!isFboComplete()) { rcasOesHealthy = false; return; }
 
             GLES20.glViewport(0, 0, 2, 2);
-            GLES20.glUseProgram(progRcasOes);
+            UseProgram(progRcasOes);
             bindQuad(progRcasOes);
 
             GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
@@ -1310,16 +1342,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         return (mode == null || "none".equals(mode));
     }
     public void applyVsyncSetting() {
-        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
-            try {
-                boolean enable = (prefs != null && prefs.enableVsync);
-                boolean gpuPath = (prefs != null && prefs.gpuPathMode);
-                EGL14.eglSwapInterval(eglDisplay, enable ? 1 : 0);
-                LimeLog.info("FSR: applyVsyncSetting() gpuPathMode=" + gpuPath + " vsync=" + enable);
-            } catch (Throwable ignored) {}
+        pendingSwapInterval = (prefs != null && prefs.enableVsync) ? 1 : 0;
+    }
+    private void UseProgram(int program) {
+        if (lastProgram != program) {
+            GLES20.glUseProgram(program);
+            lastProgram = program;
         }
     }
-
     private void clearGlErrors() {
         int error;
         while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
