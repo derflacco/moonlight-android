@@ -377,14 +377,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 // ==== Nano Pacer ====
     private static final long PARK_MIN_THRESHOLD_NS = 2_000_000L;  // 2ms min for reliable park
-    private static final long SPIN_MAX_NS = 100_000L;             // 100µs max spin
+    private static final long SPIN_MAX_NS = 100_000L;              // 100µs max spin
     private static final int PACE_STABILITY_THRESHOLD = 6;
     private static final float TOLERANCE_PERCENT = 0.15f;
     private static final float EMA_ALPHA = 0.2f;
     private final Object pacingLock = new Object();
 
     private long nextPacingDeadlineNs = 0;
-    private boolean isOneToOneMode = false;
+    private volatile boolean isOneToOneMode = false;
+
+    // Interval actually enforced by the nano-pacer (ns)
+    private volatile long pacerIntervalNs = 0;
     private long lastFrameTimeNs = 0;
     private long emaIntervalNs = 0;
     private int stableCounter = 0;
@@ -396,62 +399,59 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         synchronized (pacingLock) {
             // Fast VSync gate
             if (!prefs.fastVsync) {
-                isOneToOneMode = false;
-                stableCounter = 0;
-                unstableCounter = 0;
-                lastFrameTimeNs = 0;
-                emaIntervalNs = 0;
-                nextPacingDeadlineNs = 0;
-                lastEvaluationNs = 0;
+                resetNanoPacerState();
+                return;
+            }
+// Throttle evaluation rate (adaptive, tied to target interval)
+            final long nowNs = System.nanoTime();
+
+            final int rateToCheck = getCheckedRate();
+            if (rateToCheck <= 0) {
+                resetNanoPacerState();
                 return;
             }
 
-// Throttle evaluation rate (adaptive, tied to target interval)
-            long nowNs = System.nanoTime();
+            final long targetIntervalNs = 1_000_000_000L / (long) rateToCheck;
 
-            int rateToCheck = getCheckedRate();
-            long targetIntervalNs = 1_000_000_000L / rateToCheck;
+            // If rate changes while active, resync immediately
+            if (isOneToOneMode && pacerIntervalNs != targetIntervalNs) {
+                pacerIntervalNs = targetIntervalNs;
+                nextPacingDeadlineNs = nowNs + targetIntervalNs;
+            }
 
-// Evaluate at most twice per frame interval
-            long minEvalIntervalNs = targetIntervalNs / 2;
-
-            if (lastEvaluationNs != 0 && (nowNs - lastEvaluationNs) < minEvalIntervalNs) {
+            // Evaluate at most twice per frame
+            if (lastEvaluationNs != 0 && (nowNs - lastEvaluationNs) < (targetIntervalNs >> 1)) {
                 return;
             }
             lastEvaluationNs = nowNs;
 
-            // Initial frame timing
+            // First frame — initialize baseline
             if (lastFrameTimeNs == 0) {
                 lastFrameTimeNs = nowNs;
+                emaIntervalNs = targetIntervalNs;
                 return;
             }
 
             // Calculate real frame interval
-            long intervalNs = nowNs - lastFrameTimeNs;
+            final long intervalNs = nowNs - lastFrameTimeNs;
             lastFrameTimeNs = nowNs;
 
-            if (intervalNs > targetIntervalNs * 2.5f) {
-                return; // Likely a dropped frame, ignore
+            // Skip dropped/paused frames
+            if (intervalNs > (targetIntervalNs * 2L)) {
+                return;
             }
 
-            // Initialize or update EMA
-            if (emaIntervalNs == 0) {
-                emaIntervalNs = targetIntervalNs; // Start with theoretical target
-            } else {
-                emaIntervalNs = (long) (EMA_ALPHA * intervalNs +
-                        (1f - EMA_ALPHA) * emaIntervalNs);
-            }
+            // EMA: ema += alpha * (x - ema)
+            emaIntervalNs += (long) (EMA_ALPHA * (intervalNs - emaIntervalNs));
 
-            // Dynamic tolerance based on target interval
-            long dynamicToleranceNs = (long) (targetIntervalNs * TOLERANCE_PERCENT);
-            boolean isMatchingRate = Math.abs(emaIntervalNs - targetIntervalNs) <= dynamicToleranceNs;
+            final long dynamicToleranceNs = (long) (targetIntervalNs * TOLERANCE_PERCENT);
+            final boolean matching = Math.abs(emaIntervalNs - targetIntervalNs) <= dynamicToleranceNs;
 
-            // Update state counters
-            if (isMatchingRate) {
-                stableCounter++;
+            if (matching) {
+                if (stableCounter < PACE_STABILITY_THRESHOLD) stableCounter++;
                 unstableCounter = 0;
             } else {
-                unstableCounter++;
+                if (unstableCounter < PACE_STABILITY_THRESHOLD + 2) unstableCounter++;
                 stableCounter = 0;
             }
 
@@ -459,13 +459,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (!isOneToOneMode && stableCounter >= PACE_STABILITY_THRESHOLD) {
                 isOneToOneMode = true;
                 stableCounter = 0;
+                pacerIntervalNs = targetIntervalNs;
                 nextPacingDeadlineNs = nowNs + targetIntervalNs;
                 LimeLog.info("Nano-Pacer: 1:1 pacing enabled (" + rateToCheck + " fps)");
-            }
-
-            if (isOneToOneMode && unstableCounter >= PACE_STABILITY_THRESHOLD) {
+            } else if (isOneToOneMode && unstableCounter >= PACE_STABILITY_THRESHOLD + 2) {
                 isOneToOneMode = false;
                 unstableCounter = 0;
+                pacerIntervalNs = 0;
                 nextPacingDeadlineNs = 0;
                 LimeLog.info("Nano-Pacer: 1:1 pacing disabled");
             }
@@ -477,7 +477,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (streamTargetFps <= 0 || streamTargetFps > 1000) {
             return refreshRate;
         }
-
         // Prefer stream FPS when below display refresh rate
         return (streamTargetFps < refreshRate) ? streamTargetFps : refreshRate;
     }
@@ -486,11 +485,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void updateRefreshRate(int newRefreshRate) {
         synchronized (pacingLock) {
             refreshRate = newRefreshRate;
-            // Reset detection to adapt to new rate
-            stableCounter = 0;
-            unstableCounter = 0;
-            emaIntervalNs = 0;
+            resetNanoPacerState();
         }
+    }
+
+    private void resetNanoPacerState() {
+        isOneToOneMode = false;
+        stableCounter = 0;
+        unstableCounter = 0;
+        lastFrameTimeNs = 0;
+        emaIntervalNs = 0;
+        nextPacingDeadlineNs = 0;
+        lastEvaluationNs = 0;
+        pacerIntervalNs = 0;
     }
 
 // ==== End Nano Pacer ====
@@ -534,19 +541,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
     //
 
-    // reset nano pacer
-    private void resetNanoPacerState() {
-
-        // ---- Nano-Pacer reset ----
-        isOneToOneMode = false;
-        stableCounter = 0;
-        unstableCounter = 0;
-        lastFrameTimeNs = 0;
-        emaIntervalNs = 0;
-        nextPacingDeadlineNs = 0;
-        lastEvaluationNs = 0;
-    }
-    // END: nanopacer
 
 
     // Decoder output timeouts configurable at runtime.
@@ -1751,13 +1745,18 @@ try {
                                 // Nano-pacer enforcement (1:1) - synchronized to prevent race conditions
                                 if (isOneToOneMode) {
                                     synchronized (pacingLock) {
-                                        final float rr = (refreshRate > 0f) ? refreshRate : 60f;
-                                        final long framePeriodNs = (long) (1_000_000_000.0 / (double) rr);
+                                        final long framePeriodNs = pacerIntervalNs;
                                         final long nowNsLocal = System.nanoTime();
 
-                                        // Initialize first deadline
+                                        if (framePeriodNs <= 0L) {
+                                            isOneToOneMode = false;
+                                            nextPacingDeadlineNs = 0L;
+                                            return;
+                                        }
+
+                                        // Initialize first deadline (next slot)
                                         if (nextPacingDeadlineNs == 0L) {
-                                            nextPacingDeadlineNs = nowNsLocal;
+                                            nextPacingDeadlineNs = nowNsLocal + framePeriodNs;
                                         }
 
                                         long waitNs = nextPacingDeadlineNs - nowNsLocal;
@@ -1765,22 +1764,20 @@ try {
                                         // Coarse wait for bulk intervals (>2ms)
                                         if (waitNs > PARK_MIN_THRESHOLD_NS) {
                                             long parkNs = waitNs - SPIN_MAX_NS;
-                                            if (parkNs > 0) {
+                                            if (parkNs > 0L) {
                                                 LockSupport.parkNanos(parkNs);
                                                 waitNs = nextPacingDeadlineNs - System.nanoTime();
                                             }
                                         }
-
                                         // Precision spin for remaining micro-window
-                                        if (waitNs > 0) {
+                                        if (waitNs > 0L) {
                                             final long spinDeadlineNs = nextPacingDeadlineNs;
                                             while (System.nanoTime() < spinDeadlineNs) {
-                                                // Busy-wait for maximum precision
+                                                // spin
                                             }
                                             nextPacingDeadlineNs += framePeriodNs;
                                         } else {
-                                            // Deadline missed - adaptive recovery
-                                            long slipNs = -waitNs;
+                                            final long slipNs = -waitNs;
                                             if (slipNs < (framePeriodNs * 3L) / 2L) {
                                                 // Minor slip: maintain cadence, skip one slot
                                                 nextPacingDeadlineNs += framePeriodNs;
