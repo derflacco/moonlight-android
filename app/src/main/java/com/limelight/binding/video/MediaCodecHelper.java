@@ -659,13 +659,7 @@ public class MediaCodecHelper {
                     // Pacing: controlled by the app
                     safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);
 
-                    // Skip/drop: only NVOP
-                    safeSet(videoFormat, "vendor.mtk.vdec.nvop.skip", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.skip.mode", 0);
-                    safeSet(videoFormat, "vendor.mtk.vdec.drop.nonref.frame", 0);
-                    safeSet(videoFormat, "vendor.mtk.vdec.frame-drop.policy", 0);
-
-                    // Standard Android hints
+                     // Standard Android hints
                     safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
                     safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
                 }
