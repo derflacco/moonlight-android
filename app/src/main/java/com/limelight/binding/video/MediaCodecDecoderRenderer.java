@@ -1862,8 +1862,22 @@ try {
             return false;
         }
 
+// Prefetched buffer fast path (validate invariant: buffer implies valid index)
         if (nextInputBuffer != null) {
-            return true;
+            if (nextInputBufferIndex >= 0) {
+                inputTryAgainStreak = 0;
+                inputDequeueHangStartMs = 0L;
+                return true;
+            }
+
+            // Inconsistent state: drop the buffer and refetch normally
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
+        } else if (nextInputBufferIndex >= 0) {
+            // Inconsistent state: index without buffer
+            nextInputBufferIndex = -1;
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
         }
 
         final int dequeueTimeoutUs = getInputDequeueTimeoutUs();
@@ -3692,10 +3706,9 @@ try {
         LimeLog.info("New output format: " + coldCfg.outputFormat);
     }
     // Non-blocking best-effort prefetch to avoid stalling the input thread.
-// Returns false only when codec recovery (or a hard decoder exception) requires the caller to request an IDR.
-    private boolean prefetchNextInputBuffer() {
-        boolean codecRecovered;
+    // Returns false only when codec recovery (or a hard decoder exception) requires the caller to request an IDR.
 
+    private boolean prefetchNextInputBuffer() {
         if (stopping) {
             return false;
         }
@@ -3704,16 +3717,18 @@ try {
             return true;
         }
 
+        IllegalStateException pendingException = null;
         try {
             // Best-effort: never block here.
             if (nextInputBufferIndex < 0) {
                 nextInputBufferIndex = nextInputIndex(0); // 0us = non-blocking
 
-                // Non-blocking path: avoid busy spin when no buffer is available yet
                 if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    // Explicit reset to avoid confusion between "no buffer yet" and "MediaCodec error"
+                    nextInputBufferIndex = -1;
+                    // Avoid busy spin when no buffer is available yet.
                     inputNonBlockingBackoff();
-                    // Best-effort: no buffer available right now is not an error.
-                    return true;
+                    // Not an error: leave state as-is and let fetch() retry when needed.
                 }
             }
 
@@ -3726,6 +3741,7 @@ try {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
                         final int badIndex = nextInputBufferIndex;
+
                         nextInputBufferIndex = -1;
                         nextInputBuffer = null;
                         throw new IllegalStateException("getInputBuffer() returned null for index " + badIndex);
@@ -3737,19 +3753,16 @@ try {
                 }
             }
         } catch (IllegalStateException e) {
+            pendingException = e;
             // Do not start hung tracking here; treat as hard decoder exception
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
             nextInputBuffer = null;
-
-            handleDecoderException(e);
-            return false;
-        } finally {
-            codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
 
-        if (codecRecovered) {
+        // Always evaluate recovery before returning.
+        if (doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD)) {
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
@@ -3757,6 +3770,10 @@ try {
             return false;
         }
 
+        if (pendingException != null) {
+            handleDecoderException(pendingException);
+            return false;
+        }
         // Best-effort: it's OK if no buffer is available right now.
         // The real fetchNextInputBuffer() will try again when the buffer is actually needed.
         return true;
