@@ -1863,55 +1863,30 @@ try {
         }
 
         if (nextInputBuffer != null) {
-            // We already have an input buffer
             return true;
         }
 
+        final int dequeueTimeoutUs = getInputDequeueTimeoutUs();
+        IllegalStateException pendingException = null;
+
         try {
-            int dequeueTimeoutUs;
-
-            final float wantedFps =
-                    (streamTargetFps > 0f)
-                            ? streamTargetFps
-                            : ((prefs != null && prefs.fps > 0f) ? prefs.fps : 60f);
-
-            // Consider 1:1 scenario and vsync alignment
-            if (isOneToOneMode && !preferLowerDelays && !prefs.immediateFrameDelivery) {
-                // Timeout più lungo per scenari 1:1 con allineamento vsync
-                dequeueTimeoutUs = 4_000;
-            }
-            else if (preferLowerDelays) {
-                if (prefs.immediateFrameDelivery) {
-                    dequeueTimeoutUs = 0;
-                } else {
-                    dequeueTimeoutUs = 2_500;
-                }
-            } else if (wantedFps >= 90f) {
-                // High FPS standard
-                dequeueTimeoutUs = 2_000;
-            } else {
-                // 60 Hz / Default
-                dequeueTimeoutUs = 3_000;
-            }
-
             // If we don't have an input buffer index yet, fetch one now
             if (nextInputBufferIndex < 0 && !stopping) {
                 final long t0 = System.nanoTime();
                 nextInputBufferIndex = nextInputIndex(dequeueTimeoutUs);
                 final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
 
-                // Log per scenari 1:1 lenti
-                if (isOneToOneMode && elapsedUs > 2000) {
-                    LimeLog.warning("Input dequeue slow in 1:1: " + elapsedUs + "μs");
-                }
-
-                // Single quick retry
-                if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER && !preferLowerDelays) {
-                    final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
-                    final int quickBackoffUs = Math.min(remainingUs, 1_000);
-
-                    if (quickBackoffUs > 0) {
-                        nextInputBufferIndex = nextInputIndex(quickBackoffUs);
+                if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (dequeueTimeoutUs == 0) {
+                        // Non-blocking path: avoid busy spin
+                        inputNonBlockingBackoff();
+                    } else {
+                        // Blocking path: allow a single quick retry if budget remains
+                        final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
+                        final int quickBackoffUs = Math.min(remainingUs, 1000);
+                        if (quickBackoffUs > 0) {
+                            nextInputBufferIndex = nextInputIndex(quickBackoffUs);
+                        }
                     }
                 }
             }
@@ -1922,43 +1897,39 @@ try {
                 inputTryAgainStreak = 0;
                 inputDequeueHangStartMs = 0L;
 
-                // Using the new getInputBuffer() API on Lollipop
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
-                        // Treat null as codec contract violation
+                        // Fix B: preserve the real index in logs
+                        final int badIndex = nextInputBufferIndex;
+
+                        // Reset state before throwing
+                        nextInputBufferIndex = -1;
+                        nextInputBuffer = null;
                         inputTryAgainStreak = 0;
                         inputDequeueHangStartMs = 0L;
-                        nextInputBufferIndex = -1;
 
-                        // Trigger error handler
-                        handleDecoderException(new IllegalStateException(
-                                "getInputBuffer() returned null for index " + nextInputBufferIndex));
-                        return false;
+                        throw new IllegalStateException("getInputBuffer() returned null for index " + badIndex);
                     }
-                    // Ensure clean buffer state on Lollipop+
                     nextInputBuffer.clear();
                 } else {
                     nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
-                    // Clear old input data pre-Lollipop
                     nextInputBuffer.clear();
                 }
             }
         } catch (IllegalStateException e) {
-            // Reset tracking on exception
+            // Defer handling until after codec recovery check
+            pendingException = e;
+
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
             nextInputBuffer = null;
-
-            handleDecoderException(e);
-            return false;
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
 
-        // If codec recovery is required, always return false to ensure the caller will request
-        // an IDR frame to complete the codec recovery.
+        // If codec recovery is required, always return false to ensure the caller will request an IDR frame.
         if (codecRecovered) {
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
@@ -1967,7 +1938,13 @@ try {
             return false;
         }
 
-        // --- HUNG DETECTION + ULL BACKOFF ---
+        // Handle decoder exception (after recovery check)
+        if (pendingException != null) {
+            handleDecoderException(pendingException);
+            return false;
+        }
+
+        // Hung detection - check if we're still waiting after attempts
         if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
             inputTryAgainStreak++;
             final long nowMs = SystemClock.uptimeMillis();
@@ -1975,7 +1952,6 @@ try {
             if (inputDequeueHangStartMs == 0L) {
                 inputDequeueHangStartMs = nowMs;
             } else if ((nowMs - inputDequeueHangStartMs) >= 5000 && initialException == null) {
-                // Decoder hung for 5 seconds total
                 DecoderHungException decoderHungException =
                         new DecoderHungException((int) (nowMs - inputDequeueHangStartMs));
                 if (!coldCfg.reportedCrash) {
@@ -1983,18 +1959,6 @@ try {
                     crashListener.notifyCrash(decoderHungException);
                 }
                 throw new RendererException(this, decoderHungException);
-            }
-
-            // --- LOGICA BACKOFF PER ULL ---
-            // Se siamo in modalità preferLowerDelays (timeout 0), evitiamo il busy-spin
-            if (preferLowerDelays && prefs.immediateFrameDelivery) {
-                if (inputTryAgainStreak >= 256) {
-                    LockSupport.parkNanos(500_000L); // 0.5 ms
-                } else if (inputTryAgainStreak >= 32) {
-                    LockSupport.parkNanos(200_000L); // 0.2 ms
-                } else {
-                    Thread.yield();
-                }
             }
 
             return false;
@@ -2006,9 +1970,9 @@ try {
             LimeLog.warning("Dequeue input buffer ran long: " + (dtNs / 1_000_000L) + " ms");
         }
 
-        // Return success if buffer obtained
         return nextInputBuffer != null;
     }
+
 
     @Override
     public void start() {
@@ -3747,6 +3711,13 @@ try {
             // Best-effort: never block here.
             if (nextInputBufferIndex < 0) {
                 nextInputBufferIndex = nextInputIndex(0); // 0us = non-blocking
+
+                // Non-blocking path: avoid busy spin when no buffer is available yet
+                if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    inputNonBlockingBackoff();
+                    // Best-effort: no buffer available right now is not an error.
+                    return true;
+                }
             }
 
             if (nextInputBufferIndex >= 0) {
@@ -3792,6 +3763,32 @@ try {
         // Best-effort: it's OK if no buffer is available right now.
         // The real fetchNextInputBuffer() will try again when the buffer is actually needed.
         return true;
+    }
+    // Derive input dequeue timeout from the *effective* policy, not from pacing-profile flags.
+    private int getInputDequeueTimeoutUs() {
+        final PreferenceConfiguration p = prefs;
+
+        final float wantedFps =
+                (p != null && p.fps > 0) ? (float) p.fps :
+                        (refreshRate > 0f ? refreshRate : 60f);
+
+        final boolean immediate = (p != null && p.immediateFrameDelivery);
+
+        if (immediate) {
+            return 0; // non-blocking
+        } else if (wantedFps >= 120f) {
+            return 2000;
+        } else if (wantedFps >= 90f) {
+            return 3000;
+        } else {
+            return 4000;
+        }
+    }
+
+    // Backoff used only when dequeue timeout is non-blocking (0us) to avoid busy spinning.
+    private static void inputNonBlockingBackoff() {
+        Thread.yield();
+        java.util.concurrent.locks.LockSupport.parkNanos(200_000L); // 0.2 ms
     }
 
 }
