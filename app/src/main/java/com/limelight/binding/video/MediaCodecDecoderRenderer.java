@@ -2146,21 +2146,29 @@ try {
             lastRenderedFrameTimeNanos = 0L;
         }
 
-        // Entering Balanced: ensure queue is clean and Choreographer is running.
-        if (newPacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        // Entering Balanced: only start Choreographer if VSync is NOT active
+        if (newPacing == PreferenceConfiguration.FRAME_PACING_BALANCED
+                && (prefs == null || !prefs.enableVsync)) {
             outputBufferQueue.clear();
             lastRenderedFrameTimeNanos = 0L;
             startChoreographerThread();
         }
 
-        // Reset pacing state so deadlines/counters don't carry across modes.
+        // Reset pacing state so deadlines/counters don't carry across modes
         resetNanoPacerState();
     }
+
 
     private void initFramePacingFromSettings() {
         final int selected = readFramePacingModeOverlayFirst();
 
-// Do not force Balanced when VSync is enabled — respect user pacing choice
+        // --- Mutual exclusion: Balanced vs VSync ---
+        if (prefs != null && prefs.enableVsync && selected == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            prefs.enableVsync = false;
+            com.limelight.LimeLog.info("Disabling VSync because Balanced pacing is active");
+        }
+
+        // Respect user pacing choice (no forced Balanced under VSync)
         final int effective = selected;
 
         appliedFramePacing = effective;
@@ -2180,6 +2188,12 @@ try {
 
         final int selected = readFramePacingModeOverlayFirst();
 
+        // --- Mutual exclusion: Balanced vs VSync ---
+        if (prefs != null && prefs.enableVsync && selected == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            prefs.enableVsync = false;
+            com.limelight.LimeLog.info("Disabling VSync because Balanced pacing is active (runtime check)");
+        }
+
         // Do not override pacing mode when VSync is active — respect user choice
         final int effective = selected;
 
@@ -2190,6 +2204,7 @@ try {
         applyFramePacingTransition(appliedFramePacing, effective);
         appliedFramePacing = effective;
     }
+
 
 
     @Override
