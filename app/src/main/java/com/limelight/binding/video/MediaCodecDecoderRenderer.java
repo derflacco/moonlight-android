@@ -2160,10 +2160,8 @@ try {
     private void initFramePacingFromSettings() {
         final int selected = readFramePacingModeOverlayFirst();
 
-        // Respect the existing Vsync override policy (if prefs already forced Balanced).
-        final int effective = (prefs != null && prefs.enableVsync)
-                ? PreferenceConfiguration.FRAME_PACING_BALANCED
-                : selected;
+// Do not force Balanced when VSync is enabled — respect user pacing choice
+        final int effective = selected;
 
         appliedFramePacing = effective;
         nextFramePacingPollNs = 0L;
@@ -2181,9 +2179,9 @@ try {
         nextFramePacingPollNs = nowNs + FRAME_PACING_POLL_INTERVAL_NS;
 
         final int selected = readFramePacingModeOverlayFirst();
-        final int effective = (prefs != null && prefs.enableVsync)
-                ? PreferenceConfiguration.FRAME_PACING_BALANCED
-                : selected;
+
+        // Do not override pacing mode when VSync is active — respect user choice
+        final int effective = selected;
 
         if (effective == appliedFramePacing) {
             return;
