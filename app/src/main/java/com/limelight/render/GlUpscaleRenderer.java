@@ -856,8 +856,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private void setOesFilter(boolean toNearest) {
         if (oesNearest == toNearest) return;
         oesNearest = toNearest;
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+        final int filter = toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR;
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, filter);
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, filter);
+        // Wraps are constant; avoid reapplying per-frame
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
     }
@@ -1153,28 +1156,32 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             } catch (Throwable ignored) {}
         }
     }
-    // Draw a tiny frame with RCAS_OES into a 2x2 FBO and read back to verify non-zero output.
+
+    // Utility: safely return currently bound framebuffer (0 = default)
+    private int getBoundFramebuffer() {
+        int[] fbo = new int[1];
+        try {
+            GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, fbo, 0);
+        } catch (Throwable ignored) {
+            fbo[0] = 0;
+        }
+        return fbo[0];
+    }
+
+    // Optimized and safe RCAS_OES health check (low-overhead)
     private void checkRcasOesHealthOnce(int dstW, int dstH) {
         if (rcasOesChecked) return;
         rcasOesChecked = true;
         if (progRcasOes == 0) return;
 
-        // Save current GL state
         int[] prevViewport = new int[4];
         GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevViewport, 0);
-        int[] prevFbo = new int[1];
-        GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0);
-        int[] prevTex = new int[1];
-        GLES20.glGetIntegerv(GLES20.GL_TEXTURE_BINDING_2D, prevTex, 0);
-        int[] prevActiveTex = new int[1];
-        GLES20.glGetIntegerv(GLES20.GL_ACTIVE_TEXTURE, prevActiveTex, 0);
+        int prevFbo = getBoundFramebuffer();
 
         int testFbo = 0, testTex = 0;
         try {
-            // Create test FBO using reusable array
             GLES20.glGenFramebuffers(1, tmpIntArray, 0);
             testFbo = tmpIntArray[0];
-
             GLES20.glGenTextures(1, tmpIntArray, 0);
             testTex = tmpIntArray[0];
 
@@ -1188,10 +1195,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
                     GLES20.GL_TEXTURE_2D, testTex, 0);
 
-            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-                rcasOesHealthy = false;
-                return;
-            }
+            if (!isFboComplete()) { rcasOesHealthy = false; return; }
 
             GLES20.glViewport(0, 0, 2, 2);
             GLES20.glUseProgram(progRcasOes);
@@ -1203,41 +1207,35 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-            setOesFilter(true);
             GLES20.glUniform1i(rcasOes_uTex, 0);
-
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-            java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocateDirect(2*2*4).order(java.nio.ByteOrder.nativeOrder());
+            ByteBuffer bb = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
             GLES20.glReadPixels(0, 0, 2, 2, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, bb);
+
             int sum = 0;
-            while (bb.hasRemaining()) { sum |= (bb.get() & 0xFF); }
+            for (int i = 0; i < 16; i++) sum |= (bb.get(i) & 0xFF);
             rcasOesHealthy = (sum != 0);
 
-            // FRAMEBUFFER INVALIDATION
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            // Invalidate FBO only if supported (ES3+)
+            if (hasVao) {
                 try {
                     int[] attachments = {GLES30.GL_COLOR_ATTACHMENT0};
                     GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, attachments, 0);
                 } catch (Throwable ignored) {}
             }
-
         } finally {
-            // Restore GL state
-            GLES20.glActiveTexture(prevActiveTex[0]);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, prevTex[0]);
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo[0]);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo);
             GLES20.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
-
-            // Cleanup test resources
             if (testTex != 0) { tmpIntArray[0] = testTex; GLES20.glDeleteTextures(1, tmpIntArray, 0); }
             if (testFbo != 0) { tmpIntArray[0] = testFbo; GLES20.glDeleteFramebuffers(1, tmpIntArray, 0); }
         }
 
-        try { com.limelight.LimeLog.info("RCAS_OES health=" + rcasOesHealthy); } catch (Throwable ignored) {}
+        LimeLog.info("RCAS_OES health=" + rcasOesHealthy);
     }
+
     // Decide once, at construction, if this renderer can use the ultra-thin path.
-// True when GPU direct path is forced or FSR is logically disabled.
+    // True when GPU direct path is forced or FSR is logically disabled.
     private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
         if (prefs == null) return false;
         if (prefs.gpuPathMode) return true;
