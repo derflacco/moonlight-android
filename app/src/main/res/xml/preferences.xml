@@ -122,6 +122,15 @@
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
+        <ListPreference
+            android:defaultValue=""
+            android:entries="@array/resolution_names"
+            android:entryValues="@array/resolution_values"
+            android:key="list_resolution_suggested"
+            android:title="@string/pref_suggested_resolution_title"
+            android:summary="@string/pref_suggested_resolution_summary"
+            app:iconSpaceReserved="false" />
+
         <!-- Video Upscaling (FSR-like) -->
         <CheckBoxPreference
             android:key="pref_video_upscale_enable"
@@ -212,16 +221,6 @@
             android:summary="@string/summary_custom_resolution"
             android:title="@string/title_custom_resolution"
             app:iconSpaceReserved="false" />
-
-        <ListPreference
-            android:defaultValue=""
-            android:entries="@array/resolution_names"
-            android:entryValues="@array/resolution_values"
-            android:key="list_resolution_suggested"
-            android:title="@string/pref_suggested_resolution_title"
-            android:summary="@string/pref_suggested_resolution_summary"
-            app:iconSpaceReserved="false" />
-
 
         <EditTextPreference
             android:key="edit_diy_bitrate"
