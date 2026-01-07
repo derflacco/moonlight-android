@@ -265,6 +265,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 decoderSurfaceTex.setOnFrameAvailableListener(null);
                 decoderSurfaceTex.release();
                 decoderSurfaceTex = null;
+                attachedEglContext = EGL14.EGL_NO_CONTEXT;
             }
             if (decoderInputSurface != null) {
                 decoderInputSurface.release();
@@ -295,10 +296,28 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 synchronized (this) { initEglAndGl(); }
                 if (!isGlReady()) continue;
             }
-// Ensure EGL context is current (protect against invalid surface reattach)
-            if (EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) {
-                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+// Ensure EGL context + surface are current (fail-fast)
+// If eglMakeCurrent fails, do NOT issue any GL calls (prevents SurfaceTexture 0x502 loops).
+            final boolean needMakeCurrent =
+                    (EGL14.eglGetCurrentContext() != eglContext) ||
+                            (EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface);
+
+            if (needMakeCurrent) {
+                if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext)) {
+                    final int err = EGL14.eglGetError();
+                    LimeLog.warning("FSR: eglMakeCurrent failed err=0x" + Integer.toHexString(err));
+                    continue;
+                }
+
+                // Cached GL state is invalid after a successful rebind
+                lastProgram = -1;
+                lastTexture = -1;
+                curVpW = -1;
+                curVpH = -1;
+                twoDNearest = false;
+                oesNearest = false;
             }
+
             boolean newFrame = false;
             synchronized (frameLock) {
                 if (!frameAvailable) {
@@ -313,17 +332,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 frameAvailable = false;
             }
 
-            // only rebind context if EGL lost (prevents redundant eglMakeCurrent calls)
-            if (EGL14.eglGetCurrentContext() != eglContext) {
-                EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
-            }
-            // Context was rebound: cached state is invalid now
-            lastProgram = -1;
-            lastTexture = -1;
-            curVpW = -1;
-            curVpH = -1;
-            twoDNearest = false;
-            oesNearest = false;
 
             // Apply pending swap interval on the render thread (EGL context must be current)
             final int interval = pendingSwapInterval;
@@ -919,6 +927,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             eglDisplay = EGL14.EGL_NO_DISPLAY;
             eglContext = EGL14.EGL_NO_CONTEXT;
             eglWindowSurface = EGL14.EGL_NO_SURFACE;
+            attachedEglContext = EGL14.EGL_NO_CONTEXT;
         }
     }
     private void bindQuad(int prog) {
@@ -1409,6 +1418,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             lastTexture = -1;
             lastProgram = -1;
         } catch (Throwable t) {
+            // Force a clean retry on the next frame
+            attachedEglContext = EGL14.EGL_NO_CONTEXT;
             LimeLog.warning("FSR: SurfaceTexture attachToGLContext failed: " + t);
         }
     }
