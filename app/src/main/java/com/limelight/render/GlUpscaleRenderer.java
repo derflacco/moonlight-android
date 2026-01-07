@@ -410,12 +410,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
             if (fastBypassStatic && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
                 drawOesToScreen();
-                if (hasPresentationTimeExt) {
-                    try { EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime()); } catch (Throwable ignored) { }
+                if (swapAndContinue()) {
+                    sizeChangedSinceLastSwap = false;
                 }
-                boolean swapped = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
-                if (!swapped) { try { int err = EGL14.eglGetError(); com.limelight.LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err)); } catch (Throwable ignored) {} }
-                sizeChangedSinceLastSwap = false;
                 continue;
             }
 
@@ -433,8 +430,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
             if (hdrActive && prefs != null && prefs.gpuPathMode) {
                 drawOesToScreen();
-                swapAndContinue();
-                sizeChangedSinceLastSwap = false;
+                if (swapAndContinue()) {
+                    sizeChangedSinceLastSwap = false;
+                }
                 continue;
             }
 
@@ -488,7 +486,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 boolean ok;
                 long t0 = System.nanoTime();
                 float effSharp = mapUiSharpToInternal(sharpUser, nearNative);
+                if (effSharp <= 0.0f) {
+                    drawOesToScreen();
+                    if (swapAndContinue()) {
+                        sizeChangedSinceLastSwap = false;
+                    }
+                    continue;
+                }
                 ok = drawRcasOnlySafe(fbW, fbH, effSharp);
+
                 long dt = System.nanoTime() - t0;
 
                 if (__fsr.enabled) {
@@ -524,20 +530,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     drawOesToScreen();
                 }
             }
-            swapAndContinue();
+            if (swapAndContinue()) {
+                sizeChangedSinceLastSwap = false;
+            }
         }
     }
 
-    private void swapAndContinue() {
+    private boolean swapAndContinue() {
         if (hasPresentationTimeExt) {
             try {
                 EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime());
             } catch (Throwable ignored) { }
         }
 
-        boolean ok = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
+        final boolean ok = EGL14.eglSwapBuffers(eglDisplay, eglWindowSurface);
         if (!ok) {
-            int err = EGL14.eglGetError();
+            final int err = EGL14.eglGetError();
             swapFailStreak++;
             LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " streak=" + swapFailStreak);
 
@@ -548,7 +556,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         } else {
             swapFailStreak = 0;
         }
+
+        return ok;
     }
+
 
 
     // ====== Draw operations ======
