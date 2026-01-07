@@ -54,6 +54,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int lastProgram = -1;
     private int lastTexture = -1;
     private volatile int pendingSwapInterval = -1;
+    private EGLContext attachedEglContext = EGL14.EGL_NO_CONTEXT;
+
     // ===== FSR Telemetry (lightweight) =====
     private static final class FsrTelemetry {
         boolean enabled = false;
@@ -196,6 +198,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.hdrDirectPresent = directPresent;
         // Ensure we render at least once with the new mode
         sizeChangedSinceLastSwap = true;
+        synchronized (frameLock) {
+            frameLock.notify();
+        }
     }
 
     @Keep
@@ -220,6 +225,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
 
         decoderSurfaceTex = new SurfaceTexture(oesTexId);
+        attachedEglContext = EGL14.eglGetCurrentContext();
         try {
             decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
         } catch (Throwable ignored) {}
@@ -270,10 +276,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         destroyEgl();
     }
 
-    @Override public void onFrameAvailable(SurfaceTexture st) {
+    @Override
+    public void onFrameAvailable(SurfaceTexture st) {
         synchronized (frameLock) {
-            frameAvailable = true;
-            frameLock.notifyAll();
+            // Coalesce multiple callbacks until the render thread consumes the frame
+            if (!frameAvailable) {
+                frameAvailable = true;
+                frameLock.notify();
+            }
         }
     }
 
@@ -328,6 +338,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             try {
                 if (decoderSurfaceTex != null && newFrame) {
+                    ensureSurfaceTextureAttached();
+
                     clearGlErrors();
                     decoderSurfaceTex.updateTexImage();
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
@@ -350,6 +362,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             if (fbW <= 0 || fbH <= 0) continue;
 
+            // Avoid re-rendering when no new frame arrived and no forced redraw is needed
+            if (!newFrame && !sizeChangedSinceLastSwap) {
+                continue;
+            }
             // ensure viewport only when changed
             ensureViewport(fbW, fbH);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
@@ -502,36 +518,37 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // ====== Draw operations ======
     private void drawOesToScreen() {
-        if (lastProgram != progBlit) {
-            UseProgram(progBlit);
-            lastProgram = progBlit;
-        }
+        UseProgram(progBlit);
         bindQuad(progBlit);
 
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         if (lastTexture != oesTexId) {
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
             lastTexture = oesTexId;
         }
         setOesFilter(false);
+
         GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
     }
+
 
     private boolean drawRcasOnlySafe(int dstW, int dstH, float sharp) {
         checkRcasOesHealthOnce(dstW, dstH);
+
         // Prefer direct OES sharpening when program is available
         if (progRcasOes != 0 && rcasOesHealthy) {
             if (__fsr.enabled) { __fsr.sampling = "RCAS_OES"; }
+
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             ensureViewport(dstW, dstH);
+
             UseProgram(progRcasOes);
             bindQuad(progRcasOes);
 
-            GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / dstW, 1.0f / dstH);
+            GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
             GLES20.glUniform1f(rcasOes_uSharp, clamp01(sharp));
             GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
 
@@ -540,76 +557,74 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
                 lastTexture = oesTexId;
             }
-            setOesFilter( (dstW > srcW || dstH > srcH) ? false : true );
+            setOesFilter((dstW > srcW || dstH > srcH) ? false : true);
             GLES20.glUniform1i(rcasOes_uTex, 0);
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-            if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
             return true;
         }
 
-        // Fallback: OES -> upscaledTex (NEAREST), then RCAS on 2D
+        // Fallback: OES -> upscaledTex, then RCAS on 2D
         if (!ensureFbo(dstW, dstH)) return false;
 
+        // FBO is already created + attached + validated inside createOrResizeFbo()
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                GLES20.GL_TEXTURE_2D, upscaledTex, 0);
-        if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
-
         ensureViewport(dstW, dstH);
-// OES -> upscaledTex (adaptive)
-        if (lastProgram != progBlit) {
-            UseProgram(progBlit);
-            lastProgram = progBlit;
-        }
+
+        // OES -> upscaledTex
+        UseProgram(progBlit);
         bindQuad(progBlit);
+
         GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
+
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         if (lastTexture != oesTexId) {
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
             lastTexture = oesTexId;
         }
-        setOesFilter( (dstW > srcW || dstH > srcH) ? false : true );
+        setOesFilter((dstW > srcW || dstH > srcH) ? false : true);
         GLES20.glUniform1i(blit_uTex, 0);
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-// (no EASU timing here, RCAS_ONLY path)
-        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
         // RCAS: upscaledTex -> screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
+
         UseProgram(progRcas);
         bindQuad(progRcas);
+
         if (__fsr.enabled) { __fsr.ticRcas(); }
+
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
         setTex2DFilter(true);
+
         GLES20.glUniform1i(rcas_uTex, 0);
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
+
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+
         if (__fsr.enabled) { __fsr.tocRcas(); }
 
-        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
     }
 
+
+
     private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp) {
-        // apply tilebased optimizations
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
         if (!ensureFbo(dstW, dstH)) return false;
 
+        // FBO is already created + attached + validated inside createOrResizeFbo()
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                GLES20.GL_TEXTURE_2D, upscaledTex, 0);
-        if (!isFboComplete()) { GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0); return false; }
-
         ensureViewport(dstW, dstH);
+
         // EASU (lite)
         UseProgram(progEasu);
         bindQuad(progEasu);
+
         if (__fsr.enabled) { __fsr.ticEasu(); }
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -620,17 +635,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         setOesFilter(false);
 
         GLES20.glUniform1i(easu_uTex, 0);
-        GLES20.glUniform2f(easu_uInvSrcSize, 1.0f / srcW, 1.0f / srcH);
+        GLES20.glUniform2f(easu_uInvSrcSize, 1.0f / Math.max(1, srcW), 1.0f / Math.max(1, srcH));
         GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
         if (__fsr.enabled) { __fsr.tocEasu(); }
-        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
 
-// RCAS → screen
+        // RCAS -> screen
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         ensureViewport(dstW, dstH);
+
         UseProgram(progRcas);
         bindQuad(progRcas);
 
@@ -639,19 +654,20 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, upscaledTex);
         setTex2DFilter(true);
+
         GLES20.glUniform1i(rcas_uTex, 0);
         GLES20.glUniform2f(rcas_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
         GLES20.glUniform1f(rcas_uSharp, clamp01(sharp));
+
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
         if (__fsr.enabled) { __fsr.tocRcas(); }
 
         setTex2DFilter(false);
-
-        if (hasVao) try { GLES30.glBindVertexArray(0); } catch (Throwable ignored) {}
         return true;
-
     }
+
+
 
     // ====== GL setup ======
     private boolean isGlReady() {
@@ -907,19 +923,29 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
     private void bindQuad(int prog) {
         if (hasVao && vao != 0) {
-            try { GLES30.glBindVertexArray(vao); return; } catch (Throwable ignored) { /* fallback */ }
+            try {
+                GLES30.glBindVertexArray(vao);
+                return;
+            } catch (Throwable ignored) {
+                // Fallback to non-VAO path
+            }
         }
-        int locPos = 0, locUv = 1;
+
+        final int locPos = 0;
+        final int locUv = 1;
+
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboPos);
         GLES20.glEnableVertexAttribArray(locPos);
-        GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
-        GLES20.glUniform1i(blit_uTex, 0);
         GLES20.glVertexAttribPointer(locPos, 2, GLES20.GL_FLOAT, false, 0, 0);
+
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboUv);
         GLES20.glEnableVertexAttribArray(locUv);
         GLES20.glVertexAttribPointer(locUv, 2, GLES20.GL_FLOAT, false, 0, 0);
+
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
     }
+
+
 
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
@@ -1252,15 +1278,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Utility: safely return currently bound framebuffer (0 = default)
     private int getBoundFramebuffer() {
-        int[] fbo = new int[1];
         try {
-            GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, fbo, 0);
+            GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, tmpIntArray, 0);
+            return tmpIntArray[0];
         } catch (Throwable ignored) {
-            fbo[0] = 0;
+            return 0;
         }
-        return fbo[0];
     }
-
     // Optimized and safe RCAS_OES health check (low-overhead)
     private void checkRcasOesHealthOnce(int dstW, int dstH) {
         if (rcasOesChecked) return;
@@ -1341,15 +1365,55 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // FSR bypass
         return (mode == null || "none".equals(mode));
     }
+
+    @androidx.annotation.Keep
+    @SuppressWarnings("unused") // called via reflection from MediaCodecDecoderRenderer
     public void applyVsyncSetting() {
-        pendingSwapInterval = (prefs != null && prefs.enableVsync) ? 1 : 0;
+        final int interval = (prefs != null && prefs.enableVsync) ? 1 : 0;
+
+        // Avoid waking the render thread if nothing changed
+        if (pendingSwapInterval == interval) {
+            return;
+        }
+
+        pendingSwapInterval = interval;
+
+        synchronized (frameLock) {
+            frameLock.notify();
+        }
     }
+
     private void UseProgram(int program) {
         if (lastProgram != program) {
             GLES20.glUseProgram(program);
             lastProgram = program;
         }
     }
+
+    // Reattach SurfaceTexture if EGL context changed (prevents updateTexImage() 0x502 on context switches)
+    private void ensureSurfaceTextureAttached() {
+        if (decoderSurfaceTex == null || oesTexId == 0) return;
+
+        final EGLContext cur = EGL14.eglGetCurrentContext();
+        if (cur == null || cur == EGL14.EGL_NO_CONTEXT) return;
+
+        if (attachedEglContext == cur) return;
+
+        try { decoderSurfaceTex.detachFromGLContext(); } catch (Throwable ignored) { }
+
+        try {
+            decoderSurfaceTex.attachToGLContext(oesTexId);
+            attachedEglContext = cur;
+
+            // Cached bindings are not valid across contexts
+            lastTexture = -1;
+            lastProgram = -1;
+        } catch (Throwable t) {
+            LimeLog.warning("FSR: SurfaceTexture attachToGLContext failed: " + t);
+        }
+    }
+
+
     private void clearGlErrors() {
         int error;
         while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {

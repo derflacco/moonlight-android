@@ -2122,6 +2122,33 @@ try {
     private int readFramePacingModeOverlayFirst() {
         return mapFramePacingNameToMode(readFramePacingNameOverlayFirst());
     }
+    private boolean readBooleanOverlayFirst(String key, boolean def) {
+        try {
+            final SharedPreferences overlay = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+            if (overlay != null && overlay.contains(key)) {
+                return overlay.getBoolean(key, def);
+            }
+        } catch (Throwable ignored) { }
+
+        try {
+            final SharedPreferences ui = PreferenceManager.getDefaultSharedPreferences(context);
+            if (ui != null) {
+                return ui.getBoolean(key, def);
+            }
+        } catch (Throwable ignored) { }
+
+        return def;
+    }
+
+    private void applyUpscalerVsyncSettingIfSupported() {
+        try {
+            if (glUpscaler == null) return;
+            final java.lang.reflect.Method m = glUpscaler.getClass().getMethod("applyVsyncSetting");
+            m.invoke(glUpscaler);
+        } catch (Throwable ignored) {
+            // Optional method; ignore if missing
+        }
+    }
 
     private void drainOutputBufferQueueNoRender() {
         Integer idx;
@@ -2146,9 +2173,8 @@ try {
             lastRenderedFrameTimeNanos = 0L;
         }
 
-        // Entering Balanced: only start Choreographer if VSync is NOT active
-        if (newPacing == PreferenceConfiguration.FRAME_PACING_BALANCED
-                && (prefs == null || !prefs.enableVsync)) {
+        // Entering Balanced: always ensure Choreographer is running.
+        if (newPacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
             outputBufferQueue.clear();
             lastRenderedFrameTimeNanos = 0L;
             startChoreographerThread();
@@ -2162,13 +2188,45 @@ try {
     private void initFramePacingFromSettings() {
         final int selected = readFramePacingModeOverlayFirst();
 
-        // --- Mutual exclusion: Balanced vs VSync ---
-        if (prefs != null && prefs.enableVsync && selected == PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            prefs.enableVsync = false;
+        boolean requestedVsync = readBooleanOverlayFirst("checkbox_Vsync", false);
+        final boolean requestedFastVsync = readBooleanOverlayFirst("checkbox_fastVsync", false);
+
+        // Enforce mutual exclusion (FastVSync wins)
+        if (requestedFastVsync && requestedVsync) {
+            requestedVsync = false;
+        }
+
+        // Balanced wins over standard VSync
+        final boolean forcedDisableVsync =
+                (selected == PreferenceConfiguration.FRAME_PACING_BALANCED && requestedVsync);
+        if (forcedDisableVsync) {
+            requestedVsync = false;
+        }
+
+        boolean enableVsyncChanged = false;
+        boolean fastVsyncChanged = false;
+        if (prefs != null) {
+            if (prefs.fastVsync != requestedFastVsync) {
+                prefs.fastVsync = requestedFastVsync;
+                fastVsyncChanged = true;
+            }
+
+            if (prefs.enableVsync != requestedVsync) {
+                prefs.enableVsync = requestedVsync;
+                enableVsyncChanged = true;
+            }
+        }
+
+        if (forcedDisableVsync) {
             com.limelight.LimeLog.info("Disabling VSync because Balanced pacing is active");
         }
 
-        // Respect user pacing choice (no forced Balanced under VSync)
+        // IMPORTANT: apply on enableVsync OR fastVsync change
+        if (enableVsyncChanged || fastVsyncChanged) {
+            applyUpscalerVsyncSettingIfSupported();
+        }
+
+        // Respect user pacing choice
         final int effective = selected;
 
         appliedFramePacing = effective;
@@ -2179,6 +2237,7 @@ try {
         }
     }
 
+
     private void maybeApplyRuntimeFramePacing() {
         final long nowNs = System.nanoTime();
         if (nowNs < nextFramePacingPollNs) {
@@ -2188,13 +2247,45 @@ try {
 
         final int selected = readFramePacingModeOverlayFirst();
 
-        // --- Mutual exclusion: Balanced vs VSync ---
-        if (prefs != null && prefs.enableVsync && selected == PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            prefs.enableVsync = false;
+        // Live reload VSync / FastVSync (overlay-first)
+        boolean requestedVsync = readBooleanOverlayFirst("checkbox_Vsync", false);
+        final boolean requestedFastVsync = readBooleanOverlayFirst("checkbox_fastVsync", false);
+
+        // Enforce mutual exclusion (FastVSync wins)
+        if (requestedFastVsync && requestedVsync) {
+            requestedVsync = false;
+        }
+
+        // Balanced wins over standard VSync
+        final boolean forcedDisableVsync =
+                (selected == PreferenceConfiguration.FRAME_PACING_BALANCED && requestedVsync);
+        if (forcedDisableVsync) {
+            requestedVsync = false;
+        }
+
+        boolean enableVsyncChanged = false;
+        boolean fastVsyncChanged = false;
+        if (prefs != null) {
+            if (prefs.fastVsync != requestedFastVsync) {
+                prefs.fastVsync = requestedFastVsync;
+                fastVsyncChanged = true;
+            }
+
+            if (prefs.enableVsync != requestedVsync) {
+                prefs.enableVsync = requestedVsync;
+                enableVsyncChanged = true;
+            }
+        }
+
+        if (forcedDisableVsync && enableVsyncChanged) {
             com.limelight.LimeLog.info("Disabling VSync because Balanced pacing is active (runtime check)");
         }
 
-        // Do not override pacing mode when VSync is active — respect user choice
+        // IMPORTANT: apply on enableVsync OR fastVsync change
+        if (enableVsyncChanged || fastVsyncChanged) {
+            applyUpscalerVsyncSettingIfSupported();
+        }
+
         final int effective = selected;
 
         if (effective == appliedFramePacing) {
@@ -2204,6 +2295,7 @@ try {
         applyFramePacingTransition(appliedFramePacing, effective);
         appliedFramePacing = effective;
     }
+
 
 
 
