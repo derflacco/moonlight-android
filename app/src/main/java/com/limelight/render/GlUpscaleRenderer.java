@@ -449,20 +449,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
             swapAndContinue();
-        bindQuad(progBlit);
-
-        GLES20.glUniformMatrix4fv(blit_uTexMat, 1, false, texMatrix, 0);
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            if (lastTexture != oesTexId) {
-                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-                lastTexture = oesTexId;
-            }
-        setOesFilter(false);
-        GLES20.glUniform1i(blit_uTex, 0);
-
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-            sizeChangedSinceLastSwap = false;
         }
     }
 
