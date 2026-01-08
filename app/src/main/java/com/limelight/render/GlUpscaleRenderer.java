@@ -874,8 +874,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         UseProgram(progRcas);
         bindQuad(progRcas);
 
-        if (__fsr.enabled) { __fsr.ticRcas(); }
-
         activeTexture0();
         bindTex2DCached(upscaledTex);
         setTex2DFilter(true);
@@ -895,6 +893,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             lastRcasSharp = s;
         }
 
+        if (__fsr.enabled) { __fsr.ticRcas(); }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
         if (__fsr.enabled) { __fsr.tocRcas(); }
