@@ -96,6 +96,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.View.OnGenericMotionListener;
 import android.view.View.OnSystemUiVisibilityChangeListener;
@@ -230,6 +231,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private String appName;
     private NvApp app;
     private float desiredRefreshRate;
+    // Last Surface frame-rate hint applied (avoid redundant calls)
+    private float lastAppliedSurfaceFrameRate = -1f;
+
 
     private InputCaptureProvider inputCaptureProvider;
     private int modifierFlags = 0;
@@ -1714,6 +1718,69 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // Use the lower of the current refresh rate and the selected refresh rate.
             // The preferred refresh rate may not actually be applied (ex: Battery Saver mode).
             return Math.min(currentDisplay.getRefreshRate(), displayRefreshRate);
+        }
+    }
+
+    private Surface getPresentSurfaceOrNull() {
+        try {
+            if (streamContainer == null) return null;
+
+            final SurfaceView sv = streamContainer.getSurfaceView();
+            if (sv == null) return null;
+
+            final SurfaceHolder h = sv.getHolder();
+            if (h == null) return null;
+
+            final Surface s = h.getSurface();
+            if (s == null || !s.isValid()) return null;
+
+            return s;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+
+    private void applySurfaceFrameRateHintIfPossible() {
+        try {
+            if (prefConfig == null || streamContainer == null) return;
+
+            final Surface s = getPresentSurfaceOrNull();
+            if (s == null) return;
+
+            // Compute desired frame-rate hint
+            final float desiredFrameRate;
+            if (mayReduceRefreshRate() || desiredRefreshRate < prefConfig.fps) {
+                desiredFrameRate = prefConfig.fps;
+            } else {
+                desiredFrameRate = desiredRefreshRate;
+            }
+
+            // Skip redundant updates (tolerance for float noise)
+            if (lastAppliedSurfaceFrameRate > 0f && Math.abs(lastAppliedSurfaceFrameRate - desiredFrameRate) < 0.01f) {
+                return;
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                s.setFrameRate(
+                        desiredFrameRate,
+                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                        Surface.CHANGE_FRAME_RATE_ALWAYS
+                );
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                s.setFrameRate(
+                        desiredFrameRate,
+                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                );
+            } else {
+                // Pre-R: best-effort is handled via preferredRefreshRate/preferredDisplayModeId elsewhere.
+                return;
+            }
+
+            lastAppliedSurfaceFrameRate = desiredFrameRate;
+            LimeLog.info("Applied Surface frame-rate hint: " + desiredFrameRate + " fps");
+        } catch (Throwable t) {
+            LimeLog.warning("Surface.setFrameRate() failed: " + t);
         }
     }
 
@@ -3651,15 +3718,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // Clear any frame-rate request at stop (signals 'no preference')
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        Surface s = (streamContainer != null) ? streamContainer.getSurface() : null;
+                        final Surface s = getPresentSurfaceOrNull();
                         if (s != null) {
                             s.setFrameRate(0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
                         }
+                        lastAppliedSurfaceFrameRate = -1f;
                     } else {
                         WindowManager.LayoutParams lp = getWindow().getAttributes();
                         lp.preferredRefreshRate = 0f;
                         getWindow().setAttributes(lp);
                     }
+                    lastAppliedSurfaceFrameRate = -1f;
                 } catch (Throwable ignored) { }
 
                 if (!displayedFailureDialog) {
@@ -3769,6 +3838,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connected = true;
                 connecting = false;
                 updatePipAutoEnter();
+                // Ensure frame-rate hint is applied when streaming starts (some devices need a re-apply)
+                applySurfaceFrameRateHintIfPossible();
 
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
@@ -3888,42 +3959,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 updatePipAutoEnter();
             }
         }
+        // Surface may have been resized/recreated; re-apply frame-rate hint
+        applySurfaceFrameRateHintIfPossible();
+
     }
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        float desiredFrameRate;
-
         surfaceCreated = true;
 
-        // Android will pick the lowest matching refresh rate for a given frame rate value, so we want
-        // to report the true FPS value if refresh rate reduction is enabled. We also report the true
-        // FPS value if there's no suitable matching refresh rate. In that case, Android could try to
-        // select a lower refresh rate that avoids uneven pull-down (ex: 30 Hz for a 60 FPS stream on
-        // a display that maxes out at 50 Hz).
-        if (mayReduceRefreshRate() || desiredRefreshRate < prefConfig.fps) {
-            desiredFrameRate = prefConfig.fps;
-        }
-        else {
-            // Otherwise, we will pretend that our frame rate matches the refresh rate we picked in
-            // prepareDisplayForRendering(). This will usually be the highest refresh rate that our
-            // frame rate evenly divides into, which ensures the lowest possible display latency.
-            desiredFrameRate = desiredRefreshRate;
-        }
-
-        // Tell the OS about our frame rate to allow it to adapt the display refresh rate appropriately
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // We want to change frame rate even if it's not seamless, since prepareDisplayForRendering()
-            // will not set the display mode on S+ if it only differs by the refresh rate. It depends
-            // on us to trigger the frame rate switch here.
-            holder.getSurface().setFrameRate(desiredFrameRate,
-                    Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                    Surface.CHANGE_FRAME_RATE_ALWAYS);
-        }
-        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            holder.getSurface().setFrameRate(desiredFrameRate,
-                    Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-        }
+        // Apply (or re-apply) frame-rate hint to the actual present Surface
+        applySurfaceFrameRateHintIfPossible();
     }
 
     @Override
