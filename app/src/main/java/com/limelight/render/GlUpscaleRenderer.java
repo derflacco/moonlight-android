@@ -267,6 +267,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Reset GL trackers — new SurfaceTexture means new OES texture binding
         lastTexture = -1;
         lastProgram = -1;
+        // Keep filter cache coherent with the freshly-created OES texture (created as LINEAR)
+        oesNearest = false;
         return decoderInputSurface;
     }
 
@@ -490,7 +492,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
                 drawOesToScreen();
 
-            } else if (modeEasuRcas && progEasu != 0 && !nearNative) {
+            } else if (modeEasuRcas && progEasu != 0 && !nearNative && (fbW != srcW || fbH != srcH)) {
+
                 // === EASU + RCAS PATH ===
                 boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative));
 
@@ -1364,6 +1367,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "}";
 
     // EASU minimal pass (OES -> 2D FBO)
+    // EASU minimal pass (OES -> 2D FBO)
     private static final String FS_EASU =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
@@ -1376,11 +1380,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
                     "void main(){\n" +
                     "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
                     "  vec3 c  = texture(uTex, uv).rgb;\n" +
-                    "  vec3 rx = texture(uTex, uv + vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
-                    "  vec3 lx = texture(uTex, uv - vec2(uInvSrcSize.x, 0.0)).rgb;\n" +
-                    "  vec3 ty = texture(uTex, uv + vec2(0.0, uInvSrcSize.y)).rgb;\n" +
-                    "  vec3 by = texture(uTex, uv - vec2(0.0, uInvSrcSize.y)).rgb;\n" +
+                    "  vec3 rx = texture(uTex, uv + stepX).rgb;\n" +
+                    "  vec3 lx = texture(uTex, uv - stepX).rgb;\n" +
+                    "  vec3 ty = texture(uTex, uv + stepY).rgb;\n" +
+                    "  vec3 by = texture(uTex, uv - stepY).rgb;\n" +
                     "  float gx = luma(rx) - luma(lx);\n" +
                     "  float gy = luma(ty) - luma(by);\n" +
                     "  float edge = clamp((abs(gx)+abs(gy))*1.5, 0.0, 1.0);\n" +
@@ -1392,7 +1398,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
                     "  vec3 up = mix(base, guided, 0.35*edge);\n" +
                     "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
-                    "}";
+                    "}\n";
 
     // RCAS shader with optimized OES path using precomputed varyings
     private static final String FS_RCAS =
@@ -1649,6 +1655,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         } finally {
             // Restore viewport
             GLES20.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+
+            // Keep viewport cache coherent
+            curVpW = prevViewport[2];
+            curVpH = prevViewport[3];
 
             // Restore previous FBO using cache-aware helper
             bindFramebufferCached(prevFbo);
