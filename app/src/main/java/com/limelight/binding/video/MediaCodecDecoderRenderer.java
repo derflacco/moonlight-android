@@ -181,20 +181,83 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         } catch (Throwable ignored) { return ""; }
     }
 
-    private static void __fsrSetPresentationHintFromContext(Object upscaler, android.content.Context ctx) {
-        if (upscaler == null || ctx == null) return;
-        try {
-            UpscalerReflect.setPresentationHint(upscaler).invoke(upscaler, ctx);
-        } catch (Throwable ignored) {}
+    private static float __fsrGetWeightMs(Object upscaler) {
+        if (upscaler == null) return 0f;
+
+        final String line = __fsrGetOverlayLine(upscaler);
+        if (line == null || line.isEmpty()) return 0f;
+
+        final float ms = __fsrParseMaxMsToken(line);
+        // Sanity clamp: ignore clearly bogus values
+        if (ms <= 0f || ms > 50f) return 0f;
+
+        return ms;
     }
 
-    // Prefix the overlay text with a small, slowly changing number of spaces to nudge its position.
-    private static String __applyLiteShift(String text, int spaces) {
-        if (text == null || text.isEmpty() || spaces <= 0) return text;
-        StringBuilder pfx = new StringBuilder(spaces);
-        for (int i = 0; i < spaces; i++) pfx.append(' ');
-        return pfx.append(text).toString(); // shift solo prima riga
+    // Parse the maximum "<number>ms" token found in the overlay line (case-insensitive).
+    private static float __fsrParseMaxMsToken(String s) {
+        if (s == null) return 0f;
+
+        float max = 0f;
+
+        for (int i = s.length() - 1; i >= 1; i--) {
+            final char cs = s.charAt(i);
+            if (cs != 's' && cs != 'S') continue;
+
+            final char cm = s.charAt(i - 1);
+            if (cm != 'm' && cm != 'M') continue;
+
+            final int end = i - 1; // exclusive end of number (points to 'm')
+            int start = end - 1;
+            while (start >= 0) {
+                final char c = s.charAt(start);
+                if ((c >= '0' && c <= '9') || c == '.') {
+                    start--;
+                } else {
+                    break;
+                }
+            }
+            start++;
+
+            if (start >= end) continue;
+
+            final float v = __fsrParseFloatRange(s, start, end);
+            if (v > max) max = v;
+
+            // Skip over the parsed number to avoid re-parsing overlapping tokens
+            i = start;
+        }
+
+        return max;
     }
+
+    private static float __fsrParseFloatRange(String s, int start, int endExclusive) {
+        float v = 0f;
+        float frac = 0.1f;
+        boolean seenDot = false;
+
+        for (int i = start; i < endExclusive; i++) {
+            final char c = s.charAt(i);
+            if (c == '.') {
+                if (seenDot) return 0f;
+                seenDot = true;
+                continue;
+            }
+
+            final int d = c - '0';
+            if (d < 0 || d > 9) return 0f;
+
+            if (!seenDot) {
+                v = (v * 10f) + (float) d;
+            } else {
+                v += ((float) d) * frac;
+                frac *= 0.1f;
+            }
+        }
+
+        return v;
+    }
+
 
     // --- end helpers ---
 
@@ -3228,6 +3291,10 @@ try {
 
         StringBuilder sb = new StringBuilder(sbCap);
 
+        final boolean __fsrActiveForE2e = prefsSnapshot.videoUpscaleEnable && glUpscaler != null;
+        final float __fsrWeightMsForE2e = __fsrActiveForE2e ? __fsrGetWeightMs(glUpscaler) : 0f;
+        final float e2eTotalMs = endToEndTimeMs + __fsrWeightMsForE2e;
+
         // --- MINI OVERLAY ---
         if (prefsSnapshot.enablePerfOverlayMini) {
             // Network bandwidth
@@ -3298,7 +3365,7 @@ try {
             // Advanced Lite: end-to-end latency
             if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
                 sb.append(" / ");
-                sb.append(context.getString(R.string.perf_overlay_lite_e2e, endToEndTimeMs));
+                sb.append(context.getString(R.string.perf_overlay_lite_e2e, e2eTotalMs));
                 sb.append("  ");
             }
 
@@ -3429,7 +3496,7 @@ try {
 
             // Decode time and end-to-end latency
             sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
-            sb.append(context.getString(R.string.perf_overlay_e2etime, endToEndTimeMs));
+            sb.append(context.getString(R.string.perf_overlay_lite_e2e, e2eTotalMs));
         }
 
 /*        // Append FSR upscaler info if available
