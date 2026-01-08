@@ -155,7 +155,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int vao = 0;
     private boolean hasVao = false;
     private long lastSizeQueryNs = 0L;
-    private static final long SIZE_QUERY_NS = 400_000_000L; // ~0.4s
+    private static final long SIZE_QUERY_MIN_NS = 400_000_000L;  // 0.4s baseline
+    private static final long SIZE_QUERY_MAX_NS = 1_200_000_000L; // 1.2s max backoff
+
+    private long sizeQueryNs = SIZE_QUERY_MIN_NS;
+    private int stableSizeQueryCount = 0;
+    private boolean lastSizeQueryOk = false;
     private int swapFailStreak = 0;
 
     // Threading
@@ -215,7 +220,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         lastFsrOverlayUpdateNs = now;
         lastFsrOverlayMode = (__fsr.mode != null ? __fsr.mode : "");
         lastFsrOverlaySharp = __fsr.sharp;
-        maybeUpdateFsrOverlay();
+
+        __fsrOverlay = __fsr.overlayLine();
     }
 
 
@@ -389,6 +395,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 lastBlitTexMatSerial = -1L;
                 lastEasuTexMatSerial = -1L;
                 lastRcasOesTexMatSerial = -1L;
+                markGlErrorDirty();
             }
 
             boolean newFrame = false;
@@ -443,13 +450,42 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
 
-            // window refresh only every ~0.5s
-            long now = System.nanoTime();
-            if (fbW <= 0 || (now - lastSizeQueryNs) >= SIZE_QUERY_NS) {
-                int prevW = fbW, prevH = fbH;
-                refreshWindowSize();
-                if (fbW != prevW || fbH != prevH) sizeChangedSinceLastSwap = true;
-                lastSizeQueryNs = now;
+            final long nowNs = System.nanoTime();
+
+// Query size immediately on startup, after a forced redraw, or after swap failures.
+// Otherwise, back off when stable to reduce eglQuerySurface overhead.
+            final boolean forceSizeQuery =
+                    (fbW <= 0 || fbH <= 0) ||
+                            sizeChangedSinceLastSwap ||
+                            (swapFailStreak > 0);
+
+            if (forceSizeQuery || (nowNs - lastSizeQueryNs) >= sizeQueryNs) {
+                final int prevW = fbW;
+                final int prevH = fbH;
+
+                refreshWindowSize(); // sets lastSizeQueryOk
+                lastSizeQueryNs = nowNs;
+
+                final boolean changed = (fbW != prevW || fbH != prevH);
+
+                if (!lastSizeQueryOk) {
+                    sizeQueryNs = SIZE_QUERY_MIN_NS;
+                    stableSizeQueryCount = 0;
+                } else if (changed) {
+                    sizeChangedSinceLastSwap = true;
+                    sizeQueryNs = SIZE_QUERY_MIN_NS;
+                    stableSizeQueryCount = 0;
+                } else if (!forceSizeQuery) {
+                    stableSizeQueryCount++;
+                    if (stableSizeQueryCount >= 3) {
+                        stableSizeQueryCount = 0;
+                        sizeQueryNs = Math.min(SIZE_QUERY_MAX_NS, sizeQueryNs * 2L);
+                    }
+                } else {
+                    // Forced query but stable; keep cadence conservative.
+                    stableSizeQueryCount = 0;
+                    sizeQueryNs = Math.max(sizeQueryNs, SIZE_QUERY_MIN_NS);
+                }
             }
 
             if (fbW <= 0 || fbH <= 0) continue;
@@ -841,21 +877,32 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private void refreshWindowSize() {
         if (!isGlReady()) return;
+
         int w = 0, h = 0;
         try {
             EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_WIDTH,  tmpIntArray, 0);  w = tmpIntArray[0];
             EGL14.eglQuerySurface(eglDisplay, eglWindowSurface, EGL14.EGL_HEIGHT, tmpIntArray, 0); h = tmpIntArray[0];
-        } catch (Throwable ignored) {}
-        if (w > 0 && h > 0 && (w != fbW || h != fbH)) {
+        } catch (Throwable ignored) { }
+
+        lastSizeQueryOk = (w > 0 && h > 0);
+        if (!lastSizeQueryOk) {
+            return;
+        }
+
+        if (w != fbW || h != fbH) {
             createOrResizeFbo(w, h);
         }
 
         if (w == srcW && h == srcH && (hintOutW > srcW || hintOutH > srcH)) {
-            try { com.limelight.LimeLog.warning("FSR: window surface == source ("+w+"x"+h+"), but presentation hint is " + hintOutW + "x" + hintOutH +
-                    ". Upscale will be bypassed. Use a display-sized Surface (TextureView.setDefaultBufferSize or SurfaceHolder.setFixedSize)."); } catch (Throwable ignored) {}
+            try {
+                com.limelight.LimeLog.warning(
+                        "FSR: window surface == source (" + w + "x" + h + "), but presentation hint is " +
+                                hintOutW + "x" + hintOutH +
+                                ". Upscale will be bypassed. Use a display-sized Surface (TextureView.setDefaultBufferSize or SurfaceHolder.setFixedSize)."
+                );
+            } catch (Throwable ignored) { }
         }
     }
-
     private void ensureViewport(int w, int h) {
         if (w <= 0 || h <= 0) return;
         if (w != curVpW || h != curVpH) {
@@ -1169,7 +1216,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 GLES20.glUniform1i(rcasOes_uTex, 0);
             }
 
-// Constant clear color: keep glClear() in render loop.
+        // Constant clear color: keep glClear() in render loop.
             GLES20.glClearColor(0f, 0f, 0f, 1f);
 
             primeStaticUniforms();
