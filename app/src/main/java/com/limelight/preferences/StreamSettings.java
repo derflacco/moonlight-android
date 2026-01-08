@@ -782,6 +782,12 @@ public class StreamSettings extends AppCompatActivity {
                 return;
             }
 
+            // Direct Present (GPU Path) ON: do not show upscaling prompt for suggested lower resolutions.
+            if (sp.getBoolean("checkbox_gpu_path_mode", false)) {
+                after.run();
+                return;
+            }
+
             Display display = requireActivity().getWindowManager().getDefaultDisplay();
             int[] dwh = getDisplayLandscapeSize(display);
             int displayW = dwh[0];
@@ -804,15 +810,15 @@ public class StreamSettings extends AppCompatActivity {
 
             Runnable finalAfter = after;
             Runnable finalAfter1 = after;
-            Runnable    finalAfter2 = after;
+            Runnable finalAfter2 = after;
+
             new AlertDialog.Builder(requireContext())
                     .setTitle(R.string.title_enable_upscaling_dialog)
                     .setMessage(R.string.text_enable_upscaling_dialog)
                     .setPositiveButton(R.string.button_enable_upscaling, (d, w) -> {
-                        boolean gpuPath = sp.getBoolean("checkbox_gpu_path_mode", false);
                         boolean hdrOn = isHdrEnabled(sp);
 
-                        if (gpuPath || hdrOn) {
+                        if (hdrOn) {
                             new AlertDialog.Builder(requireContext())
                                     .setTitle(R.string.title_upscaling_unavailable_dialog)
                                     .setMessage(R.string.text_upscaling_unavailable_dialog)
@@ -835,6 +841,7 @@ public class StreamSettings extends AppCompatActivity {
                     .setOnCancelListener(d -> finalAfter1.run())
                     .show();
         }
+
 
         private void applySuggestedResolution(String resolution) {
             SharedPreferences prefs = getPrefs();
