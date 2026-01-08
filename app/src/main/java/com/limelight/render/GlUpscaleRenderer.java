@@ -25,6 +25,7 @@ import com.limelight.LimeLog;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /*
@@ -47,6 +48,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // These flags are driven from Game/decoder:
     private volatile boolean hdrActive = false;
     private volatile boolean hdrDirectPresent = false;
+    private final ByteBuffer testPixelBuffer = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
+
 
     // RCAS_OES health-check state
     private boolean rcasOesChecked = false;
@@ -212,8 +215,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!__fsr.enabled) return;
 
         final long now = System.nanoTime();
-        final boolean modeSame = (__fsr.mode != null && __fsr.mode.equals(lastFsrOverlayMode));
-        final boolean sharpSame = (Math.abs(__fsr.sharp - lastFsrOverlaySharp) < 0.0005f);
+        final boolean modeSame = (__fsr.mode.equals(lastFsrOverlayMode));
+        final boolean sharpSame = (__fsr.sharp == lastFsrOverlaySharp);
 
         if (modeSame && sharpSame && (now - lastFsrOverlayUpdateNs) < FSR_OVERLAY_UPDATE_NS) {
             return;
@@ -315,7 +318,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         if (!isGlReady() || running.getAndSet(true)) return;
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
-        renderThread.setPriority(Thread.NORM_PRIORITY + 2);
+        try {
+            renderThread.setPriority(Thread.NORM_PRIORITY + 2);
+        } catch (Throwable ignored) {}
+
         renderThread.start();
     }
 
@@ -360,6 +366,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Main render loop ======
     private void renderLoop() {
         while (running.get()) {
+            final boolean fsrEnabled = __fsr.enabled;
             // quick skip if EGL lost
             if (!isGlReady()) {
                 synchronized (this) { initEglAndGl(); }
@@ -509,7 +516,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             final boolean gpuPath = (prefs != null && prefs.gpuPathMode);
             if (gpuPath) {
-                if (__fsr.enabled) {
+                if (fsrEnabled) {
                     __fsr.mode = "BYPASS";
                     __fsr.srcW = srcW;
                     __fsr.srcH = srcH;
@@ -518,7 +525,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.sharp = 0f;
                     __fsr.sampling = "gpuPath";
                     __fsr.notes = "reason=gpuPathMode";
-                    maybeUpdateFsrOverlay();
+                    if (fsrEnabled) maybeUpdateFsrOverlay();
                 }
 
                 // Safety: ensure we render to default framebuffer
@@ -570,7 +577,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // === FSR path selection + telemetry ===
             if (!upscaleEnabled || modeNone) {
                 // === BYPASS PATH ===
-                if (__fsr.enabled) {
+                if (fsrEnabled) {
                     __fsr.mode = "BYPASS";
                     __fsr.srcW = srcW;
                     __fsr.srcH = srcH;
@@ -581,7 +588,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled")
                             + " | win=" + fbW + "x" + fbH
                             + " hint=" + dstTargetW + "x" + dstTargetH;
-                    maybeUpdateFsrOverlay();
+                    if (fsrEnabled) maybeUpdateFsrOverlay();
                 }
                 drawOesToScreen();
 
@@ -590,7 +597,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 // === EASU + RCAS PATH ===
                 boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative));
 
-                if (__fsr.enabled) {
+                if (fsrEnabled) {
                     __fsr.mode = "EASU+RCAS";
                     __fsr.srcW = srcW;
                     __fsr.srcH = srcH;
@@ -598,14 +605,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.dstH = fbH;
                     __fsr.sharp = sharpUser;
                     __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-                    __fsr.notes = (ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed")
-                            + " | nearNative=" + nearNative
-                            + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
+                    StringBuilder sb = new StringBuilder(64);
+                    sb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
+                    sb.append(" | nearNative=").append(nearNative);
+                    sb.append(" thr=").append(String.format(Locale.US, "%.2f", nearThr));
+                    __fsr.notes = sb.toString();
+
                     __fsr.frames++;
                     if ((__fsr.frames % 240L) == 0L) {
                         com.limelight.LimeLog.info(__fsr.periodicLine());
                     }
-                    maybeUpdateFsrOverlay();
+                    if (fsrEnabled) maybeUpdateFsrOverlay();
                 }
 
                 if (!ok) {
@@ -622,11 +632,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
                 ok = drawRcasOnlySafe(fbW, fbH, effSharp);
 
-                if (__fsr.enabled) {
+                if (fsrEnabled) {
                     dt = System.nanoTime() - t0;
                 }
 
-                if (__fsr.enabled) {
+                if (fsrEnabled) {
                     __fsr.mode = "RCAS_ONLY";
                     __fsr.srcW = srcW;
                     __fsr.srcH = srcH;
@@ -651,7 +661,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     if ((__fsr.frames % 240L) == 0L) {
                         com.limelight.LimeLog.info(__fsr.periodicLine());
                     }
-                    maybeUpdateFsrOverlay();
+                    if (fsrEnabled) maybeUpdateFsrOverlay();
                 }
 
                 if (!ok) {
@@ -1237,28 +1247,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 GLES20.glUniform1i(blit_uTex, 0);
             }
 
-            UseProgram(progEasu);
-            if (easu_uTex >= 0) {
-                GLES20.glUniform1i(easu_uTex, 0);
-            }
-            if (easu_uInvSrcSize >= 0) {
-                GLES20.glUniform2f(
-                        easu_uInvSrcSize,
-                        1.0f / (float) Math.max(1, srcW),
-                        1.0f / (float) Math.max(1, srcH)
-                );
-            }
-
-            UseProgram(progRcas);
-            if (rcas_uTex >= 0) {
-                GLES20.glUniform1i(rcas_uTex, 0);
-            }
-
-            if (progRcasOes != 0 && rcasOes_uTex >= 0) {
-                UseProgram(progRcasOes);
-                GLES20.glUniform1i(rcasOes_uTex, 0);
-            }
-
         // Constant clear color: keep glClear() in render loop.
             GLES20.glClearColor(0f, 0f, 0f, 1f);
 
@@ -1391,7 +1379,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, filter);
     }
 
-    private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
+    private static float clamp01(float v) {
+        return Math.min(1f, Math.max(0f, v));
+    }
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
         float s = clamp01(ui);
         // In HDR + GPU direct path, we must not alter gamma or sharpness
@@ -1760,7 +1750,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-            ByteBuffer bb = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
+            ByteBuffer bb = testPixelBuffer;
+            bb.clear();
             GLES20.glReadPixels(0, 0, 2, 2, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, bb);
 
             int sum = 0;
