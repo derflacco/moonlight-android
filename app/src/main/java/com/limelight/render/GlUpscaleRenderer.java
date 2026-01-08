@@ -127,6 +127,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int fbo = 0;
     private int upscaledTex = 0;
     private int fbW = 0, fbH = 0;
+    private int fboW = 0;
+    private int fboH = 0;
 
     // Programs
     private int progVs = 0, progBlit = 0, progEasu = 0, progRcas = 0;
@@ -223,6 +225,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         __fsrOverlay = __fsr.overlayLine();
     }
+
 
 
     // GL binding caches (reduce driver chatter)
@@ -501,9 +504,32 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
         // Fullscreen draw overwrites all pixels; clearing is redundant
-            ensureViewport(fbW, fbH);
-        // Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
+            ensureViewport(fbW, fbH);// Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+
+            final boolean gpuPath = (prefs != null && prefs.gpuPathMode);
+            if (gpuPath) {
+                if (__fsr.enabled) {
+                    __fsr.mode = "BYPASS";
+                    __fsr.srcW = srcW;
+                    __fsr.srcH = srcH;
+                    __fsr.dstW = fbW;
+                    __fsr.dstH = fbH;
+                    __fsr.sharp = 0f;
+                    __fsr.sampling = "gpuPath";
+                    __fsr.notes = "reason=gpuPathMode";
+                    maybeUpdateFsrOverlay();
+                }
+
+                // Safety: ensure we render to default framebuffer
+                bindFramebufferCached(0);
+
+                drawOesToScreen();
+                if (swapAndContinue()) {
+                    sizeChangedSinceLastSwap = false;
+                }
+                continue;
+            }
 
 
             final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
@@ -876,7 +902,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void refreshWindowSize() {
-        if (!isGlReady()) return;
+        if (!isGlReady()) {
+            lastSizeQueryOk = false;
+            return;
+        }
 
         int w = 0, h = 0;
         try {
@@ -885,24 +914,31 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         } catch (Throwable ignored) { }
 
         lastSizeQueryOk = (w > 0 && h > 0);
-        if (!lastSizeQueryOk) {
-            return;
-        }
+        if (!lastSizeQueryOk) return;
 
         if (w != fbW || h != fbH) {
-            createOrResizeFbo(w, h);
+            fbW = w;
+            fbH = h;
+
+            // viewport depends on window size
+            curVpW = -1;
+            curVpH = -1;
+
+            // If FBO exists with old size, drop it; re-create lazily when needed.
+            if (fbo != 0 && (fboW != w || fboH != h)) {
+                destroyFbo();
+            }
         }
 
         if (w == srcW && h == srcH && (hintOutW > srcW || hintOutH > srcH)) {
             try {
-                com.limelight.LimeLog.warning(
-                        "FSR: window surface == source (" + w + "x" + h + "), but presentation hint is " +
-                                hintOutW + "x" + hintOutH +
-                                ". Upscale will be bypassed. Use a display-sized Surface (TextureView.setDefaultBufferSize or SurfaceHolder.setFixedSize)."
-                );
+                LimeLog.warning("FSR: window surface == source (" + w + "x" + h + "), but presentation hint is " +
+                        hintOutW + "x" + hintOutH +
+                        ". Upscale will be bypassed. Use a display-sized Surface (TextureView.setDefaultBufferSize or SurfaceHolder.setFixedSize).");
             } catch (Throwable ignored) { }
         }
     }
+
     private void ensureViewport(int w, int h) {
         if (w <= 0 || h <= 0) return;
         if (w != curVpW || h != curVpH) {
@@ -915,8 +951,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean ensureFbo(int w, int h) {
         if (w <= 0 || h <= 0) return false;
 
-        // Safe: FBO must match the requested output size unless you also scale UVs in shader.
-        if (upscaledTex != 0 && fbo != 0 && w == fbW && h == fbH) {
+        if (upscaledTex != 0 && fbo != 0 && w == fboW && h == fboH) {
             return true;
         }
 
@@ -925,10 +960,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
 
+
     private void createOrResizeFbo(int w, int h) {
         destroyFbo();
-        fbW = w; fbH = h;
-        curVpW = -1; curVpH = -1;
+
+        fboW = w;
+        fboH = h;
+
+        // Viewport cache invalid (we change targets in the same frame)
+        curVpW = -1;
+        curVpH = -1;
 
         GLES20.glGenFramebuffers(1, tmpIntArray, 0);
         fbo = tmpIntArray[0];
@@ -936,7 +977,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glGenTextures(1, tmpIntArray, 0);
         upscaledTex = tmpIntArray[0];
 
-        // Ensure we bind/initialize the texture on unit 0, coherently with our cache.
         bindTex2DCached(upscaledTex);
         GLES20.glTexImage2D(
                 GLES20.GL_TEXTURE_2D, 0,
@@ -949,7 +989,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
 
-        // Bind FBO and attach color texture
         bindFramebufferCached(fbo);
         GLES20.glFramebufferTexture2D(
                 GLES20.GL_FRAMEBUFFER,
@@ -965,12 +1004,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return;
         }
 
-        // Unbind
         bindFramebufferCached(0);
 
         // Force filter state to be re-applied on next use.
         twoDNearest = false;
     }
+
 
 
     private boolean isFboComplete() {
@@ -999,7 +1038,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
             fbo = 0;
         }
+
+        fboW = 0;
+        fboH = 0;
     }
+
 
     private void primeStaticUniforms() {
         // Samplers are constant: texture unit 0
