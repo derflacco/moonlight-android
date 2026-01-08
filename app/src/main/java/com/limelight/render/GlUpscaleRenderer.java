@@ -193,6 +193,32 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private String lastFsrOverlayMode = "";
     private float lastFsrOverlaySharp = -1f;
 
+    // GL error state (avoid glGetError() per-frame)
+    private boolean glErrorDirty = true;
+
+    private void markGlErrorDirty() {
+        glErrorDirty = true;
+    }
+
+    // Throttle overlay formatting (String.format) to avoid per-frame allocations when debug is ON
+    private void maybeUpdateFsrOverlay() {
+        if (!__fsr.enabled) return;
+
+        final long now = System.nanoTime();
+        final boolean modeSame = (__fsr.mode != null && __fsr.mode.equals(lastFsrOverlayMode));
+        final boolean sharpSame = (Math.abs(__fsr.sharp - lastFsrOverlaySharp) < 0.0005f);
+
+        if (modeSame && sharpSame && (now - lastFsrOverlayUpdateNs) < FSR_OVERLAY_UPDATE_NS) {
+            return;
+        }
+
+        lastFsrOverlayUpdateNs = now;
+        lastFsrOverlayMode = (__fsr.mode != null ? __fsr.mode : "");
+        lastFsrOverlaySharp = __fsr.sharp;
+        maybeUpdateFsrOverlay();
+    }
+
+
     // GL binding caches (reduce driver chatter)
     private int activeTexUnit = -1;   // 0 == GL_TEXTURE0
     private int lastTex2D = -1;       // last GL_TEXTURE_2D bound to unit 0
@@ -394,22 +420,28 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             try {
                 if (decoderSurfaceTex != null && newFrame) {
                     if (!ensureSurfaceTextureAttached()) {
+                        // ensureSurfaceTextureAttached() should markGlErrorDirty() on failures
                         continue; // do not call updateTexImage() when detached
                     }
 
-                    clearGlErrors();
+                    if (glErrorDirty) {
+                        clearGlErrors();
+                        glErrorDirty = false;
+                    }
+
                     decoderSurfaceTex.updateTexImage();
                     decoderSurfaceTex.getTransformMatrix(texMatrix);
                     texMatrixSerial++;
                     hasEverUpdatedTex = true;
                     didUpdateTex = true;
-
                 }
             } catch (Throwable t) {
                 // Prevent SurfaceTexture crash loop if decoderSurfaceTex is invalid or detached
                 LimeLog.warning("updateTexImage failed: " + t);
+                markGlErrorDirty();
                 continue; // Skip this frame safely, avoid drawing invalid texture
             }
+
 
             // window refresh only every ~0.5s
             long now = System.nanoTime();
@@ -435,7 +467,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Fullscreen draw overwrites all pixels; clearing is redundant
             ensureViewport(fbW, fbH);
         // Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
-            GLES20.glClearColor(0f, 0f, 0f, 1f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
 
@@ -488,7 +519,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled")
                             + " | win=" + fbW + "x" + fbH
                             + " hint=" + dstTargetW + "x" + dstTargetH;
-                    __fsrOverlay = __fsr.overlayLine();
+                    maybeUpdateFsrOverlay();
                 }
                 drawOesToScreen();
 
@@ -512,7 +543,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     if ((__fsr.frames % 240L) == 0L) {
                         com.limelight.LimeLog.info(__fsr.periodicLine());
                     }
-                    __fsrOverlay = __fsr.overlayLine();
+                    maybeUpdateFsrOverlay();
                 }
 
                 if (!ok) {
@@ -558,7 +589,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     if ((__fsr.frames % 240L) == 0L) {
                         com.limelight.LimeLog.info(__fsr.periodicLine());
                     }
-                    __fsrOverlay = __fsr.overlayLine();
+                    maybeUpdateFsrOverlay();
                 }
 
                 if (!ok) {
@@ -1761,14 +1792,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Cached bindings are not valid across contexts
             lastTexture = -1;
             lastProgram = -1;
+
+            // Clear stale errors once after reattach (not every frame)
+            markGlErrorDirty();
             return true;
         } catch (Throwable t) {
             // Force a clean retry on the next frame
             attachedEglContext = EGL14.EGL_NO_CONTEXT;
             LimeLog.warning("FSR: SurfaceTexture attachToGLContext failed: " + t);
+            markGlErrorDirty();
             return false;
         }
     }
+
 
 
     private void clearGlErrors() {
