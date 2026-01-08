@@ -802,8 +802,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         UseProgram(progRcas);
         bindQuad(progRcas);
 
-        if (__fsr.enabled) { __fsr.ticRcas(); }
-
         activeTexture0();
         bindTex2DCached(upscaledTex);
         setTex2DFilter(true);
@@ -822,6 +820,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glUniform1f(rcas_uSharp, s);
             lastRcasSharp = s;
         }
+
+        if (__fsr.enabled) { __fsr.ticRcas(); }
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
@@ -1057,7 +1057,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Samplers are constant: texture unit 0
         if (progBlit != 0 && blit_uTex >= 0) {
             GLES20.glUseProgram(progBlit);
-
+            GLES20.glUniform1i(blit_uTex, 0);
         }
 
         if (progEasu != 0) {
@@ -1076,12 +1076,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         if (progRcas != 0 && rcas_uTex >= 0) {
             GLES20.glUseProgram(progRcas);
-
+            GLES20.glUniform1i(rcas_uTex, 0);
         }
 
         if (progRcasOes != 0 && rcasOes_uTex >= 0) {
             GLES20.glUseProgram(progRcasOes);
-
+            GLES20.glUniform1i(rcasOes_uTex, 0);
         }
 
         // Force next draw to rebind program via UseProgram()
