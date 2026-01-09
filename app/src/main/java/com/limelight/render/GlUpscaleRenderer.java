@@ -1393,7 +1393,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (s <= 0.05f) return 0f;
         s = (s - 0.05f) / 0.95f;
         s = (float)(1.0 - Math.exp(-3.0 * s));
-        float cap = nearNative ? 0.18f : 0.25f;
+        float cap = nearNative ? 0.4f : 0.8f;
+
         return cap * s;
     }
 
