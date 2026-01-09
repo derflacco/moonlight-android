@@ -744,7 +744,8 @@
     <string name="pref_video_upscale_mode_title">Upscaling mode</string>
     <string name="pref_video_upscale_sharpness_title">Sharpening</string>
     <string name="pref_video_upscale_sharpness_summary">RCAS intensity (0–100)</string>
-
+    <string name="pref_video_upscale_preset_title">FSR preset</string>
+    <string name="pref_video_upscale_preset_summary">0=Performance, 1=Balanced, 2=Quality</string>
     <string-array name="pref_video_upscale_mode_entries">
         <item>None</item>
         <item>RCAS</item>

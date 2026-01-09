@@ -137,11 +137,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int fboH = 0;
 
     // Programs
-    private int progVs = 0, progBlit = 0, progEasu = 0, progRcas = 0;
+    private int progVs = 0, progBlit = 0, progEasuPerf = 0, progEasuBalanced = 0, progEasuQuality = 0, progRcas = 0;
 
     // Uniform locations
     private int blit_uTex = -1, blit_uTexMat = -1;
-    private int easu_uTex = -1, easu_uInvSrcSize = -1, easu_uTexMat = -1;
+    private int easuPerf_uTex = -1, easuPerf_uInvSrcSize = -1, easuPerf_uTexMat = -1;
+    private int easuQ_uTex = -1, easuQ_uInvSrcSize = -1, easuQ_uTexMat = -1;
+    private int easuBal_uTex = -1, easuBal_uInvSrcSize = -1, easuBal_uTexMat = -1;
+
+
     private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1;
     private int progRcasOes = 0, rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uTexMat = -1;
 
@@ -243,7 +247,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // TexMatrix upload cache (avoid glUniformMatrix4fv when matrix unchanged)
     private long texMatrixSerial = 0L;
     private long lastBlitTexMatSerial = -1L;
-    private long lastEasuTexMatSerial = -1L;
+    private long lastEasuPerfTexMatSerial = -1L;
+
+    private long lastEasuQualityTexMatSerial = -1L;
+    private long lastEasuBalTexMatSerial = -1L;
     private long lastRcasOesTexMatSerial = -1L;
 
     public GlUpscaleRenderer(android.content.Context context, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
@@ -469,8 +476,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             lastTex2D = -1;
             lastFbo = -1;
             lastBlitTexMatSerial = -1L;
-            lastEasuTexMatSerial = -1L;
+            lastEasuPerfTexMatSerial = -1L;
+            lastEasuQualityTexMatSerial = -1L;
             lastRcasOesTexMatSerial = -1L;
+            lastEasuBalTexMatSerial = -1L;
             markGlErrorDirty();
         }
 
@@ -658,10 +667,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             drawOesToScreen();
 
-        } else if (modeEasuRcas && progEasu != 0 && !nearNative && (fbW != srcW || fbH != srcH)) {
+        } else if (modeEasuRcas
+                && (progEasuPerf != 0 || progEasuBalanced != 0 || progEasuQuality != 0)
+                && !nearNative
+                && (fbW != srcW || fbH != srcH)) {
 
-            // === EASU + RCAS PATH ===
-            boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative));
+            final int preset = (prefs != null ? prefs.videoUpscalePreset : 1); // 0..2
+            final float upRatio = Math.max(scaleX, scaleY);
+
+            boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative), preset);
+
 
             if (fsrEnabled) {
                 __fsr.mode = "EASU+RCAS";
@@ -671,10 +686,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.dstH = fbH;
                 __fsr.sharp = sharpUser;
                 __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-                StringBuilder sb = new StringBuilder(64);
+                StringBuilder sb = new StringBuilder(96);
                 sb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
-                sb.append(" | nearNative=").append(nearNative);
-                sb.append(" thr=").append(String.format(Locale.US, "%.2f", nearThr));
+                sb.append(" easu=").append((preset == 0) ? "P" : (preset == 1 ? "B" : "Q"));
+                sb.append(" | preset=").append(preset);
+                sb.append(" up=").append(String.format(Locale.US, "%.2f", upRatio));
                 __fsr.notes = sb.toString();
 
                 __fsr.frames++;
@@ -685,9 +701,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!ok) {
-                // Fallback if EASU+RCAS failed
                 drawOesToScreen();
             }
+
 
         } else {
             // === RCAS-ONLY PATH ===
@@ -900,18 +916,44 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
 
 
-    private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp) {
+    private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp, int preset) {
         if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
         if (!ensureFbo(dstW, dstH)) return false;
 
+        if (preset < 0) preset = 0;
+        else if (preset > 2) preset = 2;
+
         final float s = clamp01(sharp);
+
+        // Select EASU program (0=Perf, 1=Balanced, 2=Quality)
+        int easuProg = 0;
+        int easuTexMatLoc = -1;
+
+        if (preset == 2 && progEasuQuality != 0) {
+            easuProg = progEasuQuality;
+            easuTexMatLoc = easuQ_uTexMat;
+        } else if (preset == 1 && progEasuBalanced != 0) {
+            easuProg = progEasuBalanced;
+            easuTexMatLoc = easuBal_uTexMat;
+        } else if (progEasuPerf != 0) {
+            easuProg = progEasuPerf;
+            easuTexMatLoc = easuPerf_uTexMat;
+        } else if (progEasuBalanced != 0) {
+            easuProg = progEasuBalanced;
+            easuTexMatLoc = easuBal_uTexMat;
+        } else if (progEasuQuality != 0) {
+            easuProg = progEasuQuality;
+            easuTexMatLoc = easuQ_uTexMat;
+        } else {
+            return false;
+        }
 
         // EASU -> FBO
         bindFramebufferCached(fbo);
         ensureViewport(dstW, dstH);
 
-        UseProgram(progEasu);
-        bindQuad(progEasu);
+        UseProgram(easuProg);
+        bindQuad(easuProg);
 
         if (__fsr.enabled) { __fsr.ticEasu(); }
 
@@ -922,10 +964,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         setOesFilter(false);
 
-        // uTex + uInvSrcSize are static uniforms set once in initEglAndGl()
-        if (lastEasuTexMatSerial != texMatrixSerial) {
-            GLES20.glUniformMatrix4fv(easu_uTexMat, 1, false, texMatrix, 0);
-            lastEasuTexMatSerial = texMatrixSerial;
+        if (easuTexMatLoc >= 0) {
+            boolean needUpload;
+            if (easuProg == progEasuQuality) {
+                needUpload = (lastEasuQualityTexMatSerial != texMatrixSerial);
+            } else if (easuProg == progEasuBalanced) {
+                needUpload = (lastEasuBalTexMatSerial != texMatrixSerial);
+            } else {
+                needUpload = (lastEasuPerfTexMatSerial != texMatrixSerial);
+            }
+
+            if (needUpload) {
+                GLES20.glUniformMatrix4fv(easuTexMatLoc, 1, false, texMatrix, 0);
+
+                if (easuProg == progEasuQuality) {
+                    lastEasuQualityTexMatSerial = texMatrixSerial;
+                } else if (easuProg == progEasuBalanced) {
+                    lastEasuBalTexMatSerial = texMatrixSerial;
+                } else {
+                    lastEasuPerfTexMatSerial = texMatrixSerial;
+                }
+            }
         }
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -960,12 +1019,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         if (__fsr.enabled) { __fsr.ticRcas(); }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
         if (__fsr.enabled) { __fsr.tocRcas(); }
 
-        // Keep NEAREST once enabled to avoid 2x glTexParameteri per frame.
         return true;
     }
+
+
 
 
     // ====== GL setup ======
@@ -1125,19 +1184,49 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glUniform1i(blit_uTex, 0);
         }
 
-        if (progEasu != 0) {
-            GLES20.glUseProgram(progEasu);
-            if (easu_uTex >= 0) {
-                GLES20.glUniform1i(easu_uTex, 0);
+        if (progEasuPerf != 0) {
+            GLES20.glUseProgram(progEasuPerf);
+            if (easuPerf_uTex >= 0) {
+                GLES20.glUniform1i(easuPerf_uTex, 0);
             }
-            if (easu_uInvSrcSize >= 0) {
+            if (easuPerf_uInvSrcSize >= 0) {
                 GLES20.glUniform2f(
-                        easu_uInvSrcSize,
+                        easuPerf_uInvSrcSize,
                         1.0f / Math.max(1, srcW),
                         1.0f / Math.max(1, srcH)
                 );
             }
         }
+
+        if (progEasuBalanced != 0) {
+            GLES20.glUseProgram(progEasuBalanced);
+            if (easuBal_uTex >= 0) {
+                GLES20.glUniform1i(easuBal_uTex, 0);
+            }
+            if (easuBal_uInvSrcSize >= 0) {
+                GLES20.glUniform2f(
+                        easuBal_uInvSrcSize,
+                        1.0f / Math.max(1, srcW),
+                        1.0f / Math.max(1, srcH)
+                );
+            }
+        }
+
+                if (progEasuQuality != 0) {
+            GLES20.glUseProgram(progEasuQuality);
+            if (easuQ_uTex >= 0) {
+                GLES20.glUniform1i(easuQ_uTex, 0);
+            }
+            if (easuQ_uInvSrcSize >= 0) {
+                GLES20.glUniform2f(
+                        easuQ_uInvSrcSize,
+                        1.0f / Math.max(1, srcW),
+                        1.0f / Math.max(1, srcH)
+                );
+            }
+        }
+
+
 
         if (progRcas != 0 && rcas_uTex >= 0) {
             GLES20.glUseProgram(progRcas);
@@ -1273,8 +1362,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Shaders
             progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
             progBlit = linkProgram(progVs, FS_OES_BLIT);
-            progEasu = linkProgram(progVs, FS_EASU);
+            progEasuPerf = linkProgram(progVs, FS_EASU_PERF);
+            progEasuBalanced = linkProgram(progVs, FS_EASU_BALANCED);
+            progEasuQuality = linkProgram(progVs, FS_EASU_QUALITY);
             progRcas = linkProgram(progVs, FS_RCAS);
+
             // Try to link OES variant (single-pass RCAS) with specialized VS to precompute steps
             int vsRcasOes = 0;
             try {
@@ -1296,12 +1388,26 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 try { GLES20.glDeleteShader(progVs); } catch (Throwable ignored) {}
                 progVs = 0;
             }
-            easu_uTex        = GLES20.glGetUniformLocation(progEasu, "uTex");
-            easu_uInvSrcSize = GLES20.glGetUniformLocation(progEasu, "uInvSrcSize");
-            easu_uTexMat     = GLES20.glGetUniformLocation(progEasu, "uTexMatrix");
+            if (progEasuPerf != 0) {
+                easuPerf_uTex        = GLES20.glGetUniformLocation(progEasuPerf, "uTex");
+                easuPerf_uInvSrcSize = GLES20.glGetUniformLocation(progEasuPerf, "uInvSrcSize");
+                easuPerf_uTexMat     = GLES20.glGetUniformLocation(progEasuPerf, "uTexMatrix");
+            }
+
+            if (progEasuQuality != 0) {
+                easuQ_uTex        = GLES20.glGetUniformLocation(progEasuQuality, "uTex");
+                easuQ_uInvSrcSize = GLES20.glGetUniformLocation(progEasuQuality, "uInvSrcSize");
+                easuQ_uTexMat     = GLES20.glGetUniformLocation(progEasuQuality, "uTexMatrix");
+            }
+
+            if (progEasuBalanced != 0) {
+                easuBal_uTex        = GLES20.glGetUniformLocation(progEasuBalanced, "uTex");
+                easuBal_uInvSrcSize = GLES20.glGetUniformLocation(progEasuBalanced, "uInvSrcSize");
+                easuBal_uTexMat     = GLES20.glGetUniformLocation(progEasuBalanced, "uTexMatrix");
+            }
+
             blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
             blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
-            easu_uTex     = GLES20.glGetUniformLocation(progEasu, "uTex");
             rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
             rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
             rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
@@ -1326,9 +1432,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (vboPos != 0) { tmpIntArray[0] = vboPos; GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboPos = 0; }
         if (vboUv  != 0) { tmpIntArray[0] = vboUv;  GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboUv  = 0; }
         if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
-        if (progEasu != 0) { GLES20.glDeleteProgram(progEasu); progEasu = 0; }
+        if (progEasuPerf != 0) { GLES20.glDeleteProgram(progEasuPerf); progEasuPerf = 0; }
+        if (progEasuQuality != 0) { GLES20.glDeleteProgram(progEasuQuality); progEasuQuality = 0; }
         if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
         if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
+        if (progEasuBalanced != 0) { GLES20.glDeleteProgram(progEasuBalanced); progEasuBalanced = 0; }
 
 // Reset cached GL bindings/state (context resources no longer valid)
         lastProgram = -1;
@@ -1534,7 +1642,225 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "}";
 
     // EASU minimal pass (OES -> 2D FBO)
-    private static final String FS_EASU =
+    private static final String FS_EASU_QUALITY =
+            "#version 300 es\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "precision highp float;\n" +
+                    "precision highp int;\n" +
+                    "precision highp samplerExternalOES;\n" +
+                    "\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "uniform vec2 uInvSrcSize;\n" +
+                    "\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\n" +
+                    "\n" +
+                    "float APrxLoRcpF1(float a){ return uintBitsToFloat(uint(0x7ef07ebb) - floatBitsToUint(a)); }\n" +
+                    "float APrxLoRsqF1(float a){ return uintBitsToFloat(uint(0x5f347d74) - (floatBitsToUint(a) >> uint(1))); }\n" +
+                    "float AMin3F1(float x, float y, float z){ return min(x, min(y, z)); }\n" +
+                    "float AMax3F1(float x, float y, float z){ return max(x, max(y, z)); }\n" +
+                    "\n" +
+                    "void FsrEasuTap(\n" +
+                    "    inout vec3 aC,\n" +
+                    "    inout float aW,\n" +
+                    "    vec2 off,\n" +
+                    "    vec2 dir,\n" +
+                    "    vec2 len,\n" +
+                    "    float lob,\n" +
+                    "    float clp,\n" +
+                    "    vec3 c)\n" +
+                    "{\n" +
+                    "    vec2 v;\n" +
+                    "    v.x = (off.x * ( dir.x)) + (off.y * dir.y);\n" +
+                    "    v.y = (off.x * (-dir.y)) + (off.y * dir.x);\n" +
+                    "    v *= len;\n" +
+                    "    float d2 = v.x * v.x + v.y * v.y;\n" +
+                    "    d2 = min(d2, clp);\n" +
+                    "    float wB = (2.0 / 5.0) * d2 + -1.0;\n" +
+                    "    float wA = lob * d2 + -1.0;\n" +
+                    "    wB *= wB;\n" +
+                    "    wA *= wA;\n" +
+                    "    wB = (25.0 / 16.0) * wB + (-(25.0 / 16.0 - 1.0));\n" +
+                    "    float w = wB * wA;\n" +
+                    "    aC += c * w;\n" +
+                    "    aW += w;\n" +
+                    "}\n" +
+                    "\n" +
+                    "void FsrEasuSet(\n" +
+                    "    inout vec2 dir,\n" +
+                    "    inout float len,\n" +
+                    "    vec2 pp,\n" +
+                    "    bool biS, bool biT, bool biU, bool biV,\n" +
+                    "    float lA, float lB, float lC, float lD, float lE)\n" +
+                    "{\n" +
+                    "    float w = 0.0;\n" +
+                    "    if (biS) w = (1.0 - pp.x) * (1.0 - pp.y);\n" +
+                    "    if (biT) w = (pp.x) * (1.0 - pp.y);\n" +
+                    "    if (biU) w = (1.0 - pp.x) * (pp.y);\n" +
+                    "    if (biV) w = (pp.x) * (pp.y);\n" +
+                    "\n" +
+                    "    float dc = lD - lC;\n" +
+                    "    float cb = lC - lB;\n" +
+                    "    float lenX = max(abs(dc), abs(cb));\n" +
+                    "    lenX = APrxLoRcpF1(lenX);\n" +
+                    "    float dirX = lD - lB;\n" +
+                    "    lenX = clamp(abs(dirX) * lenX, 0.0, 1.0);\n" +
+                    "    lenX *= lenX;\n" +
+                    "\n" +
+                    "    float ec = lE - lC;\n" +
+                    "    float ca = lC - lA;\n" +
+                    "    float lenY = max(abs(ec), abs(ca));\n" +
+                    "    lenY = APrxLoRcpF1(lenY);\n" +
+                    "    float dirY = lE - lA;\n" +
+                    "    lenY = clamp(abs(dirY) * lenY, 0.0, 1.0);\n" +
+                    "    lenY *= lenY;\n" +
+                    "\n" +
+                    "    dir += vec2(dirX, dirY) * w;\n" +
+                    "    len += w * (lenX + lenY);\n" +
+                    "}\n" +
+                    "\n" +
+                    "vec2 sampleUv(vec2 baseUv, vec2 stepX, vec2 stepY, float ox, float oy){\n" +
+                    "    return baseUv + stepX * ox + stepY * oy;\n" +
+                    "}\n" +
+                    "\n" +
+                    "void main(){\n" +
+                    "    vec2 srcSize = 1.0 / max(uInvSrcSize, vec2(1e-6));\n" +
+                    "    vec2 pp = vUv * srcSize - vec2(0.5);\n" +
+                    "    vec2 fp = floor(pp);\n" +
+                    "    pp -= fp;\n" +
+                    "\n" +
+                    "    vec2 baseSrcUv = (fp + vec2(0.5)) * uInvSrcSize;\n" +
+                    "    vec2 baseUv = (uTexMatrix * vec4(baseSrcUv, 0.0, 1.0)).xy;\n" +
+                    "    vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "    vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
+                    "\n" +
+                    "    vec3 bC = texture(uTex, sampleUv(baseUv, stepX, stepY,  0.0, -1.0)).rgb;\n" +
+                    "    vec3 cC = texture(uTex, sampleUv(baseUv, stepX, stepY,  1.0, -1.0)).rgb;\n" +
+                    "    vec3 eC = texture(uTex, sampleUv(baseUv, stepX, stepY, -1.0,  0.0)).rgb;\n" +
+                    "    vec3 fC = texture(uTex, sampleUv(baseUv, stepX, stepY,  0.0,  0.0)).rgb;\n" +
+                    "    vec3 gC = texture(uTex, sampleUv(baseUv, stepX, stepY,  1.0,  0.0)).rgb;\n" +
+                    "    vec3 hC = texture(uTex, sampleUv(baseUv, stepX, stepY,  2.0,  0.0)).rgb;\n" +
+                    "    vec3 iC = texture(uTex, sampleUv(baseUv, stepX, stepY, -1.0,  1.0)).rgb;\n" +
+                    "    vec3 jC = texture(uTex, sampleUv(baseUv, stepX, stepY,  0.0,  1.0)).rgb;\n" +
+                    "    vec3 kC = texture(uTex, sampleUv(baseUv, stepX, stepY,  1.0,  1.0)).rgb;\n" +
+                    "    vec3 lC = texture(uTex, sampleUv(baseUv, stepX, stepY,  2.0,  1.0)).rgb;\n" +
+                    "    vec3 nC = texture(uTex, sampleUv(baseUv, stepX, stepY,  0.0,  2.0)).rgb;\n" +
+                    "    vec3 oC = texture(uTex, sampleUv(baseUv, stepX, stepY,  1.0,  2.0)).rgb;\n" +
+                    "\n" +
+                    "    float bL = luma(bC);\n" +
+                    "    float cL = luma(cC);\n" +
+                    "    float eL = luma(eC);\n" +
+                    "    float fL = luma(fC);\n" +
+                    "    float gL = luma(gC);\n" +
+                    "    float hL = luma(hC);\n" +
+                    "    float iL = luma(iC);\n" +
+                    "    float jL = luma(jC);\n" +
+                    "    float kL = luma(kC);\n" +
+                    "    float lL = luma(lC);\n" +
+                    "    float nL = luma(nC);\n" +
+                    "    float oL = luma(oC);\n" +
+                    "\n" +
+                    "    vec2 dir = vec2(0.0);\n" +
+                    "    float len = 0.0;\n" +
+                    "    FsrEasuSet(dir, len, pp, true,  false, false, false, bL, eL, fL, gL, jL);\n" +
+                    "    FsrEasuSet(dir, len, pp, false, true,  false, false, cL, fL, gL, hL, kL);\n" +
+                    "    FsrEasuSet(dir, len, pp, false, false, true,  false, fL, iL, jL, kL, nL);\n" +
+                    "    FsrEasuSet(dir, len, pp, false, false, false, true,  gL, jL, kL, lL, oL);\n" +
+                    "\n" +
+                    "    vec2 dir2 = dir * dir;\n" +
+                    "    float dirR = dir2.x + dir2.y;\n" +
+                    "    const float DIR_THRESHOLD = 32768.0;\n" +
+                    "    bool zro = dirR < (1.0 / DIR_THRESHOLD);\n" +
+                    "    dirR = APrxLoRsqF1(dirR);\n" +
+                    "    dirR = zro ? 1.0 : dirR;\n" +
+                    "    dir.x = zro ? 1.0 : dir.x;\n" +
+                    "    dir *= vec2(dirR);\n" +
+                    "\n" +
+                    "    len = len * 0.5;\n" +
+                    "    len *= len;\n" +
+                    "\n" +
+                    "    float stretch = (dir.x * dir.x + dir.y * dir.y) * APrxLoRcpF1(max(abs(dir.x), abs(dir.y)));\n" +
+                    "    vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 + -0.5 * len);\n" +
+                    "\n" +
+                    "    float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;\n" +
+                    "    float clp = APrxLoRcpF1(lob);\n" +
+                    "\n" +
+                    "    vec3 aC = vec3(0.0);\n" +
+                    "    float aW = 0.0;\n" +
+                    "\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 0.0,-1.0) - pp, dir, len2, lob, clp, bC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 1.0,-1.0) - pp, dir, len2, lob, clp, cC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, iC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 0.0, 1.0) - pp, dir, len2, lob, clp, jC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 0.0, 0.0) - pp, dir, len2, lob, clp, fC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, eC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 1.0, 1.0) - pp, dir, len2, lob, clp, kC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 2.0, 1.0) - pp, dir, len2, lob, clp, lC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 2.0, 0.0) - pp, dir, len2, lob, clp, hC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 1.0, 0.0) - pp, dir, len2, lob, clp, gC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 1.0, 2.0) - pp, dir, len2, lob, clp, oC);\n" +
+                    "    FsrEasuTap(aC, aW, vec2( 0.0, 2.0) - pp, dir, len2, lob, clp, nC);\n" +
+                    "\n" +
+                    "    vec3 pix = aC / max(aW, 1e-6);\n" +
+                    "    vec3 mn = min(min(fC, gC), min(jC, kC));\n" +
+                    "    vec3 mx = max(max(fC, gC), max(jC, kC));\n" +
+                    "    pix = clamp(pix, mn, mx);\n" +
+                    "    fragColor = vec4(clamp(pix, 0.0, 1.0), 1.0);\n" +
+                    "}\n" +
+                    "";
+
+    private static final String FS_EASU_BALANCED =
+            "#version 300 es\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "precision highp float;\n" +
+                    "precision highp samplerExternalOES;\n" +
+                    "\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "uniform vec2 uInvSrcSize;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "\n" +
+                    "float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\n" +
+                    "\n" +
+                    "void main(){\n" +
+                    "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
+                    "\n" +
+                    "  vec3 c = texture(uTex, uv).rgb;\n" +
+                    "  vec3 l = texture(uTex, uv - stepX).rgb;\n" +
+                    "  vec3 r = texture(uTex, uv + stepX).rgb;\n" +
+                    "  vec3 d = texture(uTex, uv - stepY).rgb;\n" +
+                    "  vec3 u = texture(uTex, uv + stepY).rgb;\n" +
+                    "\n" +
+                    "  float gx = luma(r) - luma(l);\n" +
+                    "  float gy = luma(u) - luma(d);\n" +
+                    "  float edge = clamp((abs(gx) + abs(gy)) * 1.25, 0.0, 1.0);\n" +
+                    "\n" +
+                    "  // Edge direction is perpendicular to gradient\n" +
+                    "  vec2 ed = normalize(vec2(gy, -gx) + vec2(1e-6));\n" +
+                    "  vec2 duv = ed.x * stepX + ed.y * stepY;\n" +
+                    "  vec3 s1 = texture(uTex, uv + duv * 0.5).rgb;\n" +
+                    "  vec3 s2 = texture(uTex, uv - duv * 0.5).rgb;\n" +
+                    "\n" +
+                    "  // Isotropic base (cheap, stable)\n" +
+                    "  vec3 iso = (c * 4.0 + l + r + u + d) * (1.0 / 8.0);\n" +
+                    "  // Along-edge sampling reduces cross-edge blur\n" +
+                    "  vec3 along = 0.5 * (s1 + s2);\n" +
+                    "  vec3 pix = mix(iso, along, edge);\n" +
+                    "\n" +
+                    "  vec3 mn = min(c, min(min(l, r), min(u, d)));\n" +
+                    "  vec3 mx = max(c, max(max(l, r), max(u, d)));\n" +
+                    "  pix = clamp(pix, mn, mx);\n" +
+                    "  fragColor = vec4(clamp(pix, 0.0, 1.0), 1.0);\n" +
+                    "}\n";
+
+
+    private static final String FS_EASU_PERF =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "precision highp float;\n" +

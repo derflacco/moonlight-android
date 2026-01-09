@@ -44,6 +44,7 @@ public class PreferenceConfiguration {
     public boolean gpuPathMode;
     public String  videoUpscaleMode;     // "none", "rcas", or "easu_rcas"
     public int     videoUpscaleSharpness; // 0..100
+    public int     videoUpscalePreset;   // 0=Performance, 1=Balanced, 2=Quality
 
     public enum ScaleMode {
         FIT,
@@ -68,11 +69,15 @@ public class PreferenceConfiguration {
     private static final String VIDEO_UPSCALE_ENABLE_PREF_STRING = "pref_video_upscale_enable";
     private static final String VIDEO_UPSCALE_MODE_PREF_STRING   = "pref_video_upscale_mode";     // "none", "rcas", or "easu_rcas"
     private static final String VIDEO_UPSCALE_SHARP_PREF_STRING  = "pref_video_upscale_sharpness"; // 0..100
+    private static final String VIDEO_UPSCALE_PRESET_PREF_STRING = "pref_video_upscale_preset";  // 0..2
+
 
     public static final String CHECKBOX_GPU_PATH_MODE = "checkbox_gpu_path_mode";
 
     private static final String DEFAULT_VIDEO_UPSCALE_MODE = "rcas";
     private static final int    DEFAULT_VIDEO_UPSCALE_SHARP = 35;
+    private static final int    DEFAULT_VIDEO_UPSCALE_PRESET = 1; // Balanced
+
     public static final String CUSTOM_BITRATE_PREF_STRING = "edit_diy_bitrate";
 
     public static final String CUSTOM_REFRESH_RATE_PREF_STRING = "custom_refresh_rate";
@@ -1160,6 +1165,19 @@ public class PreferenceConfiguration {
             // SeekBarPreference may store string on some forks; try to parse
             try { config.videoUpscaleSharpness = Integer.parseInt(prefs.getString(VIDEO_UPSCALE_SHARP_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_SHARP))); }
             catch (Throwable ignored) { config.videoUpscaleSharpness = DEFAULT_VIDEO_UPSCALE_SHARP; }
+        }
+        try {
+            config.videoUpscalePreset =
+                    clampInt(prefs.getInt(VIDEO_UPSCALE_PRESET_PREF_STRING, DEFAULT_VIDEO_UPSCALE_PRESET), 0, 2);
+        } catch (ClassCastException ex) {
+            try {
+                config.videoUpscalePreset = clampInt(
+                        Integer.parseInt(prefs.getString(VIDEO_UPSCALE_PRESET_PREF_STRING, String.valueOf(DEFAULT_VIDEO_UPSCALE_PRESET))),
+                        0, 2
+                );
+            } catch (Throwable ignored) {
+                config.videoUpscalePreset = DEFAULT_VIDEO_UPSCALE_PRESET;
+            }
         }
 
 // Forza GPU path quando FSR è disabilitato o in modalità "none"
