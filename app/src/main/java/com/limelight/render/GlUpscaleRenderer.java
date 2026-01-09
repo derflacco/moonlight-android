@@ -27,6 +27,9 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.view.Choreographer;
 
 /*
  * FidelityFX Super Resolution 1.0 (FSR1) — EASU + RCAS (GLES3 + OES port)
@@ -171,6 +174,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Threading
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread renderThread;
+    private volatile boolean useChoreoVsync = false;
+    private volatile Handler renderHandler = null;
     private final Object frameLock = new Object();
     private boolean frameAvailable = false;
 
@@ -317,6 +322,28 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
         if (!isGlReady() || running.getAndSet(true)) return;
+
+        useChoreoVsync = (prefs != null && prefs.enableVsync);
+        pendingSwapInterval = useChoreoVsync ? 1 : 0;
+
+        if (useChoreoVsync) {
+            final HandlerThread ht = new HandlerThread(
+                    "GL-FSR1-Renderer",
+                    android.os.Process.THREAD_PRIORITY_DISPLAY);
+            renderThread = ht;
+            ht.start();
+
+            renderHandler = new Handler(ht.getLooper());
+            renderHandler.post(() -> {
+                try {
+                    Choreographer.getInstance().postFrameCallback(frameCallback);
+                } catch (Throwable t) {
+                    LimeLog.warning("Choreographer init failed: " + t);
+                }
+            });
+            return;
+        }
+
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
         try {
             renderThread.setPriority(Thread.NORM_PRIORITY + 2);
@@ -327,10 +354,43 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     public void stop() {
         running.set(false);
-        if (renderThread != null) {
+
+        if (useChoreoVsync) {
+            // Stop from the render thread (no join).
+            if (Thread.currentThread() == renderThread) {
+                try { Choreographer.getInstance().removeFrameCallback(frameCallback); } catch (Throwable ignored) {}
+                try {
+                    final android.os.Looper looper = android.os.Looper.myLooper();
+                    if (looper != null) looper.quitSafely();
+                } catch (Throwable ignored) {}
+                return;
+            }
+
+            final Handler h = renderHandler;
+            if (h != null) {
+                try {
+                    h.post(() -> {
+                        try { Choreographer.getInstance().removeFrameCallback(frameCallback); } catch (Throwable ignored) {}
+                        try {
+                            final android.os.Looper looper = android.os.Looper.myLooper();
+                            if (looper != null) looper.quitSafely();
+                        } catch (Throwable ignored) {}
+                    });
+                } catch (Throwable ignored) {}
+            }
+
+            if (renderThread instanceof HandlerThread) {
+                try { ((HandlerThread) renderThread).quitSafely(); } catch (Throwable ignored) {}
+            }
+        }
+
+        if (renderThread != null && Thread.currentThread() != renderThread) {
             try { renderThread.join(); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
             renderThread = null;
         }
+
+        renderHandler = null;
+        useChoreoVsync = false;
     }
 
     public void release() {
@@ -366,312 +426,317 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ====== Main render loop ======
     private void renderLoop() {
         while (running.get()) {
-            final boolean fsrEnabled = __fsr.enabled;
-            // quick skip if EGL lost
-            if (!isGlReady()) {
-                synchronized (this) { initEglAndGl(); }
-                if (!isGlReady()) continue;
-            }
+            renderFrame(true);
+        }
+    }
+
+    private void renderFrame(final boolean allowWait) {
+
+        final boolean fsrEnabled = __fsr.enabled;
+        // quick skip if EGL lost
+        if (!isGlReady()) {
+            synchronized (this) { initEglAndGl(); }
+            if (!isGlReady()) return;
+        }
 // Ensure EGL context + surface are current (fail-fast)
 // If eglMakeCurrent fails, do NOT issue any GL calls (prevents SurfaceTexture 0x502 loops).
-            final boolean needMakeCurrent =
-                    (EGL14.eglGetCurrentContext() != eglContext) ||
-                            (EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) ||
-                            (EGL14.eglGetCurrentSurface(EGL14.EGL_READ) != eglWindowSurface);
+        final boolean needMakeCurrent =
+                (EGL14.eglGetCurrentContext() != eglContext) ||
+                        (EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) ||
+                        (EGL14.eglGetCurrentSurface(EGL14.EGL_READ) != eglWindowSurface);
 
-            if (needMakeCurrent) {
-                if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext)) {
-                    final int err = EGL14.eglGetError();
-                    LimeLog.warning("FSR: eglMakeCurrent failed err=0x" + Integer.toHexString(err));
-                    continue;
-                }
-
-                // Cached GL state is invalid after a successful rebind
-                lastProgram = -1;
-                lastTexture = -1;
-                curVpW = -1;
-                curVpH = -1;
-                twoDNearest = false;
-                oesNearest = false;
-                lastRcasInvDstW = lastRcasInvDstH = -1;
-                lastRcasSharp = -1f;
-                lastRcasOesInvDstW = lastRcasOesInvDstH = -1;
-                lastRcasOesSharp = -1f;
-                quadBound = false;
-                lastBoundVao = 0;
-                activeTexUnit = -1;
-                lastTex2D = -1;
-                lastFbo = -1;
-                lastBlitTexMatSerial = -1L;
-                lastEasuTexMatSerial = -1L;
-                lastRcasOesTexMatSerial = -1L;
-                markGlErrorDirty();
+        if (needMakeCurrent) {
+            if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext)) {
+                final int err = EGL14.eglGetError();
+                LimeLog.warning("FSR: eglMakeCurrent failed err=0x" + Integer.toHexString(err));
+                return;
             }
 
-            boolean newFrame = false;
-            synchronized (frameLock) {
-                if (!frameAvailable) {
-                    try {
-                        // Wait at most ~33ms (≈30fps) to prevent ANR if decoder stalls
-                        frameLock.wait(33);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-                newFrame = frameAvailable;
-                frameAvailable = false;
-            }
+            // Cached GL state is invalid after a successful rebind
+            lastProgram = -1;
+            lastTexture = -1;
+            curVpW = -1;
+            curVpH = -1;
+            twoDNearest = false;
+            oesNearest = false;
+            lastRcasInvDstW = lastRcasInvDstH = -1;
+            lastRcasSharp = -1f;
+            lastRcasOesInvDstW = lastRcasOesInvDstH = -1;
+            lastRcasOesSharp = -1f;
+            quadBound = false;
+            lastBoundVao = 0;
+            activeTexUnit = -1;
+            lastTex2D = -1;
+            lastFbo = -1;
+            lastBlitTexMatSerial = -1L;
+            lastEasuTexMatSerial = -1L;
+            lastRcasOesTexMatSerial = -1L;
+            markGlErrorDirty();
+        }
 
-
-            // Apply pending swap interval on the render thread (EGL context must be current)
-            final int interval = pendingSwapInterval;
-            if (interval >= 0) {
+        boolean newFrame = false;
+        synchronized (frameLock) {
+            if (allowWait && !frameAvailable) {
                 try {
-                    EGL14.eglSwapInterval(eglDisplay, interval);
-                } catch (Throwable ignored) { }
-                pendingSwapInterval = -1;
-            }
-
-            boolean didUpdateTex = false;
-
-            try {
-                if (decoderSurfaceTex != null && newFrame) {
-                    if (!ensureSurfaceTextureAttached()) {
-                        // ensureSurfaceTextureAttached() should markGlErrorDirty() on failures
-                        continue; // do not call updateTexImage() when detached
-                    }
-
-                    if (glErrorDirty) {
-                        clearGlErrors();
-                        glErrorDirty = false;
-                    }
-
-                    decoderSurfaceTex.updateTexImage();
-                    decoderSurfaceTex.getTransformMatrix(texMatrix);
-                    texMatrixSerial++;
-                    hasEverUpdatedTex = true;
-                    didUpdateTex = true;
+                    // Wait at most ~33ms (≈30fps) to prevent ANR if decoder stalls
+                    frameLock.wait(33);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 }
-            } catch (Throwable t) {
-                // Prevent SurfaceTexture crash loop if decoderSurfaceTex is invalid or detached
-                LimeLog.warning("updateTexImage failed: " + t);
-                markGlErrorDirty();
-                continue; // Skip this frame safely, avoid drawing invalid texture
             }
+            newFrame = frameAvailable;
+            frameAvailable = false;
+        }
+
+
+        // Apply pending swap interval on the render thread (EGL context must be current)
+        final int interval = pendingSwapInterval;
+        if (interval >= 0) {
+            try {
+                EGL14.eglSwapInterval(eglDisplay, interval);
+            } catch (Throwable ignored) { }
+            pendingSwapInterval = -1;
+        }
+
+        boolean didUpdateTex = false;
+
+        try {
+            if (decoderSurfaceTex != null && newFrame) {
+                if (!ensureSurfaceTextureAttached()) {
+                    // ensureSurfaceTextureAttached() should markGlErrorDirty() on failures
+                    return; // do not call updateTexImage() when detached
+                }
+
+                if (glErrorDirty) {
+                    clearGlErrors();
+                    glErrorDirty = false;
+                }
+
+                decoderSurfaceTex.updateTexImage();
+                decoderSurfaceTex.getTransformMatrix(texMatrix);
+                texMatrixSerial++;
+                hasEverUpdatedTex = true;
+                didUpdateTex = true;
+            }
+        } catch (Throwable t) {
+            // Prevent SurfaceTexture crash loop if decoderSurfaceTex is invalid or detached
+            LimeLog.warning("updateTexImage failed: " + t);
+            markGlErrorDirty();
+            return; // Skip this frame safely, avoid drawing invalid texture
+        }
 
 
             final long nowNs = System.nanoTime();
 
 // Query size immediately on startup, after a forced redraw, or after swap failures.
 // Otherwise, back off when stable to reduce eglQuerySurface overhead.
-            final boolean forceSizeQuery =
-                    (fbW <= 0 || fbH <= 0) ||
-                            sizeChangedSinceLastSwap ||
-                            (swapFailStreak > 0);
+        final boolean forceSizeQuery =
+                (fbW <= 0 || fbH <= 0) ||
+                        sizeChangedSinceLastSwap ||
+                        (swapFailStreak > 0);
 
-            if (forceSizeQuery || (nowNs - lastSizeQueryNs) >= sizeQueryNs) {
-                final int prevW = fbW;
-                final int prevH = fbH;
+        if (forceSizeQuery || (nowNs - lastSizeQueryNs) >= sizeQueryNs) {
+            final int prevW = fbW;
+            final int prevH = fbH;
 
-                refreshWindowSize(); // sets lastSizeQueryOk
-                lastSizeQueryNs = nowNs;
+            refreshWindowSize(); // sets lastSizeQueryOk
+            lastSizeQueryNs = nowNs;
 
-                final boolean changed = (fbW != prevW || fbH != prevH);
+            final boolean changed = (fbW != prevW || fbH != prevH);
 
-                if (!lastSizeQueryOk) {
-                    sizeQueryNs = SIZE_QUERY_MIN_NS;
+            if (!lastSizeQueryOk) {
+                sizeQueryNs = SIZE_QUERY_MIN_NS;
+                stableSizeQueryCount = 0;
+            } else if (changed) {
+                sizeChangedSinceLastSwap = true;
+                sizeQueryNs = SIZE_QUERY_MIN_NS;
+                stableSizeQueryCount = 0;
+            } else if (!forceSizeQuery) {
+                stableSizeQueryCount++;
+                if (stableSizeQueryCount >= 3) {
                     stableSizeQueryCount = 0;
-                } else if (changed) {
-                    sizeChangedSinceLastSwap = true;
-                    sizeQueryNs = SIZE_QUERY_MIN_NS;
-                    stableSizeQueryCount = 0;
-                } else if (!forceSizeQuery) {
-                    stableSizeQueryCount++;
-                    if (stableSizeQueryCount >= 3) {
-                        stableSizeQueryCount = 0;
-                        sizeQueryNs = Math.min(SIZE_QUERY_MAX_NS, sizeQueryNs * 2L);
-                    }
-                } else {
-                    // Forced query but stable; keep cadence conservative.
-                    stableSizeQueryCount = 0;
-                    sizeQueryNs = Math.max(sizeQueryNs, SIZE_QUERY_MIN_NS);
+                    sizeQueryNs = Math.min(SIZE_QUERY_MAX_NS, sizeQueryNs * 2L);
                 }
+            } else {
+                // Forced query but stable; keep cadence conservative.
+                stableSizeQueryCount = 0;
+                sizeQueryNs = Math.max(sizeQueryNs, SIZE_QUERY_MIN_NS);
             }
+        }
 
-            if (fbW <= 0 || fbH <= 0) continue;
+        if (fbW <= 0 || fbH <= 0) return;
 
         // Avoid drawing undefined content before the first decoded frame
-            if (!hasEverUpdatedTex) {
-                continue;
-            }
+        if (!hasEverUpdatedTex) {
+            return;
+        }
 
         // Avoid re-rendering when no new frame arrived and no forced redraw is needed
-            if (!newFrame && !sizeChangedSinceLastSwap) {
-                continue;
-            }
+        if (!newFrame && !sizeChangedSinceLastSwap) {
+            return;
+        }
 
         // Fullscreen draw overwrites all pixels; clearing is redundant
-            ensureViewport(fbW, fbH);// Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+        ensureViewport(fbW, fbH);// Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
-            final boolean gpuPath = (prefs != null && prefs.gpuPathMode);
-            if (gpuPath) {
-                if (fsrEnabled) {
-                    __fsr.mode = "BYPASS";
-                    __fsr.srcW = srcW;
-                    __fsr.srcH = srcH;
-                    __fsr.dstW = fbW;
-                    __fsr.dstH = fbH;
-                    __fsr.sharp = 0f;
-                    __fsr.sampling = "gpuPath";
-                    __fsr.notes = "reason=gpuPathMode";
-                    if (fsrEnabled) maybeUpdateFsrOverlay();
-                }
-
-                // Safety: ensure we render to default framebuffer
-                bindFramebufferCached(0);
-
-                drawOesToScreen();
-                if (swapAndContinue()) {
-                    sizeChangedSinceLastSwap = false;
-                }
-                continue;
+        final boolean gpuPath = (prefs != null && prefs.gpuPathMode);
+        if (gpuPath) {
+            if (fsrEnabled) {
+                __fsr.mode = "BYPASS";
+                __fsr.srcW = srcW;
+                __fsr.srcH = srcH;
+                __fsr.dstW = fbW;
+                __fsr.dstH = fbH;
+                __fsr.sharp = 0f;
+                __fsr.sampling = "gpuPath";
+                __fsr.notes = "reason=gpuPathMode";
+                if (fsrEnabled) maybeUpdateFsrOverlay();
             }
 
+            // Safety: ensure we render to default framebuffer
+            bindFramebufferCached(0);
 
-            final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
-            final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
-            final boolean modeNone = "none".equals(mode);
-            final boolean modeRcasOnly = "rcas".equals(mode);
-            final boolean modeEasuRcas = "easu_rcas".equals(mode);
-            final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
-        // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
-            if (fastBypassStatic && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
-                drawOesToScreen();
-                if (swapAndContinue()) {
-                    sizeChangedSinceLastSwap = false;
-                }
-                continue;
-            }
-
-            // Decide target size for *policy/telemetry*: prefer display hint if provided
-            final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
-            final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
-            float scaleX = (float) dstTargetW / (float) srcW;
-            float scaleY = (float) dstTargetH / (float) srcH;
-            boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
-            final boolean canUpscaleNow = (fbW != srcW || fbH != srcH);
-
-            // === FSR path selection + telemetry ===
-            final float nearThr = 0.05f;
-
-            // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
-            if (hdrActive && prefs != null && prefs.gpuPathMode) {
-                drawOesToScreen();
-                if (swapAndContinue()) {
-                    sizeChangedSinceLastSwap = false;
-                }
-                continue;
-            }
-
-            // === FSR path selection + telemetry ===
-            if (!upscaleEnabled || modeNone) {
-                // === BYPASS PATH ===
-                if (fsrEnabled) {
-                    __fsr.mode = "BYPASS";
-                    __fsr.srcW = srcW;
-                    __fsr.srcH = srcH;
-                    __fsr.dstW = fbW;
-                    __fsr.dstH = fbH;
-                    __fsr.sharp = 0f;
-                    __fsr.sampling = "bypass";
-                    __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled")
-                            + " | win=" + fbW + "x" + fbH
-                            + " hint=" + dstTargetW + "x" + dstTargetH;
-                    if (fsrEnabled) maybeUpdateFsrOverlay();
-                }
-                drawOesToScreen();
-
-            } else if (modeEasuRcas && progEasu != 0 && !nearNative && (fbW != srcW || fbH != srcH)) {
-
-                // === EASU + RCAS PATH ===
-                boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative));
-
-                if (fsrEnabled) {
-                    __fsr.mode = "EASU+RCAS";
-                    __fsr.srcW = srcW;
-                    __fsr.srcH = srcH;
-                    __fsr.dstW = fbW;
-                    __fsr.dstH = fbH;
-                    __fsr.sharp = sharpUser;
-                    __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-                    StringBuilder sb = new StringBuilder(64);
-                    sb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
-                    sb.append(" | nearNative=").append(nearNative);
-                    sb.append(" thr=").append(String.format(Locale.US, "%.2f", nearThr));
-                    __fsr.notes = sb.toString();
-
-                    __fsr.frames++;
-                    if ((__fsr.frames % 240L) == 0L) {
-                        com.limelight.LimeLog.info(__fsr.periodicLine());
-                    }
-                    if (fsrEnabled) maybeUpdateFsrOverlay();
-                }
-
-                if (!ok) {
-                    // Fallback if EASU+RCAS failed
-                    drawOesToScreen();
-                }
-
-            } else {
-                // === RCAS-ONLY PATH ===
-                boolean ok;
-                long dt = 0L;
-                final float effSharp = mapUiSharpToInternal(sharpUser, nearNative);
-                final long t0 = (__fsr.enabled ? System.nanoTime() : 0L);
-
-                ok = drawRcasOnlySafe(fbW, fbH, effSharp);
-
-                if (fsrEnabled) {
-                    dt = System.nanoTime() - t0;
-                }
-
-                if (fsrEnabled) {
-                    __fsr.mode = "RCAS_ONLY";
-                    __fsr.srcW = srcW;
-                    __fsr.srcH = srcH;
-                    __fsr.dstW = fbW;
-                    __fsr.dstH = fbH;
-                    __fsr.sharp = effSharp;
-                    __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-
-                    String reason;
-                    if (nearNative) reason = "reason=nearNative";
-                    else if (srcW == fbW && srcH == fbH) reason = "reason=dstEqSrc";
-                    else if (modeRcasOnly) reason = "reason=easu_disabled";
-                    else reason = "reason=mode!=easu_rcas";
-
-                    __fsr.notes = (ok ? reason : "fallback:rcas_only_failed")
-                            + " | nearNative=" + nearNative
-                            + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
-
-                    __fsr.rcasAvgNs = (__fsr.rcasAvgNs == 0.0)
-                            ? dt : (0.2 * dt + 0.8 * __fsr.rcasAvgNs);
-                    __fsr.frames++;
-                    if ((__fsr.frames % 240L) == 0L) {
-                        com.limelight.LimeLog.info(__fsr.periodicLine());
-                    }
-                    if (fsrEnabled) maybeUpdateFsrOverlay();
-                }
-
-                if (!ok) {
-                    // Fallback if RCAS-only failed
-                    drawOesToScreen();
-                }
-            }
+            drawOesToScreen();
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
             }
+            return;
+        }
+
+
+        final boolean upscaleEnabled = (prefs != null && prefs.videoUpscaleEnable);
+        final String mode = (prefs != null ? prefs.videoUpscaleMode : "rcas");
+        final boolean modeNone = "none".equals(mode);
+        final boolean modeRcasOnly = "rcas".equals(mode);
+        final boolean modeEasuRcas = "easu_rcas".equals(mode);
+        final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
+        // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
+        if (fastBypassStatic && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
+            drawOesToScreen();
+            if (swapAndContinue()) {
+                sizeChangedSinceLastSwap = false;
+            }
+            return;
+        }
+
+        // Decide target size for *policy/telemetry*: prefer display hint if provided
+        final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
+        final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
+        float scaleX = (float) dstTargetW / (float) srcW;
+        float scaleY = (float) dstTargetH / (float) srcH;
+        boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
+        final boolean canUpscaleNow = (fbW != srcW || fbH != srcH);
+
+        // === FSR path selection + telemetry ===
+        final float nearThr = 0.05f;
+
+        // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
+        if (hdrActive && prefs != null && prefs.gpuPathMode) {
+            drawOesToScreen();
+            if (swapAndContinue()) {
+                sizeChangedSinceLastSwap = false;
+            }
+            return;
+        }
+
+        // === FSR path selection + telemetry ===
+        if (!upscaleEnabled || modeNone) {
+            // === BYPASS PATH ===
+            if (fsrEnabled) {
+                __fsr.mode = "BYPASS";
+                __fsr.srcW = srcW;
+                __fsr.srcH = srcH;
+                __fsr.dstW = fbW;
+                __fsr.dstH = fbH;
+                __fsr.sharp = 0f;
+                __fsr.sampling = "bypass";
+                __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled")
+                        + " | win=" + fbW + "x" + fbH
+                        + " hint=" + dstTargetW + "x" + dstTargetH;
+                if (fsrEnabled) maybeUpdateFsrOverlay();
+            }
+            drawOesToScreen();
+
+        } else if (modeEasuRcas && progEasu != 0 && !nearNative && (fbW != srcW || fbH != srcH)) {
+
+            // === EASU + RCAS PATH ===
+            boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative));
+
+            if (fsrEnabled) {
+                __fsr.mode = "EASU+RCAS";
+                __fsr.srcW = srcW;
+                __fsr.srcH = srcH;
+                __fsr.dstW = fbW;
+                __fsr.dstH = fbH;
+                __fsr.sharp = sharpUser;
+                __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
+                StringBuilder sb = new StringBuilder(64);
+                sb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
+                sb.append(" | nearNative=").append(nearNative);
+                sb.append(" thr=").append(String.format(Locale.US, "%.2f", nearThr));
+                __fsr.notes = sb.toString();
+
+                __fsr.frames++;
+                if ((__fsr.frames % 240L) == 0L) {
+                    com.limelight.LimeLog.info(__fsr.periodicLine());
+                }
+                if (fsrEnabled) maybeUpdateFsrOverlay();
+            }
+
+            if (!ok) {
+                // Fallback if EASU+RCAS failed
+                drawOesToScreen();
+            }
+
+        } else {
+            // === RCAS-ONLY PATH ===
+            boolean ok;
+            long dt = 0L;
+            final float effSharp = mapUiSharpToInternal(sharpUser, nearNative);
+            final long t0 = (__fsr.enabled ? System.nanoTime() : 0L);
+
+            ok = drawRcasOnlySafe(fbW, fbH, effSharp);
+
+            if (fsrEnabled) {
+                dt = System.nanoTime() - t0;
+            }
+
+            if (fsrEnabled) {
+                __fsr.mode = "RCAS_ONLY";
+                __fsr.srcW = srcW;
+                __fsr.srcH = srcH;
+                __fsr.dstW = fbW;
+                __fsr.dstH = fbH;
+                __fsr.sharp = effSharp;
+                __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
+
+                String reason;
+                if (nearNative) reason = "reason=nearNative";
+                else if (srcW == fbW && srcH == fbH) reason = "reason=dstEqSrc";
+                else if (modeRcasOnly) reason = "reason=easu_disabled";
+                else reason = "reason=mode!=easu_rcas";
+
+                __fsr.notes = (ok ? reason : "fallback:rcas_only_failed")
+                        + " | nearNative=" + nearNative
+                        + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
+
+                __fsr.rcasAvgNs = (__fsr.rcasAvgNs == 0.0)
+                        ? dt : (0.2 * dt + 0.8 * __fsr.rcasAvgNs);
+                __fsr.frames++;
+                if ((__fsr.frames % 240L) == 0L) {
+                    com.limelight.LimeLog.info(__fsr.periodicLine());
+                }
+                if (fsrEnabled) maybeUpdateFsrOverlay();
+            }
+
+            if (!ok) {
+                // Fallback if RCAS-only failed
+                drawOesToScreen();
+            }
+        }
+        if (swapAndContinue()) {
+            sizeChangedSinceLastSwap = false;
         }
     }
 
@@ -1478,7 +1543,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "}";
 
     // EASU minimal pass (OES -> 2D FBO)
-    // EASU minimal pass (OES -> 2D FBO)
     private static final String FS_EASU =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
@@ -1813,7 +1877,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     @androidx.annotation.Keep
     @SuppressWarnings("unused") // called via reflection from MediaCodecDecoderRenderer
     public void applyVsyncSetting() {
-        final int interval = (prefs != null && prefs.enableVsync) ? 1 : 0;
+        final boolean wantChoreo = (prefs != null && prefs.enableVsync);
+
+        // If the VSync backend changed while running, restart to switch implementation.
+        if (running.get() && (wantChoreo != useChoreoVsync) && Thread.currentThread() != renderThread) {
+            stop();
+            start();
+            return;
+        }
+
+        final int interval = wantChoreo ? 1 : 0;
 
         // Avoid waking the render thread if nothing changed
         if (pendingSwapInterval == interval) {
@@ -1904,4 +1977,20 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
     }
+    private final Choreographer.FrameCallback frameCallback = new Choreographer.FrameCallback() {
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            if (!running.get() || !useChoreoVsync) return;
+
+            try {
+                renderFrame(false);
+            } catch (Throwable t) {
+                LimeLog.warning("renderFrame error: " + t);
+            }
+
+            if (running.get() && useChoreoVsync) {
+                Choreographer.getInstance().postFrameCallback(this);
+            }
+        }
+    };
 }
