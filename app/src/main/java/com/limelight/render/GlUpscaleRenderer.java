@@ -1448,19 +1448,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
         float s = clamp01(ui);
-        // In HDR + GPU direct path, we must not alter gamma or sharpness
-        // This check would need to be done at the caller level
-        // For now, we just return the mapped value
-        // The actual HDR bypass happens in renderLoop before calling this function
-        if (ui <= 0.05f) return 0f;
-        s = (s - 0.05f) / 0.95f;
-        s = (float)(1.0 - Math.exp(-3.0 * s));
-        if (s <= 0.05f) return 0f;
-        s = (s - 0.05f) / 0.95f;
-        s = (float)(1.0 - Math.exp(-3.0 * s));
-        float cap = nearNative ? 0.4f : 0.8f;
+        if (s <= 0.02f) return 0f;
 
-        return cap * s;
+        // Keep UI sharpness mostly linear. Reduce strength near-native to avoid halos/ringing.
+        return nearNative ? (0.55f * s) : s;
     }
 
     private static int compileShader(int type, String src) {
@@ -1571,7 +1562,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  float wx = smoothstep(0.1, 0.6, abs(gx));\n" +
                     "  float wy = smoothstep(0.1, 0.6, abs(gy));\n" +
                     "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
-                    "  vec3 up = mix(base, guided, 0.35*edge);\n" +
+                    "  vec3 up = mix(base, guided, 0.18*edge);\n" +
                     "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
                     "}\n";
 
@@ -1581,7 +1572,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "#ifdef USE_OES\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
                     "#endif\n" +
-                    "precision mediump float;\n" +
+                    "precision highp float;\n" +
                     "\n" +
                     "in vec2 vUv;\n" +
                     "#if defined(USE_OES) && defined(RCAS_OES_VS)\n" +
@@ -1641,7 +1632,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  float gx = luma(rx) - luma(lx);\n" +
                     "  float gy = luma(ty) - luma(by);\n" +
                     "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
-                    "  float k = 1.2 * clamp(uSharp, 0.0, 1.0);\n" +
+                    "  float k = 1.8 * clamp(uSharp, 0.0, 1.0);\n" +
                     "  \n" +
                     "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
                     "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
