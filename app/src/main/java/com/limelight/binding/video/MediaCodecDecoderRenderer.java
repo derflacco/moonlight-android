@@ -435,6 +435,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             new android.util.SparseArray<>(16);
 
     private boolean preferLowerDelays = false; // Will be set based on frame pacing mode
+
+    // ---- Async BufferInfo pool (avoid per-frame allocations) ----
+    private final java.util.ArrayDeque<android.media.MediaCodec.BufferInfo> asyncInfoPool =
+            new java.util.ArrayDeque<>(32);
+
+    private android.media.MediaCodec.BufferInfo obtainAsyncInfo() {
+        synchronized (asyncInfoPool) {
+            android.media.MediaCodec.BufferInfo bi = asyncInfoPool.pollFirst();
+            return (bi != null) ? bi : new android.media.MediaCodec.BufferInfo();
+        }
+    }
+
+    private void recycleAsyncInfo(android.media.MediaCodec.BufferInfo bi) {
+        if (bi == null) return;
+        bi.set(0, 0, 0, 0);
+        synchronized (asyncInfoPool) {
+            if (asyncInfoPool.size() < 64) {
+                asyncInfoPool.addFirst(bi);
+            }
+        }
+    }
+
 // ==== End async decoding ====
 
 
@@ -1749,6 +1771,11 @@ try {
         rendererThread = new Thread() {
             @Override
             public void run() {
+                try {
+                    // Boost thread priority to reduce scheduling jitter for presentation/renderer work
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
+                } catch (Throwable ignored) { }
+
                 BufferInfo info = new BufferInfo();
                 final android.media.MediaCodec.BufferInfo lfrInfo =
                         new android.media.MediaCodec.BufferInfo();
@@ -1906,48 +1933,47 @@ try {
                                 // Update pacing state using the newest frame only
                                 updatePacingMode(presentationTimeUs);
 
-                                // Nano-pacer enforcement (1:1) - synchronized to prevent race conditions
+                                // Nano-pacer enforcement (1:1)
                                 if (isOneToOneMode) {
                                     synchronized (pacingLock) {
                                         final long framePeriodNs = pacerIntervalNs;
-                                        final long nowNsLocal = System.nanoTime();
 
                                         if (framePeriodNs <= 0L) {
                                             isOneToOneMode = false;
                                             nextPacingDeadlineNs = 0L;
-                                            return;
-                                        }
-
-                                        // Initialize first deadline (next slot)
-                                        if (nextPacingDeadlineNs == 0L) {
-                                            nextPacingDeadlineNs = nowNsLocal + framePeriodNs;
-                                        }
-
-                                        long waitNs = nextPacingDeadlineNs - nowNsLocal;
-
-                                        // Coarse wait for bulk intervals (>2ms)
-                                        if (waitNs > PARK_MIN_THRESHOLD_NS) {
-                                            long parkNs = waitNs - SPIN_MAX_NS;
-                                            if (parkNs > 0L) {
-                                                LockSupport.parkNanos(parkNs);
-                                                waitNs = nextPacingDeadlineNs - System.nanoTime();
-                                            }
-                                        }
-                                        // Precision spin for remaining micro-window
-                                        if (waitNs > 0L) {
-                                            final long spinDeadlineNs = nextPacingDeadlineNs;
-                                            while (System.nanoTime() < spinDeadlineNs) {
-                                                // spin
-                                            }
-                                            nextPacingDeadlineNs += framePeriodNs;
                                         } else {
-                                            final long slipNs = -waitNs;
-                                            if (slipNs < (framePeriodNs * 3L) / 2L) {
-                                                // Minor slip: maintain cadence, skip one slot
+                                            long pacerNowNs = System.nanoTime();
+
+                                            if (nextPacingDeadlineNs == 0L) {
+                                                nextPacingDeadlineNs = pacerNowNs + framePeriodNs;
+                                            }
+
+                                            long waitNs = nextPacingDeadlineNs - pacerNowNs;
+
+                                            if (waitNs > PARK_MIN_THRESHOLD_NS) {
+                                                final long parkNs = waitNs - SPIN_MAX_NS;
+                                                if (parkNs > 0L) {
+                                                    LockSupport.parkNanos(parkNs);
+                                                }
+                                                pacerNowNs = System.nanoTime();
+                                                waitNs = nextPacingDeadlineNs - pacerNowNs;
+                                            }
+
+                                            if (waitNs > 0L) {
+                                                final long spinDeadlineNs = nextPacingDeadlineNs;
+                                                while (System.nanoTime() < spinDeadlineNs) {
+                                                    // spin
+                                                }
                                                 nextPacingDeadlineNs += framePeriodNs;
                                             } else {
-                                                // Major slip: full resynchronization
-                                                nextPacingDeadlineNs = nowNsLocal + framePeriodNs;
+                                                final long slipNs = -waitNs;
+
+                                                if (slipNs < (framePeriodNs * 3L) / 2L) {
+                                                    nextPacingDeadlineNs += framePeriodNs;
+                                                } else {
+                                                    pacerNowNs = System.nanoTime();
+                                                    nextPacingDeadlineNs = pacerNowNs + framePeriodNs;
+                                                }
                                             }
                                         }
                                     }
@@ -3670,15 +3696,20 @@ try {
             Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
             if (idx == null) return -1;
             synchronized (asyncOutInfo) {
-                android.media.MediaCodec.BufferInfo bi = asyncOutInfo.get(idx);
-                if (bi == null) {
-                    // Already cleaned up, buffer likely released
-                    return -1;
+                android.media.MediaCodec.BufferInfo bi;
+                synchronized (asyncOutInfo) {
+                    bi = asyncOutInfo.get(idx);
+                    if (bi == null) {
+                        // Already cleaned up, buffer likely released
+                        return -1;
+                    }
+                    if (outInfo != null) {
+                        outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                    }
+                    asyncOutInfo.remove(idx);
                 }
-                if (outInfo != null) {
-                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
-                }
-                asyncOutInfo.remove(idx);
+                recycleAsyncInfo(bi);
+
             }
             return idx;
         } catch (InterruptedException e) {
@@ -3689,8 +3720,11 @@ try {
     private void attachAsyncCodecIfNeeded() {
         if (!useAsyncCodec || videoDecoder == null) return;
 
-        preferLowerDelays = (prefs != null &&
-                (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED ||
+        preferLowerDelays = (prefs != null && (
+                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ||
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW ||
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_WARP ||
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2 ||
                         prefs.immediateFrameDelivery));
 
         if (codecCallbackThread == null) {
@@ -3702,12 +3736,16 @@ try {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             videoDecoder.setCallback(new MediaCodec.Callback() {
+
                 @Override
                 public void onInputBufferAvailable(MediaCodec codec, int index) {
                     try {
-                        asyncInputQueue.put(index);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                        // Never block the MediaCodec callback thread
+                        if (!asyncInputQueue.offer(index)) {
+                            // Queue full: drop one queued index to make room
+                            asyncInputQueue.poll();
+                            asyncInputQueue.offer(index);
+                        }
                     } catch (Throwable ignored) { }
                 }
 
@@ -3715,7 +3753,7 @@ try {
                 @Override
                 public void onOutputBufferAvailable(MediaCodec codec, int index, BufferInfo info) {
                     // CRITICAL FIX: Create a defensive copy; the system reuses 'info' for the next frame
-                    BufferInfo copy = new BufferInfo();
+                    BufferInfo copy = obtainAsyncInfo();
                     copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
 
                     try {
