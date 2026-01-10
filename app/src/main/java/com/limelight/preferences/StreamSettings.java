@@ -172,13 +172,14 @@ public class StreamSettings extends AppCompatActivity {
         SharedPreferences.OnSharedPreferenceChangeListener lockWatcher =
                 (sp, key) -> {
                     if (               "pref_video_upscale_enable".equals(key)       // FSR
-                            || "pref_video_hdr_enable".equals(key)           // HDR (old)
-                            || "pref_hdr_enable".equals(key)                 // HDR (legacy)
-                            || "pref_hdr_pipeline_enable".equals(key)        // HDR pipeline
-                            || "frame_pacing".equals(key)                    // Legacy pacing list
-                            || "seekbar_adaptx_mode".equals(key)             // Legacy AdaptX sub-mode
-                            || "seekbar_frame_pacing_profile".equals(key)    // Unified pacing profile slider
-
+                            || "pref_video_upscale_mode".equals(key)                 // FSR mode
+                            || "pref_video_upscale_preset".equals(key)               // FSR preset
+                            || "pref_video_hdr_enable".equals(key)                   // HDR (old)
+                            || "pref_hdr_enable".equals(key)                         // HDR (legacy)
+                            || "pref_hdr_pipeline_enable".equals(key)                // HDR pipeline
+                            || "frame_pacing".equals(key)                            // Legacy pacing list
+                            || "seekbar_adaptx_mode".equals(key)                     // Legacy AdaptX sub-mode
+                            || "seekbar_frame_pacing_profile".equals(key)            // Unified pacing profile slider
                     ) {
                         // Re-evaluate UI locks and dependent visibility
                         updateLocks();
@@ -209,10 +210,18 @@ public class StreamSettings extends AppCompatActivity {
 
             Preference fsrEn       = findPreference("pref_video_upscale_enable");
             Preference fsrMode     = findPreference("pref_video_upscale_mode");
+            Preference fsrPreset   = findPreference("pref_video_upscale_preset");
             Preference sharpness   = findPreference("pref_video_upscale_sharpness");
 
             // Determine FSR enabled state
             boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;
+
+            final String fsrModeValue = sp.getString("pref_video_upscale_mode", "rcas");
+            // Show preset for both RCAS-only and EASU+RCAS. Hide only when mode is "none" or FSR disabled.
+            final boolean showPreset = fsrEnabled && !"none".equals(fsrModeValue);
+
+            final boolean easuActive = "easu_rcas".equals(fsrModeValue);
+            final boolean presetVisible = fsrEnabled && easuActive;
 
             // FSR enable toggle
             if (fsrEn != null) {
@@ -229,6 +238,16 @@ public class StreamSettings extends AppCompatActivity {
                 fsrMode.setEnabled(fsrEnabled);
             }
 
+            // FSR preset slider (only meaningful for EASU+RCAS)
+            if (fsrPreset != null) {
+                try {
+                    fsrPreset.setVisible(presetVisible);
+                } catch (Throwable ignored) {
+                    fsrPreset.setEnabled(presetVisible);
+                }
+                fsrPreset.setEnabled(presetVisible);
+            }
+
             // FSR sharpness slider
             if (sharpness != null) {
                 try {
@@ -237,6 +256,16 @@ public class StreamSettings extends AppCompatActivity {
                     sharpness.setEnabled(fsrEnabled);
                 }
                 sharpness.setEnabled(fsrEnabled);
+            }
+
+            // FSR preset (applies to RCAS-only and EASU+RCAS)
+            if (fsrPreset != null) {
+                try {
+                    fsrPreset.setVisible(showPreset);
+                } catch (Throwable ignored) {
+                    fsrPreset.setEnabled(showPreset);
+                }
+                fsrPreset.setEnabled(showPreset);
             }
 
             // Enforce mutual exclusion (disable FSR only if locked by HDR)
