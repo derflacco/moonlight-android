@@ -345,14 +345,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         useChoreoVsync = (wantVsync && !balancedPacing);
 
-        if (useChoreoVsync) {
-            final HandlerThread ht = new HandlerThread(
-                    "GL-FSR1-Renderer",
-                    android.os.Process.THREAD_PRIORITY_DISPLAY);
-            renderThread = ht;
-            ht.start();
+        // Always use a HandlerThread to keep a consistent scheduling model and OS-level priority.
+        final HandlerThread ht = new HandlerThread(
+                "GL-FSR1-Renderer",
+                android.os.Process.THREAD_PRIORITY_DISPLAY);
+        renderThread = ht;
+        ht.start();
 
-            renderHandler = new Handler(ht.getLooper());
+        renderHandler = new Handler(ht.getLooper());
+
+        if (useChoreoVsync) {
             renderHandler.post(() -> {
                 try {
                     Choreographer.getInstance().postFrameCallback(frameCallback);
@@ -360,15 +362,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     LimeLog.warning("Choreographer init failed: " + t);
                 }
             });
-            return;
+        } else {
+            renderHandler.post(this::renderLoop);
         }
-
-        renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
-        try {
-            renderThread.setPriority(Thread.NORM_PRIORITY + 2);
-        } catch (Throwable ignored) {}
-
-        renderThread.start();
     }
 
     public void stop() {
