@@ -197,6 +197,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // EGL extension cache (avoid try/catch per-frame)
     private boolean hasPresentationTimeExt = false;
 
+    // Force swapInterval=0 to prevent eglSwapBuffers() from blocking on vsync.
+    private boolean swapIntervalZeroApplied = false;
+
     // Track if render surface size changed since last swap
     private boolean sizeChangedSinceLastSwap = true;
 
@@ -470,6 +473,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 return;
             }
 
+            // After a new current surface/context bind, force non-blocking swap.
+            swapIntervalZeroApplied = false;
+            ensureSwapIntervalZero();
             // Cached GL state is invalid after a successful rebind
             lastProgram = -1;
             lastTexture = -1;
@@ -1298,6 +1304,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext))
                     throw new RuntimeException("eglMakeCurrent failed");
 
+                // Force non-blocking swap after (re)binding current surfaces.
+                swapIntervalZeroApplied = false;
+                ensureSwapIntervalZero();
                 // Reset cached GL state for the new EGL context
                 lastProgram = -1;
                 lastTexture = -1;
@@ -1475,8 +1484,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             eglContext = EGL14.EGL_NO_CONTEXT;
             eglWindowSurface = EGL14.EGL_NO_SURFACE;
             attachedEglContext = EGL14.EGL_NO_CONTEXT;
+            swapIntervalZeroApplied = false;
         }
     }
+
     private void bindQuad(int prog) {
         // VAO path: bind only when changed
         if (hasVao && vao != 0) {
@@ -1514,7 +1525,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         quadBound = true;
     }
 
+    private void ensureSwapIntervalZero() {
+        if (swapIntervalZeroApplied) return;
+        if (eglDisplay == null || eglDisplay == EGL14.EGL_NO_DISPLAY) return;
 
+        try {
+            EGL14.eglSwapInterval(eglDisplay, 0);
+        } catch (Throwable ignored) {
+            // Some drivers may ignore or fail; leave it best-effort.
+        }
+
+        swapIntervalZeroApplied = true;
+    }
 
     private void applyFixedState() {
         GLES20.glDisable(GLES20.GL_BLEND);
