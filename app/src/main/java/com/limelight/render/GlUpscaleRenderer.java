@@ -59,7 +59,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean rcasOesHealthy = false;
     private int lastProgram = -1;
     private int lastTexture = -1;
-    private volatile int pendingSwapInterval = -1;
     private EGLContext attachedEglContext = EGL14.EGL_NO_CONTEXT;
 
     // ===== FSR Telemetry (lightweight) =====
@@ -181,7 +180,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private volatile boolean useChoreoVsync = false;
     private volatile Handler renderHandler = null;
     private final Object frameLock = new Object();
-    private boolean frameAvailable = false;
+    // SurfaceTexture callback coalescing with bounded "pending frames" counter.
+// This behaves like a tiny queue without introducing extra latency.
+    private static final int MAX_PENDING_FRAMES = 8;
+    private static final int MAX_DRAIN_UPDATETEXIMAGE = 4;
+    private int pendingFrames = 0;
 
     // State cache
     private int curVpW = -1, curVpH = -1;
@@ -330,8 +333,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         if (!isGlReady() || running.getAndSet(true)) return;
 
-        useChoreoVsync = (prefs != null && prefs.enableVsync);
-        pendingSwapInterval = useChoreoVsync ? 1 : 0;
+        final boolean wantVsync = (prefs != null && prefs.enableVsync);
+
+        // Balanced pacing already runs a Choreographer loop in MediaCodecDecoderRenderer.
+        // Avoid a second independent Choreographer loop here.
+        final boolean balancedPacing =
+                (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+
+        useChoreoVsync = (wantVsync && !balancedPacing);
 
         if (useChoreoVsync) {
             final HandlerThread ht = new HandlerThread(
@@ -422,9 +431,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     @Override
     public void onFrameAvailable(SurfaceTexture st) {
         synchronized (frameLock) {
-            // Coalesce multiple callbacks until the render thread consumes the frame
-            if (!frameAvailable) {
-                frameAvailable = true;
+            final boolean wasEmpty = (pendingFrames == 0);
+            if (pendingFrames < MAX_PENDING_FRAMES) {
+                pendingFrames++;
+            }
+            if (wasEmpty) {
                 frameLock.notify();
             }
         }
@@ -483,9 +494,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             markGlErrorDirty();
         }
 
-        boolean newFrame = false;
+        int drainCount = 0;
         synchronized (frameLock) {
-            if (allowWait && !frameAvailable) {
+            if (allowWait && pendingFrames == 0) {
                 try {
                     // Wait at most ~33ms (≈30fps) to prevent ANR if decoder stalls
                     frameLock.wait(33);
@@ -493,26 +504,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     Thread.currentThread().interrupt();
                 }
             }
-            newFrame = frameAvailable;
-            frameAvailable = false;
+            drainCount = pendingFrames;
+            pendingFrames = 0;
         }
-
-
-        // Apply pending swap interval on the render thread (EGL context must be current)
-        final int interval = pendingSwapInterval;
-        if (interval >= 0) {
-            try {
-                EGL14.eglSwapInterval(eglDisplay, interval);
-            } catch (Throwable ignored) { }
-            pendingSwapInterval = -1;
-        }
+        final boolean newFrame = (drainCount > 0);
 
         boolean didUpdateTex = false;
 
         try {
             if (decoderSurfaceTex != null && newFrame) {
                 if (!ensureSurfaceTextureAttached()) {
-                    // ensureSurfaceTextureAttached() should markGlErrorDirty() on failures
                     return; // do not call updateTexImage() when detached
                 }
 
@@ -521,17 +522,21 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     glErrorDirty = false;
                 }
 
-                decoderSurfaceTex.updateTexImage();
+                // Drain a few pending frames to avoid SurfaceTexture backlog (latest-ish behavior).
+                final int loops = Math.min(drainCount, MAX_DRAIN_UPDATETEXIMAGE);
+                for (int i = 0; i < loops; i++) {
+                    decoderSurfaceTex.updateTexImage();
+                }
+
                 decoderSurfaceTex.getTransformMatrix(texMatrix);
                 texMatrixSerial++;
                 hasEverUpdatedTex = true;
                 didUpdateTex = true;
             }
         } catch (Throwable t) {
-            // Prevent SurfaceTexture crash loop if decoderSurfaceTex is invalid or detached
             LimeLog.warning("updateTexImage failed: " + t);
             markGlErrorDirty();
-            return; // Skip this frame safely, avoid drawing invalid texture
+            return;
         }
 
 
@@ -1319,14 +1324,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     hasPresentationTimeExt = false;
                 }
 
-                // Apply user VSync preference (checkbox_Vsync)
-                try {
-                    int swapInterval = (prefs != null && prefs.enableVsync) ? 1 : 0;
-                    EGL14.eglSwapInterval(eglDisplay, swapInterval);
-                    LimeLog.info("FSR: VSync " + (swapInterval == 1 ? "ENABLED (smooth pacing)" : "DISABLED (low latency)"));
-                } catch (Throwable ignored) {
-                    // Some devices may ignore eglSwapInterval, no harm.
-                }
 
             } catch (Throwable t) {
                 LimeLog.warning("GL init failed: " + t);
@@ -2228,28 +2225,28 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     @androidx.annotation.Keep
     @SuppressWarnings("unused") // called via reflection from MediaCodecDecoderRenderer
     public void applyVsyncSetting() {
-        final boolean wantChoreo = (prefs != null && prefs.enableVsync);
+        final boolean wantVsync = (prefs != null && prefs.enableVsync);
 
-        // If the VSync backend changed while running, restart to switch implementation.
-        if (running.get() && (wantChoreo != useChoreoVsync) && Thread.currentThread() != renderThread) {
+        final boolean balancedPacing =
+                (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+
+        final boolean wantChoreoBackend = (wantVsync && !balancedPacing);
+
+        // If the backend changed while running, restart to switch implementation.
+        if (running.get() && (wantChoreoBackend != useChoreoVsync) && Thread.currentThread() != renderThread) {
             stop();
             start();
             return;
         }
 
-        final int interval = wantChoreo ? 1 : 0;
+        useChoreoVsync = wantChoreoBackend;
 
-        // Avoid waking the render thread if nothing changed
-        if (pendingSwapInterval == interval) {
-            return;
-        }
-
-        pendingSwapInterval = interval;
-
+        // Wake render thread (useful for non-choreo loop and for immediate redraw)
         synchronized (frameLock) {
             frameLock.notify();
         }
     }
+
 
     private void UseProgram(int program) {
         if (lastProgram != program) {
