@@ -709,7 +709,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // === RCAS-ONLY PATH ===
             boolean ok;
             long dt = 0L;
-            final float effSharp = mapUiSharpToInternal(sharpUser, nearNative);
+            final int preset = (prefs != null ? prefs.videoUpscalePreset : 0); // 0..2
+            final float effSharp = mapUiSharpToInternalRcas(sharpUser, preset, nearNative);
+
             final long t0 = (__fsr.enabled ? System.nanoTime() : 0L);
 
             ok = drawRcasOnlySafe(fbW, fbH, effSharp);
@@ -734,8 +736,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 else reason = "reason=mode!=easu_rcas";
 
                 __fsr.notes = (ok ? reason : "fallback:rcas_only_failed")
+                        + " | preset=" + preset
                         + " | nearNative=" + nearNative
                         + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
+
 
                 __fsr.rcasAvgNs = (__fsr.rcasAvgNs == 0.0)
                         ? dt : (0.2 * dt + 0.8 * __fsr.rcasAvgNs);
@@ -1561,6 +1565,36 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Keep UI sharpness mostly linear. Reduce strength near-native to avoid halos/ringing.
         return nearNative ? (0.55f * s) : s;
     }
+
+    private static float mapUiSharpToInternalRcas(float ui, int preset, boolean nearNative) {
+        float s = clamp01(ui);
+
+        // Keep the same curve, but adjust caps by preset.
+        if (ui <= 0.05f) return 0f;
+        s = (s - 0.05f) / 0.95f;
+        s = (float)(1.0 - Math.exp(-3.0 * s));
+        if (s <= 0.05f) return 0f;
+        s = (s - 0.05f) / 0.95f;
+        s = (float)(1.0 - Math.exp(-3.0 * s));
+
+        if (preset < 0) preset = 0;
+        else if (preset > 2) preset = 2;
+
+        final float cap;
+        if (preset == 0) {
+            // Performance: current behavior
+            cap = nearNative ? 0.18f : 0.25f;
+        } else if (preset == 1) {
+            // Balanced: noticeably stronger, still safe
+            cap = nearNative ? 0.28f : 0.40f;
+        } else {
+            // Quality: strongest; near-native kept lower to avoid halos
+            cap = nearNative ? 0.36f : 0.55f;
+        }
+
+        return cap * s;
+    }
+
 
     private static int compileShader(int type, String src) {
         int sh = GLES20.glCreateShader(type);
