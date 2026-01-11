@@ -427,7 +427,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private android.os.HandlerThread codecCallbackThread;
 
     private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncInputQueue =
-            new java.util.concurrent.ArrayBlockingQueue<>(256);
+            new java.util.concurrent.ArrayBlockingQueue<>(64);
     private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncOutputQueue =
             new java.util.concurrent.ArrayBlockingQueue<>(8);
 
@@ -1442,15 +1442,9 @@ try {
                 outputBufferQueue.clear();
                 asyncInputQueue.clear();
                 asyncOutputQueue.clear();
-                asyncInputQueue.clear();
-                asyncOutputQueue.clear();
                 synchronized (asyncOutInfo) {
-                    for (int i = 0; i < asyncOutInfo.size(); i++) {
-                        recycleAsyncInfo(asyncOutInfo.valueAt(i));
-                    }
                     asyncOutInfo.clear();
                 }
-
                 // Clear decode latency tracking during codec recovery
                 synchronized (enqueueNsLock) {
                     enqueueNsByPtsUs.clear();
@@ -3698,42 +3692,31 @@ try {
         if (!useAsyncCodec || videoDecoder == null) {
             return videoDecoder.dequeueOutputBuffer(outInfo, timeoutUs);
         }
-
-        android.media.MediaCodec.BufferInfo bi = null;
-
         try {
             Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
             if (idx == null) return -1;
-
             synchronized (asyncOutInfo) {
-                bi = asyncOutInfo.get(idx);
-                if (bi == null) {
-                    // Already cleaned up, buffer likely released
-                    return -1;
+                android.media.MediaCodec.BufferInfo bi;
+                synchronized (asyncOutInfo) {
+                    bi = asyncOutInfo.get(idx);
+                    if (bi == null) {
+                        // Already cleaned up, buffer likely released
+                        return -1;
+                    }
+                    if (outInfo != null) {
+                        outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
+                    }
+                    asyncOutInfo.remove(idx);
                 }
+                recycleAsyncInfo(bi);
 
-                if (outInfo != null) {
-                    outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
-                }
-
-                asyncOutInfo.remove(idx);
             }
-
-            // Recycle outside the lock to minimize contention
-            recycleAsyncInfo(bi);
             return idx;
-
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            if (bi != null) recycleAsyncInfo(bi);
-            return -1;
-        } catch (Throwable t) {
-            if (bi != null) recycleAsyncInfo(bi);
             return -1;
         }
     }
-
-
     private void attachAsyncCodecIfNeeded() {
         if (!useAsyncCodec || videoDecoder == null) return;
 
@@ -3757,9 +3740,11 @@ try {
                 @Override
                 public void onInputBufferAvailable(MediaCodec codec, int index) {
                     try {
-                        // Non-blocking: avoid stalling the MediaCodec callback thread
+                        // Never block the MediaCodec callback thread
                         if (!asyncInputQueue.offer(index)) {
-                            LimeLog.warning("Async input queue full; dropped input index=" + index);
+                            // Queue full: drop one queued index to make room
+                            asyncInputQueue.poll();
+                            asyncInputQueue.offer(index);
                         }
                     } catch (Throwable ignored) { }
                 }
@@ -3767,12 +3752,12 @@ try {
 
                 @Override
                 public void onOutputBufferAvailable(MediaCodec codec, int index, BufferInfo info) {
-                    // Defensive copy: MediaCodec reuses 'info' for subsequent callbacks
-                    final BufferInfo copy = obtainAsyncInfo();
+                    // CRITICAL FIX: Create a defensive copy; the system reuses 'info' for the next frame
+                    BufferInfo copy = obtainAsyncInfo();
                     copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
 
                     try {
-                        // Store info atomically with respect to renderer thread
+                        // Store info synchronously to prevent race conditions with the renderer thread
                         synchronized (asyncOutInfo) {
                             asyncOutInfo.put(index, copy);
                         }
@@ -3784,26 +3769,17 @@ try {
                                 try {
                                     codec.releaseOutputBuffer(old, false);
                                 } catch (Throwable ignored) {}
-
-                                android.media.MediaCodec.BufferInfo oldInfo;
                                 synchronized (asyncOutInfo) {
-                                    oldInfo = asyncOutInfo.get(old);
                                     asyncOutInfo.remove(old);
                                 }
-                                recycleAsyncInfo(oldInfo);
                             }
-
                             if (!asyncOutputQueue.offer(index)) {
                                 try {
                                     codec.releaseOutputBuffer(index, false);
                                 } catch (Throwable ignored) {}
-
-                                android.media.MediaCodec.BufferInfo curInfo;
                                 synchronized (asyncOutInfo) {
-                                    curInfo = asyncOutInfo.get(index);
                                     asyncOutInfo.remove(index);
                                 }
-                                recycleAsyncInfo(curInfo);
                             }
                             return;
                         }
@@ -3815,45 +3791,20 @@ try {
                                 try {
                                     codec.releaseOutputBuffer(old, false);
                                 } catch (Throwable ignored) {}
-
-                                android.media.MediaCodec.BufferInfo oldInfo;
                                 synchronized (asyncOutInfo) {
-                                    oldInfo = asyncOutInfo.get(old);
                                     asyncOutInfo.remove(old);
                                 }
-                                recycleAsyncInfo(oldInfo);
                             }
-
                             if (!asyncOutputQueue.offer(index)) {
                                 try {
                                     codec.releaseOutputBuffer(index, false);
                                 } catch (Throwable ignored) {}
-
-                                android.media.MediaCodec.BufferInfo curInfo;
                                 synchronized (asyncOutInfo) {
-                                    curInfo = asyncOutInfo.get(index);
                                     asyncOutInfo.remove(index);
                                 }
-                                recycleAsyncInfo(curInfo);
                             }
                         }
-                    } catch (Throwable t) {
-                        // If anything goes wrong, don't leak the pooled BufferInfo
-                        android.media.MediaCodec.BufferInfo bi = null;
-                        try {
-                            synchronized (asyncOutInfo) {
-                                bi = asyncOutInfo.get(index);
-                                asyncOutInfo.remove(index);
-                            }
-                        } catch (Throwable ignored) { }
-
-                        // Recycle exactly once
-                        if (bi != null) {
-                            recycleAsyncInfo(bi);
-                        } else {
-                            recycleAsyncInfo(copy);
-                        }
-                    }
+                    } catch (Throwable ignored) { }
                 }
 
                 @Override
@@ -3927,14 +3878,9 @@ try {
             try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
             try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
 
-            // Clear asyncOutInfo with recycling (return pooled BufferInfo objects)
+            // Clear asyncOutInfo with synchronization
             synchronized (asyncOutInfo) {
-                try {
-                    for (int i = 0; i < asyncOutInfo.size(); i++) {
-                        recycleAsyncInfo(asyncOutInfo.valueAt(i));
-                    }
-                    asyncOutInfo.clear();
-                } catch (Throwable ignored) {}
+                try { asyncOutInfo.clear(); } catch (Throwable ignored) {}
             }
 
             // Safely stop and wait for callback thread
