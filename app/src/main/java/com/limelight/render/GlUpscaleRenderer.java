@@ -51,6 +51,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // These flags are driven from Game/decoder:
     private volatile boolean hdrActive = false;
     private volatile boolean hdrDirectPresent = false;
+    // One-shot warning to avoid log spam when HDR is active without GPU path
+    private volatile boolean hdrNoGpuPathWarned = false;
+
     private final ByteBuffer testPixelBuffer = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
 
 
@@ -184,6 +187,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final int MAX_PENDING_FRAMES = 8;
     private static final int MAX_DRAIN_UPDATETEXIMAGE = 4;
     private int pendingFrames = 0;
+    // stop()/release() safety: avoid indefinite join() if the render thread gets stuck in driver/EGL
+    private static final long STOP_JOIN_TIMEOUT_MS = 1200L;
+    private static final long STOP_JOIN_GRACE_MS = 600L;
+
 
     // State cache
     private int curVpW = -1, curVpH = -1;
@@ -280,16 +287,21 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
      * @param hdrActive      true if the current stream is HDR.
      * @param directPresent  true only when GPU path (prefs.gpuPathMode) is enabled.
      */
-    @Keep
     public void setHdrMode(boolean hdrActive, boolean directPresent) {
         this.hdrActive = hdrActive;
         this.hdrDirectPresent = directPresent;
+
+        if (!hdrActive) {
+            hdrNoGpuPathWarned = false;
+        }
+
         // Ensure we render at least once with the new mode
         sizeChangedSinceLastSwap = true;
         synchronized (frameLock) {
             frameLock.notify();
         }
     }
+
 
     @Keep
     public Surface createDecoderInputSurface() {
@@ -388,6 +400,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     public void stop() {
         running.set(false);
 
+        // Wake any wait in renderFrame() to accelerate shutdown.
+        synchronized (frameLock) {
+            frameLock.notifyAll();
+        }
+
         if (useChoreoVsync) {
             // Stop from the render thread (no join).
             if (Thread.currentThread() == renderThread) {
@@ -417,17 +434,57 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
 
-        if (renderThread != null && Thread.currentThread() != renderThread) {
-            try { renderThread.join(); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-            renderThread = null;
-        }
+        final Thread t = renderThread;
+        if (t != null && Thread.currentThread() != t) {
+            boolean stopped = false;
 
-        renderHandler = null;
-        useChoreoVsync = false;
+            try {
+                t.join(STOP_JOIN_TIMEOUT_MS);
+                stopped = !t.isAlive();
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+
+            if (!stopped) {
+                // Best-effort: attempt to break any waits and let the thread unwind.
+                try { t.interrupt(); } catch (Throwable ignored) {}
+
+                if (t instanceof HandlerThread) {
+                    try { ((HandlerThread) t).quit(); } catch (Throwable ignored) {}
+                }
+
+                try {
+                    t.join(STOP_JOIN_GRACE_MS);
+                    stopped = !t.isAlive();
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            if (stopped) {
+                renderThread = null;
+                renderHandler = null;
+                useChoreoVsync = false;
+            } else {
+                LimeLog.warning("FSR: render thread did not stop within timeout; skipping teardown to avoid EGL/GL races");
+                // Keep renderThread reference: release() will detect and abort teardown.
+            }
+        } else {
+            // Already stopped or stopping from the render thread.
+            renderHandler = null;
+            useChoreoVsync = false;
+        }
     }
 
     public void release() {
         stop();
+
+        final Thread t = renderThread;
+        if (t != null && t.isAlive()) {
+            LimeLog.warning("FSR: release() aborted because render thread is still alive (avoiding EGL/GL teardown races)");
+            return;
+        }
+
         try {
             if (decoderSurfaceTex != null) {
                 decoderSurfaceTex.setOnFrameAvailableListener(null);
@@ -444,6 +501,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         destroyGl();
         destroyEgl();
     }
+
+
 
     @Override
     public void onFrameAvailable(SurfaceTexture st) {
@@ -678,8 +737,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // === FSR path selection + telemetry ===
         final float nearThr = 0.05f;
 
-        // HDR + GPU path => dedicated HDR-direct branch (no FSR, no gamma tricks)
-        if (hdrActive && prefs != null && prefs.gpuPathMode) {
+        // HDR without GPU path: avoid FSR/RCAS in an SDR pipeline (server-side tonemap recommended).
+        if (hdrActive) {
+            if (!hdrNoGpuPathWarned) {
+                hdrNoGpuPathWarned = true;
+                LimeLog.warning("FSR: HDR active without GPU path; forcing BYPASS"
+                        + (hdrDirectPresent ? " directPresent=1" : "")
+                        + " (server-side tonemap recommended)");
+            }
+
             drawOesToScreen();
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
