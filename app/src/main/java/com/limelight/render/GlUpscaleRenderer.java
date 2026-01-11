@@ -157,8 +157,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Presentation size hint (display-sized buffer), if known
     private volatile int hintOutW = 0, hintOutH = 0;
-    // Cached direct-present
-    private final boolean fastBypassStatic;
+
     // Performance optimizations
     private final int[] tmpIntArray = new int[1]; // Reusable int array
 
@@ -199,6 +198,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Force swapInterval=0 to prevent eglSwapBuffers() from blocking on vsync.
     private boolean swapIntervalZeroApplied = false;
+    private int swapIntervalZeroFailCount = 0;
+
 
     // Track if render surface size changed since last swap
     private boolean sizeChangedSinceLastSwap = true;
@@ -230,20 +231,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!__fsr.enabled) return;
 
         final long now = System.nanoTime();
-        final boolean modeSame = (__fsr.mode.equals(lastFsrOverlayMode));
-        final boolean sharpSame = (__fsr.sharp == lastFsrOverlaySharp);
+        final String mode = (__fsr.mode != null ? __fsr.mode : "");
+        final float sharp = __fsr.sharp;
+
+        final boolean modeSame = mode.equals(lastFsrOverlayMode);
+        final boolean sharpSame = (Math.abs(sharp - lastFsrOverlaySharp) < 0.0005f);
 
         if (modeSame && sharpSame && (now - lastFsrOverlayUpdateNs) < FSR_OVERLAY_UPDATE_NS) {
             return;
         }
 
         lastFsrOverlayUpdateNs = now;
-        lastFsrOverlayMode = (__fsr.mode != null ? __fsr.mode : "");
-        lastFsrOverlaySharp = __fsr.sharp;
+        lastFsrOverlayMode = mode;
+        lastFsrOverlaySharp = sharp;
 
         __fsrOverlay = __fsr.overlayLine();
     }
-
 
 
     // GL binding caches (reduce driver chatter)
@@ -269,9 +272,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
-
-        // Precompute whether we can always take the ultra-thin OES->screen path.
-        this.fastBypassStatic = computeFastBypassStatic(prefs);
     }
 
     /**
@@ -301,32 +301,46 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         if (decoderInputSurface != null) return decoderInputSurface;
 
-        GLES20.glGenTextures(1, tmpIntArray, 0);
-        oesTexId = tmpIntArray[0];
-        if (lastTexture != oesTexId) {
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-            lastTexture = oesTexId;
-        }
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        if (!ensureEglCurrent()) return null;
 
-        decoderSurfaceTex = new SurfaceTexture(oesTexId);
-        attachedEglContext = EGL14.eglGetCurrentContext();
         try {
-            decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
-        } catch (Throwable ignored) {}
+            GLES20.glGenTextures(1, tmpIntArray, 0);
+            oesTexId = tmpIntArray[0];
 
-        decoderSurfaceTex.setOnFrameAvailableListener(this);
-        decoderInputSurface = new Surface(decoderSurfaceTex);
-        // Reset GL trackers — new SurfaceTexture means new OES texture binding
-        lastTexture = -1;
-        lastProgram = -1;
-        // Keep filter cache coherent with the freshly-created OES texture (created as LINEAR)
-        oesNearest = false;
-        return decoderInputSurface;
+            if (lastTexture != oesTexId) {
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+                lastTexture = oesTexId;
+            }
+
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+
+            decoderSurfaceTex = new SurfaceTexture(oesTexId);
+            attachedEglContext = EGL14.eglGetCurrentContext();
+
+            try {
+                decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
+            } catch (Throwable ignored) {}
+
+            decoderSurfaceTex.setOnFrameAvailableListener(this);
+            decoderInputSurface = new Surface(decoderSurfaceTex);
+
+            // Reset GL trackers — new SurfaceTexture means new OES texture binding
+            lastTexture = -1;
+            lastProgram = -1;
+
+            // Keep filter cache coherent with the freshly-created OES texture (created as LINEAR)
+            oesNearest = false;
+
+            return decoderInputSurface;
+        } finally {
+            // Do not keep the EGL context current on this (non-render) thread.
+            releaseEglCurrent();
+        }
     }
+
 
     public void start() {
         if (!isGlReady()) {
@@ -446,8 +460,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // ====== Main render loop ======
     private void renderLoop() {
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
+        } catch (Throwable ignored) {}
+
         while (running.get()) {
-            renderFrame(true);
+            try {
+                renderFrame(true);
+            } catch (Throwable t) {
+                LimeLog.warning("FSR: renderFrame crashed: " + t);
+                markGlErrorDirty();
+                running.set(false);
+            }
         }
     }
 
@@ -631,14 +655,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         final boolean modeRcasOnly = "rcas".equals(mode);
         final boolean modeEasuRcas = "easu_rcas".equals(mode);
         final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
-        // Ultra-thin path: when fastBypassStatic is true, we always just blit OES -> screen.
-        if (fastBypassStatic && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
+        final boolean fastBypassNow = computeFastBypassStatic(prefs);
+
+        // Ultra-thin path: when fastBypassNow is true, we always just blit OES -> screen.
+        if (fastBypassNow && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
             drawOesToScreen();
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
             }
             return;
         }
+
 
         // Decide target size for *policy/telemetry*: prefer display hint if provided
         final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
@@ -718,18 +745,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         } else {
             // === RCAS-ONLY PATH ===
-            boolean ok;
-            long dt = 0L;
-            final int preset = (prefs != null ? prefs.videoUpscalePreset : 0); // 0..2
+            final int preset = (prefs != null ? prefs.videoUpscalePreset : 0);
             final float effSharp = mapUiSharpToInternalRcas(sharpUser, preset, nearNative);
 
-            final long t0 = (__fsr.enabled ? System.nanoTime() : 0L);
-
-            ok = drawRcasOnlySafe(fbW, fbH, effSharp);
-
-            if (fsrEnabled) {
-                dt = System.nanoTime() - t0;
-            }
+            final boolean ok = drawRcasOnlySafe(fbW, fbH, effSharp);
 
             if (fsrEnabled) {
                 __fsr.mode = "RCAS_ONLY";
@@ -738,7 +757,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.dstW = fbW;
                 __fsr.dstH = fbH;
                 __fsr.sharp = effSharp;
-                __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
+                // __fsr.sampling is set by drawRcasOnlySafe(): RCAS_OES or OES->2D LINEAR + RCAS_2D
 
                 String reason;
                 if (nearNative) reason = "reason=nearNative";
@@ -749,20 +768,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.notes = (ok ? reason : "fallback:rcas_only_failed")
                         + " | preset=" + preset
                         + " | nearNative=" + nearNative
-                        + " thr=" + String.format(java.util.Locale.US, "%.2f", nearThr);
+                        + " thr=" + String.format(Locale.US, "%.2f", nearThr);
 
-
-                __fsr.rcasAvgNs = (__fsr.rcasAvgNs == 0.0)
-                        ? dt : (0.2 * dt + 0.8 * __fsr.rcasAvgNs);
                 __fsr.frames++;
                 if ((__fsr.frames % 240L) == 0L) {
-                    com.limelight.LimeLog.info(__fsr.periodicLine());
+                    LimeLog.info(__fsr.periodicLine());
                 }
-                if (fsrEnabled) maybeUpdateFsrOverlay();
+                maybeUpdateFsrOverlay();
             }
 
             if (!ok) {
-                // Fallback if RCAS-only failed
                 drawOesToScreen();
             }
         }
@@ -863,8 +878,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             setOesFilter((dstW > srcW || dstH > srcH) ? false : true);
 
+            if (__fsr.enabled) { __fsr.ticRcas(); }
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+            if (__fsr.enabled) { __fsr.tocRcas(); }
             return true;
+
         }
 
         // Fallback: OES -> upscaledTex, then RCAS on 2D
@@ -918,11 +936,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
         if (__fsr.enabled) { __fsr.ticRcas(); }
-
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
         if (__fsr.enabled) { __fsr.tocRcas(); }
-
         // Keep NEAREST once enabled to avoid 2x glTexParameteri per frame.
         return true;
     }
@@ -1433,38 +1448,84 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             primeStaticUniforms();
             // Apply fixed GL state once per EGL/GL init (no need to re-check in renderLoop).
             applyFixedState();
+            releaseEglCurrent();
+
         }
     }
 
     private void destroyGl() {
-        destroyFbo();
-        if (hasVao && vao != 0) { int[] vaoId = new int[]{vao}; try { GLES30.glDeleteVertexArrays(1, vaoId, 0); } catch (Throwable ignored) {} vao = 0; hasVao = false; }
-        if (vboPos != 0) { tmpIntArray[0] = vboPos; GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboPos = 0; }
-        if (vboUv  != 0) { tmpIntArray[0] = vboUv;  GLES20.glDeleteBuffers(1, tmpIntArray, 0); vboUv  = 0; }
-        if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
-        if (progEasuPerf != 0) { GLES20.glDeleteProgram(progEasuPerf); progEasuPerf = 0; }
-        if (progEasuQuality != 0) { GLES20.glDeleteProgram(progEasuQuality); progEasuQuality = 0; }
-        if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
-        if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
-        if (progEasuBalanced != 0) { GLES20.glDeleteProgram(progEasuBalanced); progEasuBalanced = 0; }
+        final boolean current = ensureEglCurrent();
 
-// Reset cached GL bindings/state (context resources no longer valid)
-        lastProgram = -1;
-        lastTexture = -1;
-        curVpW = -1;
-        curVpH = -1;
-        twoDNearest = false;
-        oesNearest = false;
-        rcasOesChecked = false;
-        rcasOesHealthy = false;
+        try {
+            if (current) {
+                destroyFbo();
 
-    // Avoid drawing stale/undefined content after a GL re-init
-        hasEverUpdatedTex = false;
+                if (hasVao && vao != 0) {
+                    try {
+                        final int[] vaoId = new int[]{vao};
+                        GLES30.glDeleteVertexArrays(1, vaoId, 0);
+                    } catch (Throwable ignored) {}
+                    vao = 0;
+                    hasVao = false;
+                }
 
-    // Quad bind cache
-        quadBound = false;
-        lastBoundVao = 0;
+                if (vboPos != 0) {
+                    tmpIntArray[0] = vboPos;
+                    GLES20.glDeleteBuffers(1, tmpIntArray, 0);
+                    vboPos = 0;
+                }
+                if (vboUv != 0) {
+                    tmpIntArray[0] = vboUv;
+                    GLES20.glDeleteBuffers(1, tmpIntArray, 0);
+                    vboUv = 0;
+                }
 
+                if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
+                if (progEasuPerf != 0) { GLES20.glDeleteProgram(progEasuPerf); progEasuPerf = 0; }
+                if (progEasuQuality != 0) { GLES20.glDeleteProgram(progEasuQuality); progEasuQuality = 0; }
+                if (progEasuBalanced != 0) { GLES20.glDeleteProgram(progEasuBalanced); progEasuBalanced = 0; }
+                if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
+                if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
+            } else {
+                // Best-effort fallback: drop references even if we cannot bind EGL here.
+                vao = 0;
+                hasVao = false;
+                vboPos = 0;
+                vboUv = 0;
+                progBlit = 0;
+                progEasuPerf = 0;
+                progEasuQuality = 0;
+                progEasuBalanced = 0;
+                progRcas = 0;
+                progRcasOes = 0;
+
+                fbo = 0;
+                upscaledTex = 0;
+                fboW = 0;
+                fboH = 0;
+            }
+        } finally {
+            // Reset cached GL bindings/state (context resources no longer valid)
+            lastProgram = -1;
+            lastTexture = -1;
+            curVpW = -1;
+            curVpH = -1;
+            twoDNearest = false;
+            oesNearest = false;
+            rcasOesChecked = false;
+            rcasOesHealthy = false;
+
+            // Avoid drawing stale/undefined content after a GL re-init
+            hasEverUpdatedTex = false;
+
+            // Quad bind cache
+            quadBound = false;
+            lastBoundVao = 0;
+
+            if (current) {
+                releaseEglCurrent();
+            }
+        }
     }
 
     private void destroyEgl() {
@@ -1526,16 +1587,27 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void ensureSwapIntervalZero() {
-        if (swapIntervalZeroApplied) return;
         if (eglDisplay == null || eglDisplay == EGL14.EGL_NO_DISPLAY) return;
+        if (swapIntervalZeroApplied) return;
 
         try {
-            EGL14.eglSwapInterval(eglDisplay, 0);
-        } catch (Throwable ignored) {
-            // Some drivers may ignore or fail; leave it best-effort.
-        }
+            final boolean ok = EGL14.eglSwapInterval(eglDisplay, 0);
+            if (ok) {
+                swapIntervalZeroApplied = true;
+                return;
+            }
 
-        swapIntervalZeroApplied = true;
+            // Keep retrying later.
+            swapIntervalZeroApplied = false;
+            if (++swapIntervalZeroFailCount == 1) {
+                LimeLog.warning("FSR: eglSwapInterval(0) failed; driver may still block on vsync");
+            }
+        } catch (Throwable t) {
+            swapIntervalZeroApplied = false;
+            if (++swapIntervalZeroFailCount == 1) {
+                LimeLog.warning("FSR: eglSwapInterval(0) threw; driver may still block on vsync");
+            }
+        }
     }
 
     private void applyFixedState() {
@@ -2232,8 +2304,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
 
-    // Decide once, at construction, if this renderer can use the ultra-thin path.
-    // True when GPU direct path is forced or FSR is logically disabled.
+    // Cheap check used per-frame (supports hot-reload) to allow the ultra-thin path.
+   // True when GPU direct path is forced or FSR is logically disabled.
     private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
         if (prefs == null) return false;
         if (prefs.gpuPathMode) return true;
@@ -2363,4 +2435,43 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
     };
+
+    private boolean ensureEglCurrent() {
+        if (!isGlReady()) return false;
+
+        final EGLContext curCtx = EGL14.eglGetCurrentContext();
+        final EGLSurface curDraw = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW);
+        final EGLSurface curRead = EGL14.eglGetCurrentSurface(EGL14.EGL_READ);
+
+        if (curCtx == eglContext && curDraw == eglWindowSurface && curRead == eglWindowSurface) {
+            return true;
+        }
+
+        final boolean ok = EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext);
+        if (!ok) {
+            final int err = EGL14.eglGetError();
+            LimeLog.warning("FSR: eglMakeCurrent failed err=0x" + Integer.toHexString(err));
+            return false;
+        }
+
+        // After binding on this thread, enforce non-blocking swap (best effort).
+        swapIntervalZeroApplied = false;
+        ensureSwapIntervalZero();
+        return true;
+    }
+
+    private void releaseEglCurrent() {
+        if (eglDisplay == null || eglDisplay == EGL14.EGL_NO_DISPLAY) return;
+
+        try {
+            if (EGL14.eglGetCurrentContext() == eglContext) {
+                EGL14.eglMakeCurrent(
+                        eglDisplay,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_CONTEXT);
+            }
+        } catch (Throwable ignored) {}
+    }
+
 }
