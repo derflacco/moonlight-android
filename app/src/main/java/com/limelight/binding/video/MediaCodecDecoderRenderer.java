@@ -736,6 +736,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
+    // ---- Balanced (Choreographer) pacing state ----
+    private volatile float lastPacingStreamFps = -1f;
+    private volatile float lastPacingDisplayHz = -1f;
+    private volatile double vsyncsPerFrame = 1.0;
+    private volatile double vsyncAccumulator = 0.0;
+
+    // Cache app vsync offset (avoid querying every vsync)
+    private volatile long cachedAppVsyncOffsetNs = 0L;
+    private volatile long lastAppVsyncOffsetQueryNs = 0L;
+    private static final long APP_VSYNC_OFFSET_QUERY_INTERVAL_NS = 2_000_000_000L; // 2s
+
 
     private int numSpsIn;
     private int numPpsIn;
@@ -1684,61 +1695,107 @@ try {
 
     @Override
     public void doFrame(long frameTimeNanos) {
-        // Do nothing if we're stopping
         if (stopping) {
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+        // If the Choreographer thread was stopped, do not re-post callbacks.
+        if (choreographerHandlerThread == null) {
+            return;
         }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-
-        // Use stream FPS if available, otherwise display refresh rate
-        final float streamFps = (prefs.fps > 0) ? prefs.fps : (refreshRate > 0 ? refreshRate : 60f);
-        final long expectedFrameTimeDeltaNs =
-                (long) (800_000_000.0 / Math.max(1f, streamFps)); // ~80% of stream period
-
-        if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Render up to one frame when in frame pacing mode.
-            //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
+        // Adjust by app vsync offset (cached; refresh occasionally)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            final long nowNsLocal = System.nanoTime();
+            if (cachedAppVsyncOffsetNs == 0L ||
+                    (nowNsLocal - lastAppVsyncOffsetQueryNs) >= APP_VSYNC_OFFSET_QUERY_INTERVAL_NS) {
+                lastAppVsyncOffsetQueryNs = nowNsLocal;
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                    }
-                    else {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                    }
+                    cachedAppVsyncOffsetNs =
+                            activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+                } catch (Throwable ignored) {
+                    cachedAppVsyncOffsetNs = 0L;
+                }
+            }
+            frameTimeNanos -= cachedAppVsyncOffsetNs;
+        }
 
-                    lastRenderedFrameTimeNanos = frameTimeNanos;
-                    activeWindowVideoStats.totalFramesRendered++;
-                } catch (IllegalStateException ignored) {
+        // Only pace/present via Choreographer in Balanced mode.
+        final boolean isBalanced =
+                (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
+
+        if (isBalanced) {
+            // Stream FPS if available, otherwise fall back to display refresh rate.
+            final float streamFps =
+                    (prefs != null && prefs.fps > 0) ? prefs.fps : (refreshRate > 0 ? (float) refreshRate : 60f);
+            final float displayHz =
+                    (refreshRate > 0) ? (float) refreshRate : streamFps;
+
+            // Recompute ratio when inputs change.
+            if (Math.abs(streamFps - lastPacingStreamFps) > 0.01f ||
+                    Math.abs(displayHz - lastPacingDisplayHz) > 0.01f) {
+                lastPacingStreamFps = streamFps;
+                lastPacingDisplayHz = displayHz;
+
+                vsyncAccumulator = 0.0;
+                if (streamFps > 0.01f && displayHz > 0.01f) {
+                    vsyncsPerFrame = (double) displayHz / (double) streamFps;
+                } else {
+                    vsyncsPerFrame = 1.0;
+                }
+
+                // Clamp to sane bounds
+                if (vsyncsPerFrame < 0.25) vsyncsPerFrame = 0.25;
+                if (vsyncsPerFrame > 8.0) vsyncsPerFrame = 8.0;
+            }
+
+            boolean shouldRenderThisVsync = true;
+
+            // If stream is slower than display, distribute frames across vsyncs (e.g., 90Hz/60fps -> 1,2,1,2...).
+            if (vsyncsPerFrame > 1.02) {
+                vsyncAccumulator += 1.0;
+                if (vsyncAccumulator + 1e-9 < vsyncsPerFrame) {
+                    shouldRenderThisVsync = false;
+                } else {
+                    vsyncAccumulator -= vsyncsPerFrame;
+                }
+            } else {
+                // Stream >= display: render every vsync (decoder-side dropping is handled by queue limit).
+                vsyncAccumulator = 0.0;
+            }
+
+            if (shouldRenderThisVsync) {
+                Integer nextOutputBuffer = outputBufferQueue.poll();
+                if (nextOutputBuffer != null) {
                     try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                        } else {
+                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                        }
+
+                        lastRenderedFrameTimeNanos = frameTimeNanos;
+                        activeWindowVideoStats.totalFramesRendered++;
+                    } catch (IllegalStateException ignored) {
+                        try {
+                            // Try to avoid leaking the output buffer by releasing it without rendering
+                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                        } catch (IllegalStateException e) {
+                            e.printStackTrace();
+                            handleDecoderException(e);
+                        }
                     }
                 }
             }
         }
 
-        // Attempt codec recovery even if we have nothing to render right now. Recovery can still
-        // be required even if the codec died before giving any output.
+        // Attempt codec recovery even if we have nothing to render right now.
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
-        // Request another callback for next frame
-        Choreographer.getInstance().postFrameCallback(this);
+        // Request another callback for next frame (unless stopped concurrently).
+        if (!stopping && choreographerHandlerThread != null) {
+            Choreographer.getInstance().postFrameCallback(this);
+        }
     }
 
     private void startChoreographerThread() {
@@ -1746,11 +1803,10 @@ try {
             return;
         }
 
-        // Create the thread once; re-post callbacks on re-entry to Balanced.
         if (choreographerHandlerThread == null) {
             choreographerHandlerThread = new HandlerThread(
                     "Video - Choreographer",
-                    Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE
+                    Process.THREAD_PRIORITY_DISPLAY
             );
             choreographerHandlerThread.start();
             choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
@@ -1758,10 +1814,62 @@ try {
             choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
         }
 
+        // Reset pacing state on entry (avoid carrying phase from previous modes)
+        lastPacingStreamFps = -1f;
+        lastPacingDisplayHz = -1f;
+        vsyncsPerFrame = 1.0;
+        vsyncAccumulator = 0.0;
+
+        // Prime cached app vsync offset (optional) and start callbacks
         choreographerHandler.post(new Runnable() {
             @Override
             public void run() {
-                Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        try {
+                            cachedAppVsyncOffsetNs =
+                                    activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+                        } catch (Throwable ignored) {
+                            cachedAppVsyncOffsetNs = 0L;
+                        }
+                        lastAppVsyncOffsetQueryNs = System.nanoTime();
+                    }
+
+                    Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
+    private void stopChoreographerThread() {
+        final Handler h = choreographerHandler;
+        final HandlerThread ht = choreographerHandlerThread;
+
+        // Mark as absent immediately so recovery logic won't wait for it
+        choreographerHandler = null;
+        choreographerHandlerThread = null;
+
+        if (h == null || ht == null) {
+            return;
+        }
+
+        h.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
+                } catch (Throwable ignored) {
+                }
+
+                try {
+                    ht.quitSafely();
+                } catch (Throwable t) {
+                    try {
+                        ht.quit();
+                    } catch (Throwable ignored) {
+                    }
+                }
             }
         });
     }
@@ -2348,17 +2456,31 @@ try {
             prefs.framePacing = newPacing;
         }
 
-        // Leaving Balanced: release queued buffers immediately.
-        if (oldPacing == PreferenceConfiguration.FRAME_PACING_BALANCED
-                && newPacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+        // Leaving Balanced: release queued buffers immediately and stop Choreographer.
+        if (oldPacing == PreferenceConfiguration.FRAME_PACING_BALANCED &&
+                newPacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+
             drainOutputBufferQueueNoRender();
             lastRenderedFrameTimeNanos = 0L;
+
+            lastPacingStreamFps = -1f;
+            lastPacingDisplayHz = -1f;
+            vsyncsPerFrame = 1.0;
+            vsyncAccumulator = 0.0;
+
+            stopChoreographerThread();
         }
 
-        // Entering Balanced: always ensure Choreographer is running.
+        // Entering Balanced: clear queue, reset state, and start Choreographer.
         if (newPacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
             outputBufferQueue.clear();
             lastRenderedFrameTimeNanos = 0L;
+
+            lastPacingStreamFps = -1f;
+            lastPacingDisplayHz = -1f;
+            vsyncsPerFrame = 1.0;
+            vsyncAccumulator = 0.0;
+
             startChoreographerThread();
         }
 
