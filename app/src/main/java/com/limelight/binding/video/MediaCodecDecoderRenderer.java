@@ -815,7 +815,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile int runtimeOutputDequeueTimeoutUs = 50000;
     private volatile int runtimeOutputDrainTimeoutUs = 0;
     // MAX_SMOOTHNESS: AdaptX Smooth-style output dequeue tuning (µs)
-    private static final int MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US = 250;
+    private static final int MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US = 500;
     private static final int MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US = 3000;
     private static final int MAX_SMOOTH_ADAPTIVE_STEP_US = 250;
 
