@@ -779,8 +779,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             final int preset = (prefs != null ? prefs.videoUpscalePreset : 1); // 0..2
             final float upRatio = Math.max(scaleX, scaleY);
 
-            boolean ok = drawEasuRcasSafe(fbW, fbH, mapUiSharpToInternal(sharpUser, nearNative), preset);
-
+            final float effSharp = mapUiSharpToInternalEasuRcasLinear(sharpUser, preset);
+            boolean ok = drawEasuRcasSafe(fbW, fbH, effSharp, preset);
 
             if (fsrEnabled) {
                 __fsr.mode = "EASU+RCAS";
@@ -788,7 +788,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.srcH = srcH;
                 __fsr.dstW = fbW;
                 __fsr.dstH = fbH;
-                __fsr.sharp = sharpUser;
+                __fsr.sharp = effSharp;
                 __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
                 StringBuilder sb = new StringBuilder(96);
                 sb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
@@ -1721,6 +1721,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         // Keep UI sharpness mostly linear. Reduce strength near-native to avoid halos/ringing.
         return nearNative ? (0.55f * s) : s;
+    }
+    private static float mapUiSharpToInternalEasuRcasLinear(float ui, int preset) {
+        float s = clamp01(ui);
+        if (s <= 0.02f) return 0f;
+
+        if (preset < 0) preset = 0;
+        else if (preset > 2) preset = 2;
+
+        // Linear mapping, but bias strength for softer EASU kernels:
+        // - Perf needs more RCAS to compensate softness
+        // - Balanced slightly more
+        // - Quality unchanged
+        final float gain = (preset == 0) ? 1.35f : (preset == 1 ? 1.20f : 1.00f);
+
+        s *= gain;
+        return (s > 1f) ? 1f : s; // keep shader-side clamp behavior consistent
     }
 
     private static float mapUiSharpToInternalRcas(float ui, int preset, boolean nearNative) {
