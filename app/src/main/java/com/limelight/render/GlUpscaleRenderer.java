@@ -69,9 +69,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final class FsrTelemetry {
         boolean enabled = false;
         long frames = 0L;
-        // EWMA in ns
-        private double easuAvgNs = 0.0;
-        private double rcasAvgNs = 0.0;
+
+        // CPU-side submission timing (System.nanoTime)
+        private double easuCpuAvgNs = 0.0;
+        private double rcasCpuAvgNs = 0.0;
+
+        // GPU-side timing via timer queries (GL_EXT_disjoint_timer_query)
+        private double easuGpuAvgNs = 0.0;
+        private double rcasGpuAvgNs = 0.0;
+
+        int disjointEvents = 0;
+
         String mode = "BYPASS";
         float sharp = 0f;
         int srcW = 0, srcH = 0, dstW = 0, dstH = 0;
@@ -79,44 +87,429 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         String notes = "";
 
         private static long now() { return System.nanoTime(); }
+
         private static double ewma(double avg, long sample) {
             final double a = 0.2;
             return (avg == 0.0) ? sample : (a * sample + (1.0 - a) * avg);
         }
 
         private long tEasu = 0L, tRcas = 0L;
+
         void ticEasu() { tEasu = now(); }
-        void tocEasu() { easuAvgNs = ewma(easuAvgNs, now() - tEasu); }
+        void tocEasu() { easuCpuAvgNs = ewma(easuCpuAvgNs, now() - tEasu); }
+
         void ticRcas() { tRcas = now(); }
-        void tocRcas() { rcasAvgNs = ewma(rcasAvgNs, now() - tRcas); }
+        void tocRcas() { rcasCpuAvgNs = ewma(rcasCpuAvgNs, now() - tRcas); }
+
+        void pushGpuEasu(long gpuNs) { easuGpuAvgNs = ewma(easuGpuAvgNs, gpuNs); }
+        void pushGpuRcas(long gpuNs) { rcasGpuAvgNs = ewma(rcasGpuAvgNs, gpuNs); }
+
+        private double easuBestNs() { return (easuGpuAvgNs > 0.0) ? easuGpuAvgNs : easuCpuAvgNs; }
+        private double rcasBestNs() { return (rcasGpuAvgNs > 0.0) ? rcasGpuAvgNs : rcasCpuAvgNs; }
+
+        private String timingSrcTagForMode() {
+            final boolean easuGpu = (easuGpuAvgNs > 0.0);
+            final boolean rcasGpu = (rcasGpuAvgNs > 0.0);
+
+            if ("EASU+RCAS".equals(mode)) {
+                if (easuGpu && rcasGpu) return "GPU";
+                if (!easuGpu && !rcasGpu) return "CPU";
+                return "MIX";
+            }
+            if ("RCAS_ONLY".equals(mode)) {
+                return rcasGpu ? "GPU" : "CPU";
+            }
+            return "CPU";
+        }
+
 
         String overlayLine() {
             if ("EASU+RCAS".equals(mode)) {
-                double easuMs  = easuAvgNs / 1e6;
-                double rcasMs  = rcasAvgNs / 1e6;
-                double totalMs = (easuAvgNs + rcasAvgNs) / 1e6;
+                final double easuMs  = easuBestNs() / 1e6;
+                final double rcasMs  = rcasBestNs() / 1e6;
+                final double totalMs = easuMs + rcasMs;
+                final String src = timingSrcTagForMode();
+
                 return String.format(java.util.Locale.US,
-                        "FSR %s | sharp=%.2f | EASU=%.2fms RCAS=%.2fms TOT=%.2fms",
-                        mode, sharp, easuMs, rcasMs, totalMs);
+                        "FSR %s | sharp=%.2f | EASU=%.2fms RCAS=%.2fms TOT=%.2fms (%s)",
+                        mode, sharp, easuMs, rcasMs, totalMs, src);
             } else if ("RCAS_ONLY".equals(mode)) {
+                final double rcasMs = rcasBestNs() / 1e6;
+                final String src = timingSrcTagForMode();
+
                 return String.format(java.util.Locale.US,
-                        "FSR %s | sharp=%.2f | rcas=%.2fms",
-                        mode, sharp, rcasAvgNs / 1e6);
+                        "FSR %s | sharp=%.2f | RCAS=%.2fms (%s)",
+                        mode, sharp, rcasMs, src);
             } else {
                 return "FSR BYPASS";
             }
         }
 
         String periodicLine() {
+            final double easuMs = easuBestNs() / 1e6;
+            final double rcasMs = rcasBestNs() / 1e6;
+            final String src = timingSrcTagForMode();
+
             return String.format(java.util.Locale.US,
-                    "FSR[%s] %dx%d -> %dx%d | sharp=%.2f | %s | EASU(avg)=%.2fms RCAS(avg)=%.2fms%s",
-                    mode, srcW, srcH, dstW, dstH, sharp, sampling,
-                    easuAvgNs/1e6, rcasAvgNs/1e6,
-                    (notes==null || notes.isEmpty()) ? "" : (" | " + notes));
+                    "FSR[%s/%s] %dx%d -> %dx%d | sharp=%.2f | %s | EASU(avg)=%.2fms RCAS(avg)=%.2fms | disjoint=%d%s",
+                    mode, src, srcW, srcH, dstW, dstH, sharp, sampling,
+                    easuMs, rcasMs, disjointEvents,
+                    (notes == null || notes.isEmpty()) ? "" : (" | " + notes));
         }
     }
 
+    // ===== GPU timer queries for FSR telemetry (GL_EXT_disjoint_timer_query) =====
+    private static final class GpuTimeQueryRing {
+        // GL_EXT_disjoint_timer_query constants
+        private static final int GL_TIME_ELAPSED_EXT        = 0x88BF;
+        private static final int GL_GPU_DISJOINT_EXT        = 0x8FBB;
+        private static final int GL_QUERY_RESULT            = 0x8866;
+        private static final int GL_QUERY_RESULT_AVAILABLE  = 0x8867;
+
+        private static final int RING = 8;
+
+        private boolean initTried = false;
+        private boolean supported = false;
+        private boolean useExt = false;
+
+        private final int[] queries = new int[RING];
+        private final boolean[] pending = new boolean[RING];
+        private int write = 0;
+        private int read = 0;
+
+        private boolean localActive = false;
+        private static boolean globalActive = false;
+
+        private boolean disjointTripped = false;
+
+        private final int[] tmpInt = new int[1];
+        private final long[] tmpLong = new long[1];
+
+        private static boolean sExtLoaded = false;
+        private static java.lang.reflect.Method sGenQueriesEXT;
+        private static java.lang.reflect.Method sDeleteQueriesEXT;
+        private static java.lang.reflect.Method sBeginQueryEXT;
+        private static java.lang.reflect.Method sEndQueryEXT;
+        private static java.lang.reflect.Method sGetQueryObjectuivEXT;
+        private static java.lang.reflect.Method sGetQueryObjectui64vEXT;
+        private static java.lang.reflect.Method sGetQueryObjectui64vCore;
+
+        private static void loadExtIfNeeded() {
+            if (sExtLoaded) return;
+            sExtLoaded = true;
+
+            try {
+                final Class<?> c = android.opengl.GLES30.class;
+                sGenQueriesEXT = c.getMethod("glGenQueriesEXT", int.class, int[].class, int.class);
+                sDeleteQueriesEXT = c.getMethod("glDeleteQueriesEXT", int.class, int[].class, int.class);
+                sBeginQueryEXT = c.getMethod("glBeginQueryEXT", int.class, int.class);
+                sEndQueryEXT = c.getMethod("glEndQueryEXT", int.class);
+                sGetQueryObjectuivEXT = c.getMethod("glGetQueryObjectuivEXT", int.class, int.class, int[].class, int.class);
+                try {
+                    sGetQueryObjectui64vEXT = c.getMethod("glGetQueryObjectui64vEXT", int.class, int.class, long[].class, int.class);
+                } catch (Throwable ignored) {
+                    sGetQueryObjectui64vEXT = null;
+                }
+            } catch (Throwable ignored) {
+                sGenQueriesEXT = null;
+                sDeleteQueriesEXT = null;
+                sBeginQueryEXT = null;
+                sEndQueryEXT = null;
+                sGetQueryObjectuivEXT = null;
+                sGetQueryObjectui64vEXT = null;
+            }
+
+            try {
+                final Class<?> c = android.opengl.GLES30.class;
+                sGetQueryObjectui64vCore = c.getMethod("glGetQueryObjectui64v", int.class, int.class, long[].class, int.class);
+            } catch (Throwable ignored) {
+                sGetQueryObjectui64vCore = null;
+            }
+        }
+
+        private static boolean hasExt(String ext) {
+            // ES2-style extension string
+            try {
+                final String exts = android.opengl.GLES20.glGetString(android.opengl.GLES20.GL_EXTENSIONS);
+                if (exts != null && exts.contains(ext)) return true;
+            } catch (Throwable ignored) {}
+
+            // ES3-style extensions enumeration
+            try {
+                final int[] n = new int[1];
+                android.opengl.GLES30.glGetIntegerv(android.opengl.GLES30.GL_NUM_EXTENSIONS, n, 0);
+                for (int i = 0; i < n[0]; i++) {
+                    final String e = android.opengl.GLES30.glGetStringi(android.opengl.GLES30.GL_EXTENSIONS, i);
+                    if (ext.equals(e)) return true;
+                }
+            } catch (Throwable ignored) {}
+
+            return false;
+        }
+
+        private void initIfNeeded() {
+            if (initTried) return;
+            initTried = true;
+
+            if (!hasExt("GL_EXT_disjoint_timer_query")) {
+                supported = false;
+                return;
+            }
+
+            // Load EXT entry points once (used for both fallback allocation and ops selection)
+            loadExtIfNeeded();
+
+            // Reset state before attempting init
+            supported = false;
+            useExt = false;
+            for (int i = 0; i < RING; i++) {
+                queries[i] = 0;
+                pending[i] = false;
+            }
+            write = 0;
+            read = 0;
+            localActive = false;
+            globalActive = false;
+
+            // 1) Allocate query names using core if possible
+            try {
+                android.opengl.GLES30.glGenQueries(RING, queries, 0);
+                supported = (queries[0] != 0);
+            } catch (Throwable ignored) {
+                supported = false;
+            }
+
+            // 2) If core allocation failed or returned 0, fallback to EXT allocation
+            if (!supported && sGenQueriesEXT != null) {
+                try {
+                    sGenQueriesEXT.invoke(null, RING, queries, 0);
+                    supported = (queries[0] != 0);
+                } catch (Throwable ignored) {
+                    supported = false;
+                }
+            }
+
+            // 3) Prefer EXT query ops if available (more compatible on some stacks),
+            //    even if allocation happened via core.
+            if (supported) {
+                useExt = (sBeginQueryEXT != null && sEndQueryEXT != null && sGetQueryObjectuivEXT != null);
+            } else {
+                // Keep everything cleared (already reset above)
+                for (int i = 0; i < RING; i++) {
+                    queries[i] = 0;
+                    pending[i] = false;
+                }
+                write = 0;
+                read = 0;
+                localActive = false;
+                globalActive = false;
+            }
+        }
+
+        void begin() {
+            initIfNeeded();
+            if (!supported) return;
+            if (localActive || globalActive) return;
+
+            // Avoid overflow: if next slot still pending, try to collect one result; otherwise skip.
+            if (pending[write]) {
+                pollOneInternal();
+                if (pending[write]) return;
+            }
+
+            final int q = queries[write];
+            if (q == 0) return;
+
+            try {
+                if (useExt) {
+                    loadExtIfNeeded();
+                    if (sBeginQueryEXT != null) {
+                        sBeginQueryEXT.invoke(null, GL_TIME_ELAPSED_EXT, q);
+                    } else {
+                        android.opengl.GLES30.glBeginQuery(GL_TIME_ELAPSED_EXT, q);
+                    }
+                } else {
+                    android.opengl.GLES30.glBeginQuery(GL_TIME_ELAPSED_EXT, q);
+                }
+
+                localActive = true;
+                globalActive = true;
+            } catch (Throwable ignored) {
+                supported = false;
+                localActive = false;
+                globalActive = false;
+            }
+        }
+
+        void end() {
+            if (!supported) return;
+            if (!localActive) return;
+
+            try {
+                if (useExt) {
+                    loadExtIfNeeded();
+                    if (sEndQueryEXT != null) {
+                        sEndQueryEXT.invoke(null, GL_TIME_ELAPSED_EXT);
+                    } else {
+                        android.opengl.GLES30.glEndQuery(GL_TIME_ELAPSED_EXT);
+                    }
+                } else {
+                    android.opengl.GLES30.glEndQuery(GL_TIME_ELAPSED_EXT);
+                }
+            } catch (Throwable ignored) {
+                supported = false;
+            } finally {
+                pending[write] = true;
+                write = (write + 1) % RING;
+                localActive = false;
+                globalActive = false;
+            }
+        }
+
+        long pollOne() {
+            initIfNeeded();
+            if (!supported) return 0L;
+            return pollOneInternal();
+        }
+
+        boolean consumeDisjointTripped() {
+            final boolean v = disjointTripped;
+            disjointTripped = false;
+            return v;
+        }
+
+        private void clearPending() {
+            for (int i = 0; i < RING; i++) pending[i] = false;
+            write = 0;
+            read = 0;
+            localActive = false;
+            globalActive = false;
+        }
+
+        private long pollOneInternal() {
+            // Disjoint invalidates *all* timer query results
+            try {
+                tmpInt[0] = 0;
+                android.opengl.GLES20.glGetIntegerv(GL_GPU_DISJOINT_EXT, tmpInt, 0);
+                if (tmpInt[0] != 0) {
+                    disjointTripped = true;
+                    clearPending();
+                    return 0L;
+                }
+            } catch (Throwable ignored) {}
+
+            if (!pending[read]) return 0L;
+
+            final int q = queries[read];
+            if (q == 0) {
+                pending[read] = false;
+                read = (read + 1) % RING;
+                return 0L;
+            }
+
+            // Non-blocking availability check
+            try {
+                tmpInt[0] = 0;
+                if (useExt) {
+                    loadExtIfNeeded();
+                    if (sGetQueryObjectuivEXT != null) {
+                        sGetQueryObjectuivEXT.invoke(null, q, GL_QUERY_RESULT_AVAILABLE, tmpInt, 0);
+                    } else {
+                        android.opengl.GLES30.glGetQueryObjectuiv(q, GL_QUERY_RESULT_AVAILABLE, tmpInt, 0);
+                    }
+                } else {
+                    android.opengl.GLES30.glGetQueryObjectuiv(q, GL_QUERY_RESULT_AVAILABLE, tmpInt, 0);
+                }
+
+                if (tmpInt[0] == 0) return 0L;
+            } catch (Throwable ignored) {
+                supported = false;
+                return 0L;
+            }
+
+            long ns = 0L;
+
+            // Prefer 64-bit query result if available
+            try {
+                if (useExt) {
+                    loadExtIfNeeded();
+                    if (sGetQueryObjectui64vEXT != null) {
+                        tmpLong[0] = 0L;
+                        sGetQueryObjectui64vEXT.invoke(null, q, GL_QUERY_RESULT, tmpLong, 0);
+                        ns = tmpLong[0];
+                    } else {
+                        tmpInt[0] = 0;
+                        if (sGetQueryObjectuivEXT != null) {
+                            sGetQueryObjectuivEXT.invoke(null, q, GL_QUERY_RESULT, tmpInt, 0);
+                        } else {
+                            android.opengl.GLES30.glGetQueryObjectuiv(q, GL_QUERY_RESULT, tmpInt, 0);
+                        }
+                        ns = (tmpInt[0] & 0xFFFFFFFFL);
+                    }
+                } else if (sGetQueryObjectui64vCore != null) {
+                    tmpLong[0] = 0L;
+                    sGetQueryObjectui64vCore.invoke(null, q, GL_QUERY_RESULT, tmpLong, 0);
+                    ns = tmpLong[0];
+                } else {
+                    tmpInt[0] = 0;
+                    android.opengl.GLES30.glGetQueryObjectuiv(q, GL_QUERY_RESULT, tmpInt, 0);
+                    ns = (tmpInt[0] & 0xFFFFFFFFL);
+                }
+            } catch (Throwable ignored) {
+                // Last-resort fallback to 32-bit
+                try {
+                    tmpInt[0] = 0;
+                    android.opengl.GLES30.glGetQueryObjectuiv(q, GL_QUERY_RESULT, tmpInt, 0);
+                    ns = (tmpInt[0] & 0xFFFFFFFFL);
+                } catch (Throwable ignored2) {
+                    supported = false;
+                    ns = 0L;
+                }
+            }
+
+            pending[read] = false;
+            read = (read + 1) % RING;
+            return ns;
+        }
+
+        void release() {
+            if (!initTried) return;
+
+        // Delete queries if we ever allocated names (even if supported flipped false later)
+            final boolean haveAny = (queries[0] != 0);
+            if (haveAny) {
+                try {
+                    if (useExt) {
+                        loadExtIfNeeded();
+                        if (sDeleteQueriesEXT != null) {
+                            sDeleteQueriesEXT.invoke(null, RING, queries, 0);
+                        } else {
+                            android.opengl.GLES30.glDeleteQueries(RING, queries, 0);
+                        }
+                    } else {
+                        android.opengl.GLES30.glDeleteQueries(RING, queries, 0);
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+
+            for (int i = 0; i < RING; i++) {
+                queries[i] = 0;
+                pending[i] = false;
+            }
+
+            clearPending();
+            supported = false;
+            initTried = false;
+            useExt = false;
+            disjointTripped = false;
+        }
+    }
+
+
     private final FsrTelemetry __fsr = new FsrTelemetry();
+    private final GpuTimeQueryRing easuGpuTimer = new GpuTimeQueryRing();
+    private final GpuTimeQueryRing rcasGpuTimer = new GpuTimeQueryRing();
     private volatile String __fsrOverlay = "";
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
@@ -256,6 +649,23 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         __fsrOverlay = __fsr.overlayLine();
     }
 
+    private void pollFsrGpuTimers() {
+        if (!__fsr.enabled) return;
+
+        final long easuNs = easuGpuTimer.pollOne();
+        if (easuNs > 0L) {
+            __fsr.pushGpuEasu(easuNs);
+        }
+
+        final long rcasNs = rcasGpuTimer.pollOne();
+        if (rcasNs > 0L) {
+            __fsr.pushGpuRcas(rcasNs);
+        }
+
+        if (easuGpuTimer.consumeDisjointTripped() || rcasGpuTimer.consumeDisjointTripped()) {
+            __fsr.disjointEvents++;
+        }
+    }
 
     // GL binding caches (reduce driver chatter)
     private int activeTexUnit = -1;   // 0 == GL_TEXTURE0
@@ -799,6 +1209,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.notes = sb.toString();
 
                 __fsr.frames++;
+                pollFsrGpuTimers();
                 if ((__fsr.frames % 240L) == 0L) {
                     com.limelight.LimeLog.info(__fsr.periodicLine());
                 }
@@ -838,6 +1249,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                         + " thr=" + String.format(Locale.US, "%.2f", nearThr);
 
                 __fsr.frames++;
+                pollFsrGpuTimers();
                 if ((__fsr.frames % 240L) == 0L) {
                     LimeLog.info(__fsr.periodicLine());
                 }
@@ -945,9 +1357,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
             setOesFilter((dstW > srcW || dstH > srcH) ? false : true);
 
-            if (__fsr.enabled) { __fsr.ticRcas(); }
+            if (__fsr.enabled) {
+                __fsr.ticRcas();
+                rcasGpuTimer.begin();
+            }
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-            if (__fsr.enabled) { __fsr.tocRcas(); }
+            if (__fsr.enabled) {
+                rcasGpuTimer.end();
+                __fsr.tocRcas();
+            }
             return true;
 
         }
@@ -1052,7 +1470,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         UseProgram(easuProg);
         bindQuad(easuProg);
 
-        if (__fsr.enabled) { __fsr.ticEasu(); }
+        if (__fsr.enabled) {
+            __fsr.ticEasu();
+            easuGpuTimer.begin();
+        }
 
         activeTexture0();
         if (lastTexture != oesTexId) {
@@ -1086,7 +1507,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-        if (__fsr.enabled) { __fsr.tocEasu(); }
+        if (__fsr.enabled) {
+            easuGpuTimer.end();
+            __fsr.tocEasu();
+        }
 
         // RCAS -> screen
         bindFramebufferCached(0);
@@ -1114,9 +1538,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             lastRcasSharp = s;
         }
 
-        if (__fsr.enabled) { __fsr.ticRcas(); }
+        if (__fsr.enabled) {
+            __fsr.ticRcas();
+            rcasGpuTimer.begin();
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        if (__fsr.enabled) { __fsr.tocRcas(); }
+        if (__fsr.enabled) {
+            rcasGpuTimer.end();
+            __fsr.tocRcas();
+        }
 
         return true;
     }
@@ -1526,6 +1956,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         try {
             if (current) {
                 destroyFbo();
+
+                // Delete GPU timer queries (if allocated)
+                easuGpuTimer.release();
+                rcasGpuTimer.release();
 
                 if (hasVao && vao != 0) {
                     try {
