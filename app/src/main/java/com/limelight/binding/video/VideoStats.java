@@ -17,6 +17,8 @@ class VideoStats {
     int totalHostProcessingLatency;
     int framesWithHostProcessingLatency;
     long measurementStartTimestamp;
+    public long decoderSamples = 0;
+    public long decoderMisses = 0;
 
     void add(VideoStats other) {
         this.decoderTimeMs += other.decoderTimeMs;
@@ -27,6 +29,10 @@ class VideoStats {
         this.totalFramesRendered += other.totalFramesRendered;
         this.frameLossEvents += other.frameLossEvents;
         this.framesLost += other.framesLost;
+
+        // Decode latency sample counters
+        this.decoderSamples += other.decoderSamples;
+        this.decoderMisses += other.decoderMisses;
 
         if (this.minHostProcessingLatency == 0) {
             this.minHostProcessingLatency = other.minHostProcessingLatency;
@@ -58,6 +64,10 @@ class VideoStats {
         this.totalHostProcessingLatency = other.totalHostProcessingLatency;
         this.framesWithHostProcessingLatency = other.framesWithHostProcessingLatency;
         this.measurementStartTimestamp = other.measurementStartTimestamp;
+
+        // Decode latency sample accounting
+        this.decoderSamples = other.decoderSamples;
+        this.decoderMisses = other.decoderMisses;
     }
 
     void clear() {
@@ -74,6 +84,10 @@ class VideoStats {
         this.totalHostProcessingLatency = 0;
         this.framesWithHostProcessingLatency = 0;
         this.measurementStartTimestamp = 0;
+
+        // Decode latency sample accounting
+        this.decoderSamples = 0;
+        this.decoderMisses = 0;
     }
 
     VideoStatsFps getFps() {

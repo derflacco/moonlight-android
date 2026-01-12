@@ -306,30 +306,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         if (enqNs == null) {
+            activeWindowVideoStats.decoderMisses++;
             return;
         }
-
         // Use provided end time instead of current System.nanoTime()
-        long decNs = endNs - enqNs;
-        long decMs = decNs / 1_000_000L;
+        final long decNs = endNs - enqNs;
+        final long decMs = decNs / 1_000_000L;
 
-        // Also calculate old end-to-end latency for comparison
-        long endToEndMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
-
-        // Update pure decode time stats
         if (decMs >= 0 && decMs < 1000) {
             activeWindowVideoStats.decoderTimeMs += decMs;
+            activeWindowVideoStats.decoderSamples++;
         }
 
-        // Update end-to-end latency stats (for backward compatibility and comparison)
-        if (endToEndMs >= 0 && endToEndMs < 1000) {
-            activeWindowVideoStats.endToEndLatencyMs += endToEndMs;
-            if (!USE_FRAME_RENDER_TIME) {
-                // Keep backward compatible behavior for totalTimeMs
-                activeWindowVideoStats.totalTimeMs += endToEndMs;
+        // Also calculate old end-to-end latency for comparison
+        if (!USE_FRAME_RENDER_TIME) {
+            final long e2eMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
+            if (e2eMs >= 0 && e2eMs < 1000) {
+                activeWindowVideoStats.endToEndLatencyMs += e2eMs;
+
+                // Keep backward-compatible totalTimeMs behavior when render-time is not used
+                activeWindowVideoStats.totalTimeMs += e2eMs;
             }
         }
     }
+
     // cleanup method
     private void cleanupOldLatencyTrackingEntries() {
         synchronized (enqueueNsLock) {
@@ -497,45 +497,56 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
 // ==== End async decoding ====
 
-
-// ==== Nano Pacer ====
-    private static final long PARK_MIN_THRESHOLD_NS = 2_000_000L;  // 2ms min for reliable park
-    private static final long SPIN_MAX_NS = 100_000L;              // 100µs max spin
+    // ==== Nano Pacer ====
+    private static final long PARK_MIN_THRESHOLD_NS = 2_000_000L; // 2ms min reliable park
+    private static final long SPIN_MAX_NS = 100_000L;             // 100µs max spin
     private static final int PACE_STABILITY_THRESHOLD = 6;
     private static final float TOLERANCE_PERCENT = 0.15f;
     private static final float EMA_ALPHA = 0.2f;
+    private static final float SLIP_CORRECTION_ALPHA = 0.05f;     // 5% smoothing
     private final Object pacingLock = new Object();
 
-    private volatile long nextPacingDeadlineNs = 0L;
-
     private volatile boolean isOneToOneMode = false;
-
-    // Interval actually enforced by the nano-pacer (ns)
     private volatile long pacerIntervalNs = 0;
+    private volatile long nextPacingDeadlineNs = 0L;
     private long lastFrameTimeNs = 0;
     private long emaIntervalNs = 0;
     private int stableCounter = 0;
     private int unstableCounter = 0;
     private int streamTargetFps = 60;
     private long lastEvaluationNs = 0;
+    private long avgSlipNs = 0;
+    // PTS -> monotonic mapping
+    private long ptsBaseUs = Long.MIN_VALUE;
+    private long monoBaseNs = 0L;
+    private long lastPtsUs = Long.MIN_VALUE;
 
+    // Smoothed clock slip (ns)
+    private long slipNs = 0L;
+
+    // PTS jump guard (tune if needed)
+    private static final long PTS_JUMP_US = 500_000L; // 500ms
+
+    private long currentSlipClampNs = 0L;  // Limite corrente per lo slip clamping
+
+    private final LatestOutput nanoLatest = new LatestOutput();
+
+    // Evaluate pacing state (called every decoded frame)
     private void updatePacingMode(long presentationTimeUs) {
         synchronized (pacingLock) {
-            // Fast VSync gate
             if (!prefs.fastVsync) {
                 resetNanoPacerState();
                 return;
             }
 // Throttle evaluation rate (adaptive, tied to target interval)
             final long nowNs = System.nanoTime();
-
-            final int rateToCheck = getCheckedRate();
-            if (rateToCheck <= 0) {
+            final int rate = getCheckedRate();
+            if (rate <= 0) {
                 resetNanoPacerState();
                 return;
             }
 
-            final long targetIntervalNs = 1_000_000_000L / (long) rateToCheck;
+            final long targetIntervalNs = 1_000_000_000L / rate;
 
             // If rate changes while active, resync immediately
             if (isOneToOneMode && pacerIntervalNs != targetIntervalNs) {
@@ -543,10 +554,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 nextPacingDeadlineNs = nowNs + targetIntervalNs;
             }
 
-            // Evaluate at most twice per frame
-            if (lastEvaluationNs != 0 && (nowNs - lastEvaluationNs) < (targetIntervalNs >> 1)) {
+            // Update every ~half frame
+            if (lastEvaluationNs != 0 && (nowNs - lastEvaluationNs) < (targetIntervalNs >> 1))
                 return;
-            }
+
             lastEvaluationNs = nowNs;
 
             // First frame — initialize baseline
@@ -561,15 +572,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             lastFrameTimeNs = nowNs;
 
             // Skip dropped/paused frames
-            if (intervalNs > (targetIntervalNs * 2L)) {
+            if (intervalNs > (targetIntervalNs * 2L))
                 return;
-            }
 
             // EMA: ema += alpha * (x - ema)
             emaIntervalNs += (long) (EMA_ALPHA * (intervalNs - emaIntervalNs));
 
-            final long dynamicToleranceNs = (long) (targetIntervalNs * TOLERANCE_PERCENT);
-            final boolean matching = Math.abs(emaIntervalNs - targetIntervalNs) <= dynamicToleranceNs;
+            final long toleranceNs = (long) (targetIntervalNs * TOLERANCE_PERCENT);
+            final boolean matching = Math.abs(emaIntervalNs - targetIntervalNs) <= toleranceNs;
 
             if (matching) {
                 if (stableCounter < PACE_STABILITY_THRESHOLD) stableCounter++;
@@ -585,34 +595,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 stableCounter = 0;
                 pacerIntervalNs = targetIntervalNs;
                 nextPacingDeadlineNs = nowNs + targetIntervalNs;
-                LimeLog.info("Nano-Pacer: 1:1 pacing enabled (" + rateToCheck + " fps)");
+                avgSlipNs = 0;
+                LimeLog.info("NanoPacer: 1:1 pacing enabled (" + rate + " fps)");
             } else if (isOneToOneMode && unstableCounter >= PACE_STABILITY_THRESHOLD + 2) {
                 isOneToOneMode = false;
                 unstableCounter = 0;
                 pacerIntervalNs = 0;
                 nextPacingDeadlineNs = 0;
-                LimeLog.info("Nano-Pacer: 1:1 pacing disabled");
+                avgSlipNs = 0;
+                LimeLog.info("NanoPacer: 1:1 pacing disabled");
             }
         }
     }
 
+    // Determine target rate
     private int getCheckedRate() {
-        // Validate stream target FPS
-        if (streamTargetFps <= 0 || streamTargetFps > 1000) {
+        if (streamTargetFps <= 0 || streamTargetFps > 1000)
             return refreshRate;
-        }
-        // Prefer stream FPS when below display refresh rate
         return (streamTargetFps < refreshRate) ? streamTargetFps : refreshRate;
     }
 
-    // Optional: Call this when display refresh rate changes
-    public void updateRefreshRate(int newRefreshRate) {
-        synchronized (pacingLock) {
-            refreshRate = newRefreshRate;
-            resetNanoPacerState();
-        }
-    }
-
+    // Reset state safely
     private void resetNanoPacerState() {
         isOneToOneMode = false;
         stableCounter = 0;
@@ -622,61 +625,90 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         nextPacingDeadlineNs = 0;
         lastEvaluationNs = 0;
         pacerIntervalNs = 0;
+        avgSlipNs = 0;
+        ptsBaseUs = Long.MIN_VALUE;
+        monoBaseNs = 0L;
+        lastPtsUs = Long.MIN_VALUE;
+        slipNs = 0L;
+        currentSlipClampNs = 0L;
     }
 
-    private void enforceNanoPacerIfActive() {
-        if (!isOneToOneMode) return;
+     // Reusable holder to avoid per-frame allocations
+    private static final class LatestOutput {
+        int index;
+        long ptsUs;
+        int flags;
+        long dequeueNs;
+    }
+
+    // Cooperative nano-pacing: keep draining while waiting to avoid decoder output backpressure.
+// Returns how many extra outputs were drained (and dropped) while waiting.
+    private int nanoPacerWaitAndDrainLatest(android.media.MediaCodec.BufferInfo info, LatestOutput latest) {
+        if (!isOneToOneMode) return 0;
 
         final long framePeriodNs = pacerIntervalNs;
-        if (framePeriodNs <= 0L) {
-            // Disable pacer if interval is invalid
-            isOneToOneMode = false;
-            nextPacingDeadlineNs = 0L;
-            return;
-        }
+        if (framePeriodNs <= 0L) return 0;
 
-        long nowNs = System.nanoTime();
-        long deadlineNs = nextPacingDeadlineNs;
+        int drainedExtra = 0;
 
-        if (deadlineNs == 0L) {
-            deadlineNs = nowNs + framePeriodNs;
-            nextPacingDeadlineNs = deadlineNs;
-        }
+        // Compute an absolute target timestamp from PTS using the existing nano-pacer logic.
+        // NOTE: this calls your current enforce logic "in compute form".
+        long targetNs = computeNanoPacerTargetNs(latest.ptsUs, framePeriodNs);
 
-        long waitNs = deadlineNs - nowNs;
+        for (;;) {
+            final long nowNs = System.nanoTime();
+            long remainingNs = targetNs - nowNs;
+            if (remainingNs <= 0L) break;
 
-        // No locks while parking/spinning: avoid blocking updateRefreshRate()/resetNanoPacerState()
-        if (waitNs > PARK_MIN_THRESHOLD_NS) {
-            final long parkNs = waitNs - SPIN_MAX_NS;
-            if (parkNs > 0L) {
-                LockSupport.parkNanos(parkNs);
+            // Drain any ready outputs without blocking, keep only the newest.
+            boolean gotNew = false;
+            int outIndex;
+            while ((outIndex = nextOutputIndex(info, 0)) >= 0) {
+                final long dqNs = System.nanoTime();
+
+                // Drop previous latest buffer
+                final int oldIndex = latest.index;
+                if (oldIndex >= 0) {
+                    try { videoDecoder.releaseOutputBuffer(oldIndex, false); }
+                    catch (Throwable ignored) { }
+                }
+
+                drainedExtra++;
+                latest.index = outIndex;
+                latest.ptsUs = info.presentationTimeUs;
+                latest.flags = info.flags;
+                latest.dequeueNs = dqNs;
+
+                // Record decode latency per-buffer (dequeue timestamp)
+                try { updateDecodeLatencyStats(latest.ptsUs, dqNs); }
+                catch (Throwable ignored) { }
+
+                gotNew = true;
             }
 
-            // Another thread may have reset pacing while we were parked
-            if (!isOneToOneMode || pacerIntervalNs != framePeriodNs) {
-                return;
+            if (gotNew) {
+                // Re-target based on the newest frame (avoid presenting stale)
+                targetNs = computeNanoPacerTargetNs(latest.ptsUs, framePeriodNs);
+                continue;
             }
 
-            nowNs = System.nanoTime();
-            waitNs = deadlineNs - nowNs;
-        }
-
-        if (waitNs > 0L) {
-            final long spinDeadlineNs = deadlineNs;
-            while (System.nanoTime() < spinDeadlineNs) {
-                // spin
-            }
-            nextPacingDeadlineNs = deadlineNs + framePeriodNs;
-        } else {
-            final long slipNs = -waitNs;
-
-            if (slipNs < (framePeriodNs * 3L) / 2L) {
-                nextPacingDeadlineNs = deadlineNs + framePeriodNs;
+            // Wait in small slices so we can keep draining (avoid long blocking)
+            if (remainingNs > PARK_MIN_THRESHOLD_NS) {
+                final long sliceNs = Math.min(remainingNs - SPIN_MAX_NS, 2_000_000L); // max 2ms slice
+                if (sliceNs > 0L) LockSupport.parkNanos(sliceNs);
             } else {
-                nowNs = System.nanoTime();
-                nextPacingDeadlineNs = nowNs + framePeriodNs;
+                // Final fine spin
+                while (System.nanoTime() < targetNs) { /* fine spin */ }
+                break;
             }
         }
+
+        // Advance phase for next frame
+        synchronized (pacingLock) {
+            nextPacingDeadlineNs = targetNs + framePeriodNs;
+        }
+
+        return drainedExtra;
     }
 
 // ==== End Nano Pacer ====
@@ -1494,10 +1526,13 @@ try {
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
                     long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
                     if (delta >= 0 && delta < 1000) {
-                        if (USE_FRAME_RENDER_TIME) {
-                            activeWindowVideoStats.totalTimeMs += delta;
-                        }
+                        // totalTimeMs is the render-time based end-to-end metric
+                        activeWindowVideoStats.totalTimeMs += delta;
+
+                        // keep endToEndLatencyMs in sync with what the overlay expects
+                        activeWindowVideoStats.endToEndLatencyMs += delta;
                     }
+
                 }
             }, null);
         }
@@ -2052,6 +2087,10 @@ try {
                             // Track dequeue time for the newest output buffer (latest-only)
                                 long lastDequeueTimeNs = System.nanoTime();
 
+                                // Measure decode latency for the first dequeued buffer too
+                                try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
+                                catch (Throwable ignored) { }
+
                                 if (isMaxSmooth) {
                                     // AdaptX Smooth-style: short first dequeue already done (firstOutTimeoutUs),
                                     // then chase newest with non-blocking follow-ups and a soft cap.
@@ -2072,6 +2111,10 @@ try {
                                         lastIndex = outIndex;
                                         presentationTimeUs = info.presentationTimeUs;
                                         lastFlags = info.flags;
+
+                                        // Measure decode latency for this dequeued buffer
+                                        try { updateDecodeLatencyStats(presentationTimeUs, thisDequeueTimeNs); }
+                                        catch (Throwable ignored) { }
 
                                         lastDequeueTimeNs = thisDequeueTimeNs;
 
@@ -2115,28 +2158,34 @@ try {
                                         presentationTimeUs = info.presentationTimeUs;
                                         lastFlags = info.flags;
 
+                                        // Measure decode latency per-buffer at dequeue time (more stable samples)
+                                        try { updateDecodeLatencyStats(presentationTimeUs, thisDequeueTimeNs); }
+                                        catch (Throwable ignored) { }
+
                                         lastDequeueTimeNs = thisDequeueTimeNs;
                                     }
                                 }
 
-
-                            // Measure decode latency using the dequeue time of the newest buffer
-                                try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
-                                catch (Throwable ignored) {}
-
-
-
                                 final boolean eos =
                                         (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
 
-                                // Update pacing state using the newest frame only
                                 updatePacingMode(presentationTimeUs);
 
-                                // Nano-pacer enforcement (1:1)
+// Cooperative nano-pacer: drain while waiting to avoid output backpressure
+                                nanoLatest.index = lastIndex;
+                                nanoLatest.ptsUs = presentationTimeUs;
+                                nanoLatest.flags = lastFlags;
+                                nanoLatest.dequeueNs = lastDequeueTimeNs;
 
-                                enforceNanoPacerIfActive();
+                                numFramesOut += nanoPacerWaitAndDrainLatest(info, nanoLatest);
 
-                                // Present/release newest buffer
+// Pull back the possibly-updated newest output
+                                lastIndex = nanoLatest.index;
+                                presentationTimeUs = nanoLatest.ptsUs;
+                                lastFlags = nanoLatest.flags;
+                                lastDequeueTimeNs = nanoLatest.dequeueNs;
+
+// Present/release newest buffer
                                 releaseBufferAccordingToMode(lastIndex, presentationTimeUs);
 
                                 activeWindowVideoStats.totalFramesRendered++;
@@ -2941,15 +2990,25 @@ try {
                 }
 
 // Calculate both latency metrics for display
-                float decodeTimeMs = 0f;
+                float decodeTimeMs;
                 float endToEndTimeMs;
 
+                final long decodeDenom = (lastTwo.decoderSamples > 0)
+                        ? lastTwo.decoderSamples
+                        : lastTwo.totalFramesReceived;
+
+                if (decodeDenom > 0) {
+                    decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) decodeDenom;
+                } else {
+                    decodeTimeMs = 0f;
+                }
+
                 if (lastTwo.totalFramesReceived > 0) {
-                    decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) lastTwo.totalFramesReceived;
                     endToEndTimeMs = (float) lastTwo.endToEndLatencyMs / (float) lastTwo.totalFramesReceived;
                 } else {
                     endToEndTimeMs = 0f;
                 }
+
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
 
 // Snapshot performance-critical values for UI thread processing
@@ -4323,5 +4382,57 @@ try {
         Thread.yield();
         java.util.concurrent.locks.LockSupport.parkNanos(200_000L); // 0.2 ms
     }
+
+    // Compute target timestamp (ns, monotonic) for a given PTS without blocking.
+    private long computeNanoPacerTargetNs(long presentationTimeUs, long framePeriodNs) {
+        final long nowNs = System.nanoTime();
+
+        synchronized (pacingLock) {
+            // If you already have a "fixed" PTS->nano mapping version, keep that logic here.
+            // ---- REBASE / DISCONTINUITY ----
+            if (ptsBaseUs == Long.MIN_VALUE ||
+                    lastPtsUs == Long.MIN_VALUE ||
+                    presentationTimeUs < lastPtsUs ||
+                    (presentationTimeUs - lastPtsUs) > PTS_JUMP_US) {
+
+                ptsBaseUs = presentationTimeUs;
+                monoBaseNs = nowNs;
+                lastPtsUs = presentationTimeUs;
+                slipNs = 0L;
+
+                if (nextPacingDeadlineNs == 0L) {
+                    nextPacingDeadlineNs = nowNs + framePeriodNs;
+                }
+                return nextPacingDeadlineNs;
+            }
+
+            lastPtsUs = presentationTimeUs;
+
+            final long idealNs = monoBaseNs + (presentationTimeUs - ptsBaseUs) * 1000L;
+
+            // Slip correction (low-pass)
+            final long errorNs = idealNs - nowNs;
+            slipNs += (long) (SLIP_CORRECTION_ALPHA * (errorNs - slipNs));
+
+            // Clamp slip
+            if (slipNs > framePeriodNs) slipNs = framePeriodNs;
+            else if (slipNs < -framePeriodNs) slipNs = -framePeriodNs;
+
+            long targetNs = idealNs - slipNs;
+
+            // Phase stabilization
+            if (nextPacingDeadlineNs != 0L && nextPacingDeadlineNs > targetNs) {
+                targetNs = nextPacingDeadlineNs;
+            }
+
+            // Late re-phase to avoid backlog accumulation
+            if ((targetNs - nowNs) <= -framePeriodNs) {
+                targetNs = nowNs + framePeriodNs;
+            }
+
+            return targetNs;
+        }
+    }
+
 
 }
