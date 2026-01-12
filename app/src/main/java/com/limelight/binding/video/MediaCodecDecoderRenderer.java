@@ -173,6 +173,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         } catch (Throwable ignored) {}
     }
 
+    private static void __fsrSetPresentationHint(Object upscaler, android.content.Context ctx) {
+        if (upscaler == null || ctx == null) return;
+        try {
+            UpscalerReflect.setPresentationHint(upscaler).invoke(upscaler, ctx);
+        } catch (Throwable ignored) {}
+    }
+
+
     private static String __fsrGetOverlayLine(Object upscaler) {
         if (upscaler == null) return "";
         try {
@@ -365,6 +373,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Max horizontal shift steps for lite OLED overlay
     private static final int LITE_SHIFT_MAX_SPACES = 8;
 
+    // Throttle overlay updates to reduce main-thread churn
+    private static final long PERF_OVERLAY_DISPATCH_INTERVAL_NS = 100_000_000L; // 100 ms
+    private long lastPerfOverlayDispatchNs = 0L;
+
+    // Cached prefixes for Lite overlay OLED shift (0..LITE_SHIFT_MAX_SPACES)
+    private static final String[] LITE_SHIFT_PREFIX = new String[LITE_SHIFT_MAX_SPACES + 1];
+    static {
+        StringBuilder sb = new StringBuilder(LITE_SHIFT_MAX_SPACES);
+        LITE_SHIFT_PREFIX[0] = "";
+        for (int i = 1; i <= LITE_SHIFT_MAX_SPACES; i++) {
+            sb.append(' ');
+            LITE_SHIFT_PREFIX[i] = sb.toString();
+        }
+    }
+
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
@@ -456,6 +479,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
     }
+    private void releaseAsyncOutputNoRenderAndRecycleInfo(MediaCodec codec, int index) {
+        if (codec == null || index < 0) return;
+
+        try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+
+        android.media.MediaCodec.BufferInfo bi = null;
+        try {
+            synchronized (asyncOutInfo) {
+                bi = asyncOutInfo.get(index);
+                asyncOutInfo.remove(index);
+            }
+        } catch (Throwable ignored) {}
+
+        recycleAsyncInfo(bi);
+    }
 
 // ==== End async decoding ====
 
@@ -468,7 +506,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final float EMA_ALPHA = 0.2f;
     private final Object pacingLock = new Object();
 
-    private long nextPacingDeadlineNs = 0;
+    private volatile long nextPacingDeadlineNs = 0L;
+
     private volatile boolean isOneToOneMode = false;
 
     // Interval actually enforced by the nano-pacer (ns)
@@ -583,6 +622,61 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         nextPacingDeadlineNs = 0;
         lastEvaluationNs = 0;
         pacerIntervalNs = 0;
+    }
+
+    private void enforceNanoPacerIfActive() {
+        if (!isOneToOneMode) return;
+
+        final long framePeriodNs = pacerIntervalNs;
+        if (framePeriodNs <= 0L) {
+            // Disable pacer if interval is invalid
+            isOneToOneMode = false;
+            nextPacingDeadlineNs = 0L;
+            return;
+        }
+
+        long nowNs = System.nanoTime();
+        long deadlineNs = nextPacingDeadlineNs;
+
+        if (deadlineNs == 0L) {
+            deadlineNs = nowNs + framePeriodNs;
+            nextPacingDeadlineNs = deadlineNs;
+        }
+
+        long waitNs = deadlineNs - nowNs;
+
+        // No locks while parking/spinning: avoid blocking updateRefreshRate()/resetNanoPacerState()
+        if (waitNs > PARK_MIN_THRESHOLD_NS) {
+            final long parkNs = waitNs - SPIN_MAX_NS;
+            if (parkNs > 0L) {
+                LockSupport.parkNanos(parkNs);
+            }
+
+            // Another thread may have reset pacing while we were parked
+            if (!isOneToOneMode || pacerIntervalNs != framePeriodNs) {
+                return;
+            }
+
+            nowNs = System.nanoTime();
+            waitNs = deadlineNs - nowNs;
+        }
+
+        if (waitNs > 0L) {
+            final long spinDeadlineNs = deadlineNs;
+            while (System.nanoTime() < spinDeadlineNs) {
+                // spin
+            }
+            nextPacingDeadlineNs = deadlineNs + framePeriodNs;
+        } else {
+            final long slipNs = -waitNs;
+
+            if (slipNs < (framePeriodNs * 3L) / 2L) {
+                nextPacingDeadlineNs = deadlineNs + framePeriodNs;
+            } else {
+                nowNs = System.nanoTime();
+                nextPacingDeadlineNs = nowNs + framePeriodNs;
+            }
+        }
     }
 
 // ==== End Nano Pacer ====
@@ -922,16 +1016,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (this.renderTarget != null && this.renderTarget != renderTarget && glUpscaler != null) {
             try { __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
             glUpscaler = null;
-            if (decoderInputSurfaceForUpscale != null) { try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {} decoderInputSurfaceForUpscale = null; }
+            if (decoderInputSurfaceForUpscale != null) {
+                try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
+                decoderInputSurfaceForUpscale = null;
+            }
         }
+
         this.renderTarget = renderTarget;
 
         // Re-apply presentation hint to upscaler when render target may change
-        try { if (glUpscaler != null) {
-            java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
-            __m.invoke(glUpscaler, context);
-        } } catch (Throwable ignored) {}
-}
+        __fsrSetPresentationHint(glUpscaler, context);
+    }
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
@@ -1211,12 +1306,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Start GL upscaler loop if present
         try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
         // Apply user VSync setting (checkbox_Vsync)
-        try {
-            java.lang.reflect.Method m = glUpscaler.getClass().getMethod("applyVsyncSetting");
-            m.invoke(glUpscaler);
-        } catch (Throwable ignored) {
-            // Safe reflection fallback if method not available
-        }
+        applyUpscalerVsyncSettingIfSupported();
+
 
         try {
             if (glUpscaler != null) {
@@ -2042,50 +2133,8 @@ try {
                                 updatePacingMode(presentationTimeUs);
 
                                 // Nano-pacer enforcement (1:1)
-                                if (isOneToOneMode) {
-                                    synchronized (pacingLock) {
-                                        final long framePeriodNs = pacerIntervalNs;
 
-                                        if (framePeriodNs <= 0L) {
-                                            isOneToOneMode = false;
-                                            nextPacingDeadlineNs = 0L;
-                                        } else {
-                                            long pacerNowNs = System.nanoTime();
-
-                                            if (nextPacingDeadlineNs == 0L) {
-                                                nextPacingDeadlineNs = pacerNowNs + framePeriodNs;
-                                            }
-
-                                            long waitNs = nextPacingDeadlineNs - pacerNowNs;
-
-                                            if (waitNs > PARK_MIN_THRESHOLD_NS) {
-                                                final long parkNs = waitNs - SPIN_MAX_NS;
-                                                if (parkNs > 0L) {
-                                                    LockSupport.parkNanos(parkNs);
-                                                }
-                                                pacerNowNs = System.nanoTime();
-                                                waitNs = nextPacingDeadlineNs - pacerNowNs;
-                                            }
-
-                                            if (waitNs > 0L) {
-                                                final long spinDeadlineNs = nextPacingDeadlineNs;
-                                                while (System.nanoTime() < spinDeadlineNs) {
-                                                    // spin
-                                                }
-                                                nextPacingDeadlineNs += framePeriodNs;
-                                            } else {
-                                                final long slipNs = -waitNs;
-
-                                                if (slipNs < (framePeriodNs * 3L) / 2L) {
-                                                    nextPacingDeadlineNs += framePeriodNs;
-                                                } else {
-                                                    pacerNowNs = System.nanoTime();
-                                                    nextPacingDeadlineNs = pacerNowNs + framePeriodNs;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                enforceNanoPacerIfActive();
 
                                 // Present/release newest buffer
                                 releaseBufferAccordingToMode(lastIndex, presentationTimeUs);
@@ -2315,19 +2364,17 @@ try {
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
 
-        // Clear async queues
+        // Stop async callbacks first to avoid new buffers arriving while tearing down
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
 
-        // Clear frame pacing queue
-        outputBufferQueue.clear();
+        // IMPORTANT: Do not clear the output queue without releasing buffers.
+        // Otherwise we "lose" codec output buffers and risk stalls/hangs during stop/recovery.
+        drainOutputBufferQueueNoRender();
 
         // Clear decode latency tracking to prevent memory leaks
         synchronized (enqueueNsLock) {
             enqueueNsByPtsUs.clear();
         }
-
-        // Clear output buffer queue
-        outputBufferQueue.clear();
 
         // Stop CPU warm-up
         if (cpuWarmUp != null && cpuWarmUpStarted) {
@@ -2358,7 +2405,7 @@ try {
             try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
             decoderInputSurfaceForUpscale = null;
         }
-// Stop any active codec recovery operations
+        // Stop any active codec recovery operations
         synchronized (codecRecoveryMonitor) {
             codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
             codecRecoveryMonitor.notifyAll();
@@ -2369,11 +2416,16 @@ try {
             choreographerHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    // Don't allow any further messages to be queued
-                    choreographerHandlerThread.quit();
+                    try {
+                        if (choreographerHandlerThread != null) {
+                            choreographerHandlerThread.quit();
+                        }
+                    } catch (Throwable ignored) {}
 
                     // Deregister the frame callback (if registered)
-                    Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
+                    try {
+                        Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
+                    } catch (Throwable ignored) {}
                 }
             });
         }
@@ -2431,13 +2483,8 @@ try {
     }
 
     private void applyUpscalerVsyncSettingIfSupported() {
-        try {
-            if (glUpscaler == null) return;
-            final java.lang.reflect.Method m = glUpscaler.getClass().getMethod("applyVsyncSetting");
-            m.invoke(glUpscaler);
-        } catch (Throwable ignored) {
-            // Optional method; ignore if missing
-        }
+        // Cached no-arg reflection through UpscalerReflect.noArg()
+        __fsrCall(glUpscaler, "applyVsyncSetting");
     }
 
     private void drainOutputBufferQueueNoRender() {
@@ -2622,16 +2669,43 @@ try {
         // Final async cleanup
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
 
+        // Release any queued output buffers (safety)
+        drainOutputBufferQueueNoRender();
         // Reset input buffer state to avoid stale state on next start
         resetInputBufferState();
 
         // Reset NanoPacer
         resetNanoPacerState();
 
-        // Wait for the Choreographer looper to shut down (if we have one)
-        if (choreographerHandlerThread != null) {
+        // Wait for the Choreographer looper to shut down (bounded)
+        final Thread choreo = choreographerHandlerThread;
+        if (choreo != null) {
             try {
-                choreographerHandlerThread.join();
+                choreo.join(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                Thread.currentThread().interrupt();
+            }
+
+            if (choreo.isAlive()) {
+                try { choreo.interrupt(); } catch (Throwable ignored) {}
+                try {
+                    choreo.join(250);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    Thread.currentThread().interrupt();
+                }
+                if (choreo.isAlive()) {
+                    LimeLog.warning("Choreographer thread did not terminate in time");
+                }
+            }
+        }
+
+        // Wait for the renderer thread to shut down (bounded)
+        final Thread rt = rendererThread;
+        if (rt != null) {
+            try {
+                rt.join(1500);
             } catch (InterruptedException e) {
                 e.printStackTrace();
 
@@ -2640,18 +2714,19 @@ try {
                 // status back to true.
                 Thread.currentThread().interrupt();
             }
-        }
 
-        // Wait for the renderer thread to shut down
-        try {
-            rendererThread.join();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-
-            // InterruptedException clears the thread's interrupt status. Since we can't
-            // handle that here, we will re-interrupt the thread to set the interrupt
-            // status back to true.
-            Thread.currentThread().interrupt();
+            if (rt.isAlive()) {
+                try { rt.interrupt(); } catch (Throwable ignored) {}
+                try {
+                    rt.join(250);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    Thread.currentThread().interrupt();
+                }
+                if (rt.isAlive()) {
+                    LimeLog.warning("Renderer thread did not terminate in time");
+                }
+            }
         }
 
         // Final safety: ensure GL upscaler is torn down
@@ -2892,25 +2967,29 @@ try {
                                 || prefsSnapshot.enablePerfOverlayMini
                                 || prefsSnapshot.enablePerfLogging)) {
 
-                    perfOverlayHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            // Capture additional UI-safe values before processing
-                            final float endToEndTimeMsSnapshot = endToEndTimeMs;
-                            final boolean hdrActiveSnapshot = hdrActive;
+                    final long overlayNowNs = System.nanoTime();
+                    if ((overlayNowNs - lastPerfOverlayDispatchNs) >= PERF_OVERLAY_DISPATCH_INTERVAL_NS) {
+                        lastPerfOverlayDispatchNs = overlayNowNs;
 
-                            buildAndDispatchPerfOverlay(
-                                    prefsSnapshot,
-                                    lastTwoSnapshot,
-                                    fpsSnapshot,
-                                    decodeTimeMsSnapshot,
-                                    rttInfoSnapshot,
-                                    decoderSnapshot,
-                                    endToEndTimeMsSnapshot,
-                                    hdrActiveSnapshot
-                            );
-                        }
-                    });
+                        perfOverlayHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                final float endToEndTimeMsSnapshot = endToEndTimeMs;
+                                final boolean hdrActiveSnapshot = hdrActive;
+
+                                buildAndDispatchPerfOverlay(
+                                        prefsSnapshot,
+                                        lastTwoSnapshot,
+                                        fpsSnapshot,
+                                        decodeTimeMsSnapshot,
+                                        rttInfoSnapshot,
+                                        decoderSnapshot,
+                                        endToEndTimeMsSnapshot,
+                                        hdrActiveSnapshot
+                                );
+                            }
+                        });
+                    }
                 }
 
                 // Rotate stats on decoder thread (always)
@@ -3817,28 +3896,32 @@ try {
         try {
             Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
             if (idx == null) return -1;
+
+            android.media.MediaCodec.BufferInfo bi;
             synchronized (asyncOutInfo) {
-                android.media.MediaCodec.BufferInfo bi;
-                synchronized (asyncOutInfo) {
-                    bi = asyncOutInfo.get(idx);
-                    if (bi == null) {
-                        // Already cleaned up, buffer likely released
-                        return -1;
-                    }
+                bi = asyncOutInfo.get(idx);
+                if (bi != null) {
                     if (outInfo != null) {
                         outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
                     }
                     asyncOutInfo.remove(idx);
                 }
-                recycleAsyncInfo(bi);
-
             }
+
+            if (bi == null) {
+                // Info missing: safest is to release the output buffer (no-render) to avoid codec stalls.
+                try { videoDecoder.releaseOutputBuffer(idx, false); } catch (Throwable ignored) {}
+                return -1;
+            }
+
+            recycleAsyncInfo(bi);
             return idx;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return -1;
         }
     }
+
     private void attachAsyncCodecIfNeeded() {
         if (!useAsyncCodec || videoDecoder == null) return;
 
@@ -3874,12 +3957,12 @@ try {
 
                 @Override
                 public void onOutputBufferAvailable(MediaCodec codec, int index, BufferInfo info) {
-                    // CRITICAL FIX: Create a defensive copy; the system reuses 'info' for the next frame
-                    BufferInfo copy = obtainAsyncInfo();
+                    // Defensive copy; the system reuses 'info' for the next frame
+                    android.media.MediaCodec.BufferInfo copy = obtainAsyncInfo();
                     copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
 
                     try {
-                        // Store info synchronously to prevent race conditions with the renderer thread
+                        // Store info for the consumer thread
                         synchronized (asyncOutInfo) {
                             asyncOutInfo.put(index, copy);
                         }
@@ -3888,20 +3971,10 @@ try {
                         if (preferLowerDelays) {
                             Integer old;
                             while ((old = asyncOutputQueue.poll()) != null) {
-                                try {
-                                    codec.releaseOutputBuffer(old, false);
-                                } catch (Throwable ignored) {}
-                                synchronized (asyncOutInfo) {
-                                    asyncOutInfo.remove(old);
-                                }
+                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, old);
                             }
                             if (!asyncOutputQueue.offer(index)) {
-                                try {
-                                    codec.releaseOutputBuffer(index, false);
-                                } catch (Throwable ignored) {}
-                                synchronized (asyncOutInfo) {
-                                    asyncOutInfo.remove(index);
-                                }
+                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, index);
                             }
                             return;
                         }
@@ -3910,23 +3983,16 @@ try {
                         if (!asyncOutputQueue.offer(index)) {
                             Integer old = asyncOutputQueue.poll();
                             if (old != null) {
-                                try {
-                                    codec.releaseOutputBuffer(old, false);
-                                } catch (Throwable ignored) {}
-                                synchronized (asyncOutInfo) {
-                                    asyncOutInfo.remove(old);
-                                }
+                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, old);
                             }
                             if (!asyncOutputQueue.offer(index)) {
-                                try {
-                                    codec.releaseOutputBuffer(index, false);
-                                } catch (Throwable ignored) {}
-                                synchronized (asyncOutInfo) {
-                                    asyncOutInfo.remove(index);
-                                }
+                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, index);
                             }
                         }
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable t) {
+                        // Make sure we don't leak output buffers or BufferInfo objects
+                        try { releaseAsyncOutputNoRenderAndRecycleInfo(codec, index); } catch (Throwable ignored) {}
+                    }
                 }
 
                 @Override
