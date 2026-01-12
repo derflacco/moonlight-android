@@ -1897,7 +1897,7 @@ try {
         if (choreographerHandlerThread == null) {
             choreographerHandlerThread = new HandlerThread(
                     "Video - Choreographer",
-                    Process.THREAD_PRIORITY_DISPLAY
+                    Process.THREAD_PRIORITY_URGENT_DISPLAY
             );
             choreographerHandlerThread.start();
             choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
