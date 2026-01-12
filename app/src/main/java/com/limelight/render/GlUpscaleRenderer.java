@@ -10,6 +10,7 @@ import android.opengl.EGLSurface;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
+import android.os.Process;
 import android.view.Surface;
 import android.view.Display;
 import android.hardware.display.DisplayManager;
@@ -374,7 +375,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (useChoreoVsync) {
             final HandlerThread ht = new HandlerThread(
                     "GL-FSR1-Renderer",
-                    android.os.Process.THREAD_PRIORITY_DISPLAY);
+                    Process.THREAD_PRIORITY_URGENT_DISPLAY);
             renderThread = ht;
             ht.start();
 
