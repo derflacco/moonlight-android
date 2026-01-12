@@ -1848,7 +1848,7 @@ try {
                             ? 0
                             : runtimeOutputDequeueTimeoutUs;
 
-// Max Smooth Special Policy (UI precedence + cap)
+                    // Max Smooth Special Policy (UI precedence + cap)
                     final boolean isMaxSmooth =
                             (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
 
@@ -1900,15 +1900,16 @@ try {
                             final boolean isBalanced =
                                     (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
 
+                        // Track dequeue time for the newest output buffer (latest-only)
+                            long lastDequeueTimeNs = System.nanoTime();
+
+                        // Measure decode latency for the first dequeued buffer too
+                            try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
+                            catch (Throwable ignored) { }
+
                             if (!isBalanced) {
-                            // Track dequeue time for the newest output buffer (latest-only)
-                                long lastDequeueTimeNs = System.nanoTime();
-
-                                // Measure decode latency for the first dequeued buffer too
-                                try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
-                                catch (Throwable ignored) { }
-
                                 if (isMaxSmooth) {
+
                                     // AdaptX Smooth-style: short first dequeue already done (firstOutTimeoutUs),
                                     // then chase newest with non-blocking follow-ups and a soft cap.
                                     int drained = 1; // includes the already dequeued buffer
@@ -2031,9 +2032,6 @@ try {
 
                                 outputBufferQueue.offer(lastIndex);
 
-                                // Measure decode latency at dequeue time
-                                try { updateDecodeLatencyStats(presentationTimeUs); }
-                                catch (Throwable ignored) {}
 
                                 final boolean eos =
                                         (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
