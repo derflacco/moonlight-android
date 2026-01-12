@@ -3851,7 +3851,7 @@ try {
 
         if (codecCallbackThread == null) {
             codecCallbackThread = new android.os.HandlerThread(
-                    "CodecAsync", Process.THREAD_PRIORITY_VIDEO);
+                    "CodecAsync", Process.THREAD_PRIORITY_DISPLAY);
             codecCallbackThread.start();
         }
         android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
