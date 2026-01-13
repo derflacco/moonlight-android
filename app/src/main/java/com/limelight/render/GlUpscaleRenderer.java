@@ -577,10 +577,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private volatile Handler renderHandler = null;
     private final Object frameLock = new Object();
     // SurfaceTexture callback coalescing with bounded "pending frames" counter.
-// This behaves like a tiny queue without introducing extra latency.
+    // This behaves like a tiny queue without introducing extra latency.
     private static final int MAX_PENDING_FRAMES = 8;
     private static final int MAX_DRAIN_UPDATETEXIMAGE = 4;
+
+    // Choreographer backend: limit updateTexImage drains per vsync to stabilize frame time.
+    // Use 1 for maximum smoothness, 2 for a better latency/smoothness compromise.
+    private static final int CHOREO_MAX_DRAIN_UPDATETEXIMAGE = 2;
+
+    // Choreographer late-latch window (sub-ms) to catch frames arriving just after vsync.
+    private static final int CHOREO_LATE_LATCH_NS = 600_000; // 0.6ms (must be < 1_000_000)
+
+    // Last Choreographer frame time (System.nanoTime() timebase), used for eglPresentationTimeANDROID.
+    private volatile long lastChoreoFrameTimeNs = 0L;
+
     private int pendingFrames = 0;
+
     // stop()/release() safety: avoid indefinite join() if the render thread gets stuck in driver/EGL
     private static final long STOP_JOIN_TIMEOUT_MS = 1200L;
     private static final long STOP_JOIN_GRACE_MS = 600L;
@@ -994,19 +1006,36 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             markGlErrorDirty();
         }
 
-        int drainCount = 0;
+        int drainCount;
         synchronized (frameLock) {
             if (allowWait && pendingFrames == 0) {
                 try {
-                    // Wait at most ~33ms (≈30fps) to prevent ANR if decoder stalls
-                    frameLock.wait(33);
+                    if (useChoreoVsync) {
+                        // Late-latch for Choreographer: wait sub-ms to catch frames arriving just after vsync.
+                        frameLock.wait(0L, CHOREO_LATE_LATCH_NS);
+                    } else {
+                        // Non-choreo loop: coarse wait to avoid busy looping when decoder stalls.
+                        frameLock.wait(33);
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
             }
-            drainCount = pendingFrames;
-            pendingFrames = 0;
+
+            final int total = pendingFrames;
+
+            // Drain budget for this render tick. Avoid long updateTexImage loops under Choreographer.
+            final int maxDrainNow = useChoreoVsync
+                    ? Math.min(MAX_DRAIN_UPDATETEXIMAGE, CHOREO_MAX_DRAIN_UPDATETEXIMAGE)
+                    : MAX_DRAIN_UPDATETEXIMAGE;
+
+            drainCount = Math.min(total, maxDrainNow);
+
+            // IMPORTANT: keep remainder so we don't "lose" already-signaled frames when draining is capped.
+            pendingFrames = total - drainCount;
         }
+
+
         final boolean newFrame = (drainCount > 0);
 
         boolean didUpdateTex = false;
@@ -1268,7 +1297,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean swapAndContinue() {
         if (hasPresentationTimeExt) {
             try {
-                EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, System.nanoTime());
+                final long presentNs;
+                if (useChoreoVsync) {
+                    final long t = lastChoreoFrameTimeNs;
+                    presentNs = (t != 0L) ? t : System.nanoTime();
+                } else {
+                    presentNs = System.nanoTime();
+                }
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, eglWindowSurface, presentNs);
             } catch (Throwable ignored) { }
         }
 
@@ -2936,13 +2972,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
     }
+
     private final Choreographer.FrameCallback frameCallback = new Choreographer.FrameCallback() {
         @Override
         public void doFrame(long frameTimeNanos) {
             if (!running.get() || !useChoreoVsync) return;
 
+            // Choreographer frame time is in the System.nanoTime() timebase.
+            // Keep it to drive eglPresentationTimeANDROID for tighter SurfaceFlinger phase alignment.
+            lastChoreoFrameTimeNs = frameTimeNanos;
+
             try {
-                renderFrame(false);
+                // Late-latch: allow a tiny wait window to catch frames arriving just after vsync.
+                renderFrame(true);
             } catch (Throwable t) {
                 LimeLog.warning("renderFrame error: " + t);
             }
@@ -2952,6 +2994,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
     };
+
 
     private boolean ensureEglCurrent() {
         if (!isGlReady()) return false;
