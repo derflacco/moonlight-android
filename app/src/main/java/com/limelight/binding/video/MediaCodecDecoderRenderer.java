@@ -1822,11 +1822,8 @@ try {
         rendererThread = new Thread() {
             @Override
             public void run() {
-                try {
-                    // Boost thread priority to reduce scheduling jitter for presentation/renderer work
-                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
-                } catch (Throwable ignored) { }
-
+                rendererTid = Process.myTid();
+                applyVideoThreadPriorities();
                 BufferInfo info = new BufferInfo();
                 final android.media.MediaCodec.BufferInfo lfrInfo =
                         new android.media.MediaCodec.BufferInfo();
@@ -2056,7 +2053,8 @@ try {
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
                 }
-
+                // Avoid stale Linux TID reuse after thread exit.
+                rendererTid = 0;
             }
         };
 
@@ -2354,6 +2352,10 @@ try {
         // Cached no-arg reflection through UpscalerReflect.noArg()
         __fsrCall(glUpscaler, "applyVsyncSetting");
     }
+    private void applyUpscalerThreadPrioritiesIfSupported() {
+        // Cached no-arg reflection through UpscalerReflect.noArg()
+        __fsrCall(glUpscaler, "applyThreadPriorities");
+    }
 
     private void drainOutputBufferQueueNoRender() {
         Integer idx;
@@ -2401,6 +2403,10 @@ try {
 
         // Reset pacing state so deadlines/counters don't carry across modes
         nanoPacer.reset();
+        // Re-tune OS thread priorities for the new pacing mode.
+        applyVideoThreadPriorities();
+        applyUpscalerThreadPrioritiesIfSupported();
+
     }
 
 
@@ -2443,7 +2449,12 @@ try {
         // IMPORTANT: apply on enableVsync OR fastVsync change
         if (enableVsyncChanged || fastVsyncChanged) {
             applyUpscalerVsyncSettingIfSupported();
+
+            // VSync backend (and thus who is the vsync gate) can change without pacing changing.
+            applyVideoThreadPriorities();
+            applyUpscalerThreadPrioritiesIfSupported();
         }
+
 
         // Respect user pacing choice
         final int effective = selected;
@@ -3812,8 +3823,12 @@ try {
 
         if (codecCallbackThread == null) {
             codecCallbackThread = new android.os.HandlerThread(
-                    "CodecAsync", Process.THREAD_PRIORITY_DISPLAY);
+                    "CodecAsync", desiredCodecCallbackOsPriority(getEffectivePacingForThreadPriorities()));
             codecCallbackThread.start();
+
+// Make sure OS priorities are coherent after starting callback thread.
+            applyVideoThreadPriorities();
+
         }
         android.os.Handler cb = new android.os.Handler(codecCallbackThread.getLooper());
 
@@ -4200,6 +4215,94 @@ try {
     private static void inputNonBlockingBackoff() {
         Thread.yield();
         java.util.concurrent.locks.LockSupport.parkNanos(200_000L); // 0.2 ms
+    }
+    // ---- Thread priority tuning (runtime) ----
+    private volatile int rendererTid = 0;
+
+    private int getEffectivePacingForThreadPriorities() {
+        // Prefer prefs (current intent), but keep applied if it matches (avoid stale override).
+        final int prefsPacing = (prefs != null) ? prefs.framePacing : PreferenceConfiguration.FRAME_PACING_BALANCED;
+        final int applied = appliedFramePacing;
+        if (applied != Integer.MIN_VALUE && applied == prefsPacing) {
+            return applied;
+        }
+        return prefsPacing;
+    }
+
+    private boolean isGlVsyncGateActiveForPriorities(int pacing) {
+        // If upscaler is active and GL is running its own Choreographer backend (VSync ON, not Balanced),
+        // GL becomes the vsync gate. In that case, keep the decoder renderer at DISPLAY to avoid contention.
+        if (glUpscaler == null || prefs == null) return false;
+        if (!prefs.videoUpscaleEnable) return false;
+        if (prefs.gpuPathMode) return false;
+        if (!prefs.enableVsync) return false;
+        return (pacing != PreferenceConfiguration.FRAME_PACING_BALANCED);
+    }
+
+    private int desiredRendererOsPriority(int pacing) {
+        // If GL is the vsync gate, do not fight it unless user explicitly forced "immediate".
+        if (isGlVsyncGateActiveForPriorities(pacing) && !(prefs != null && prefs.immediateFrameDelivery)) {
+            return Process.THREAD_PRIORITY_DISPLAY;
+        }
+
+        if (prefs != null && prefs.immediateFrameDelivery) {
+            return Process.THREAD_PRIORITY_URGENT_DISPLAY;
+        }
+
+        switch (pacing) {
+            case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
+            case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
+            case PreferenceConfiguration.FRAME_PACING_WARP:
+            case PreferenceConfiguration.FRAME_PACING_WARP2:
+                return Process.THREAD_PRIORITY_URGENT_DISPLAY;
+
+            case PreferenceConfiguration.FRAME_PACING_BALANCED:
+            case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+            case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+            default:
+                return Process.THREAD_PRIORITY_DISPLAY;
+        }
+    }
+
+    private static int desiredCodecCallbackOsPriority(int pacing) {
+        // Keep callbacks below renderer/choreo. This thread must not preempt the pipeline.
+        return Process.THREAD_PRIORITY_DISPLAY;
+    }
+
+    private void applyVideoThreadPriorities() {
+        final int pacing = getEffectivePacingForThreadPriorities();
+
+        final int rendererPrio = desiredRendererOsPriority(pacing);
+        final int codecPrio = desiredCodecCallbackOsPriority(pacing);
+        final int choreoPrio = Process.THREAD_PRIORITY_URGENT_DISPLAY;
+
+        // Renderer (OS)
+        final int tid = rendererTid;
+        if (tid != 0) {
+            try { Process.setThreadPriority(tid, rendererPrio); } catch (Throwable ignored) { }
+        }
+
+        // Renderer (Java hint)
+        final Thread rt = rendererThread;
+        if (rt != null) {
+            try {
+                rt.setPriority((rendererPrio == Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                        ? (Thread.NORM_PRIORITY + 3)
+                        : (Thread.NORM_PRIORITY + 2));
+            } catch (Throwable ignored) { }
+        }
+
+        // Codec async callback (OS)
+        final android.os.HandlerThread cb = codecCallbackThread;
+        if (cb != null) {
+            try { Process.setThreadPriority(cb.getThreadId(), codecPrio); } catch (Throwable ignored) { }
+        }
+
+        // Choreographer (OS)
+        final HandlerThread choreo = choreographerHandlerThread;
+        if (choreo != null) {
+            try { Process.setThreadPriority(choreo.getThreadId(), choreoPrio); } catch (Throwable ignored) { }
+        }
     }
 
 }
