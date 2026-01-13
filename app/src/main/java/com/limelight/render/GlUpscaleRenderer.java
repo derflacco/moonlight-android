@@ -612,6 +612,59 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private Thread renderThread;
     private volatile boolean useChoreoVsync = false;
     private volatile Handler renderHandler = null;
+    // Cached Linux TID for non-HandlerThread renderer (so we can retune OS priority at runtime).
+    private volatile int renderTid = 0;
+
+    private int getEffectivePacing() {
+        return (prefs != null) ? prefs.framePacing : PreferenceConfiguration.FRAME_PACING_BALANCED;
+    }
+
+    private static int desiredGlOsPriority(int pacing, boolean usingChoreoBackend) {
+        // If GL is the vsync gate (Choreographer backend), keep it URGENT_DISPLAY.
+        if (usingChoreoBackend) {
+            return Process.THREAD_PRIORITY_URGENT_DISPLAY;
+        }
+
+        // Low-latency modes: keep the upscaler responsive even with VSync off.
+        switch (pacing) {
+            case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
+            case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
+            case PreferenceConfiguration.FRAME_PACING_WARP:
+            case PreferenceConfiguration.FRAME_PACING_WARP2:
+                return Process.THREAD_PRIORITY_URGENT_DISPLAY;
+            default:
+                return Process.THREAD_PRIORITY_DISPLAY;
+        }
+    }
+
+    private void applyGlThreadPriorityNow() {
+        final Thread t = renderThread;
+        if (t == null || !t.isAlive()) return;
+
+        final int pacing = getEffectivePacing();
+        final int osPrio = desiredGlOsPriority(pacing, useChoreoVsync);
+
+        try {
+            if (t instanceof HandlerThread) {
+                Process.setThreadPriority(((HandlerThread) t).getThreadId(), osPrio);
+            } else if (renderTid != 0) {
+                Process.setThreadPriority(renderTid, osPrio);
+            }
+        } catch (Throwable ignored) { }
+
+        try {
+            t.setPriority((osPrio == Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                    ? (Thread.NORM_PRIORITY + 3)
+                    : (Thread.NORM_PRIORITY + 2));
+        } catch (Throwable ignored) { }
+    }
+
+    @Keep
+    @SuppressWarnings("unused") // called via reflection from MediaCodecDecoderRenderer
+    public void applyThreadPriorities() {
+        applyGlThreadPriorityNow();
+    }
+
     private final Object frameLock = new Object();
     // SurfaceTexture callback coalescing with bounded "pending frames" counter.
     // This behaves like a tiny queue without introducing extra latency.
@@ -933,14 +986,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         useChoreoVsync = (wantVsync && !balancedPacing);
 
         if (useChoreoVsync) {
+            final int osPrio = desiredGlOsPriority(getEffectivePacing(), true);
             final HandlerThread ht = new HandlerThread(
                     "GL-FSR1-Renderer",
-                    Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                    osPrio);
             renderThread = ht;
             ht.start();
 
             renderHandler = new Handler(ht.getLooper());
             renderHandler.post(() -> {
+                renderTid = Process.myTid();
+                applyGlThreadPriorityNow();
                 try {
                     // Reset Choreographer timing state
                     lastChoreoFrameTimeNs = 0L;
@@ -956,9 +1012,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         }
 
+        final int osPrio = desiredGlOsPriority(getEffectivePacing(), false);
+
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
         try {
-            renderThread.setPriority(Thread.NORM_PRIORITY + 2);
+            renderThread.setPriority((osPrio == Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                    ? (Thread.NORM_PRIORITY + 3)
+                    : (Thread.NORM_PRIORITY + 2));
         } catch (Throwable ignored) {}
 
         renderThread.start();
@@ -980,6 +1040,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     final android.os.Looper looper = android.os.Looper.myLooper();
                     if (looper != null) looper.quitSafely();
                 } catch (Throwable ignored) {}
+                renderTid = 0;
                 return;
             }
 
@@ -1029,6 +1090,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (stopped) {
+                renderTid = 0;
                 renderThread = null;
                 renderHandler = null;
                 useChoreoVsync = false;
@@ -1038,6 +1100,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         } else {
             // Already stopped or stopping from the render thread.
+            renderTid = 0;
             renderHandler = null;
             useChoreoVsync = false;
         }
@@ -1086,18 +1149,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // ====== Main render loop ======
     private void renderLoop() {
-        try {
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
-        } catch (Throwable ignored) {}
+        renderTid = Process.myTid();
+        applyGlThreadPriorityNow();
 
-        while (running.get()) {
-            try {
-                renderFrame(true);
-            } catch (Throwable t) {
-                LimeLog.warning("FSR: renderFrame crashed: " + t);
-                markGlErrorDirty();
-                running.set(false);
+        try {
+            while (running.get()) {
+                try {
+                    renderFrame(true);
+                } catch (Throwable t) {
+                    LimeLog.warning("FSR: renderFrame crashed: " + t);
+                    markGlErrorDirty();
+                    running.set(false);
+                }
             }
+        } finally {
+            // Avoid stale Linux TID reuse after thread exit.
+            renderTid = 0;
         }
     }
 
@@ -3300,6 +3367,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
         useChoreoVsync = wantChoreoBackend;
+        applyGlThreadPriorityNow();
 
         // Wake render thread (useful for non-choreo loop and for immediate redraw)
         synchronized (frameLock) {
