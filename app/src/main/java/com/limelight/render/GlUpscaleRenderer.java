@@ -12,21 +12,12 @@ import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.os.Process;
 import android.view.Surface;
-import android.view.Display;
-import android.hardware.display.DisplayManager;
-import android.util.DisplayMetrics;
-import android.view.WindowManager;
-import android.view.WindowMetrics;
-import android.graphics.Rect;
 import androidx.annotation.Keep;
-
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.LimeLog;
-
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -122,39 +113,74 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return "CPU";
         }
 
+        private final StringBuilder lineSb = new StringBuilder(256);
 
         String overlayLine() {
+            lineSb.setLength(0);
+
             if ("EASU+RCAS".equals(mode)) {
                 final double easuMs  = easuBestNs() / 1e6;
                 final double rcasMs  = rcasBestNs() / 1e6;
                 final double totalMs = easuMs + rcasMs;
                 final String src = timingSrcTagForMode();
 
-                return String.format(java.util.Locale.US,
-                        "FSR %s | sharp=%.2f | EASU=%.2fms RCAS=%.2fms TOT=%.2fms (%s)",
-                        mode, sharp, easuMs, rcasMs, totalMs, src);
-            } else if ("RCAS_ONLY".equals(mode)) {
+                lineSb.append("FSR ").append(mode)
+                        .append(" | sharp=");
+                appendFixed2(lineSb, sharp);
+                lineSb.append(" | EASU=");
+                appendFixed2(lineSb, easuMs);
+                lineSb.append("ms RCAS=");
+                appendFixed2(lineSb, rcasMs);
+                lineSb.append("ms TOT=");
+                appendFixed2(lineSb, totalMs);
+                lineSb.append("ms (").append(src).append(')');
+
+                return lineSb.toString();
+            }
+
+            if ("RCAS_ONLY".equals(mode)) {
                 final double rcasMs = rcasBestNs() / 1e6;
                 final String src = timingSrcTagForMode();
 
-                return String.format(java.util.Locale.US,
-                        "FSR %s | sharp=%.2f | RCAS=%.2fms (%s)",
-                        mode, sharp, rcasMs, src);
-            } else {
-                return "FSR BYPASS";
+                lineSb.append("FSR ").append(mode)
+                        .append(" | sharp=");
+                appendFixed2(lineSb, sharp);
+                lineSb.append(" | RCAS=");
+                appendFixed2(lineSb, rcasMs);
+                lineSb.append("ms (").append(src).append(')');
+
+                return lineSb.toString();
             }
+
+            return "FSR BYPASS";
         }
 
         String periodicLine() {
+            lineSb.setLength(0);
+
             final double easuMs = easuBestNs() / 1e6;
             final double rcasMs = rcasBestNs() / 1e6;
             final String src = timingSrcTagForMode();
 
-            return String.format(java.util.Locale.US,
-                    "FSR[%s/%s] %dx%d -> %dx%d | sharp=%.2f | %s | EASU(avg)=%.2fms RCAS(avg)=%.2fms | disjoint=%d%s",
-                    mode, src, srcW, srcH, dstW, dstH, sharp, sampling,
-                    easuMs, rcasMs, disjointEvents,
-                    (notes == null || notes.isEmpty()) ? "" : (" | " + notes));
+            lineSb.append("FSR[").append(mode).append('/').append(src).append("] ")
+                    .append(srcW).append('x').append(srcH)
+                    .append(" -> ")
+                    .append(dstW).append('x').append(dstH)
+                    .append(" | sharp=");
+            appendFixed2(lineSb, sharp);
+
+            lineSb.append(" | ").append(sampling)
+                    .append(" | EASU(avg)=");
+            appendFixed2(lineSb, easuMs);
+            lineSb.append("ms RCAS(avg)=");
+            appendFixed2(lineSb, rcasMs);
+            lineSb.append("ms | disjoint=").append(disjointEvents);
+
+            if (notes != null && !notes.isEmpty()) {
+                lineSb.append(" | ").append(notes);
+            }
+
+            return lineSb.toString();
         }
     }
 
@@ -531,15 +557,26 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int fbW = 0, fbH = 0;
     private int fboW = 0;
     private int fboH = 0;
+    // FBO for staging decoder OES -> 2D (source)
+    private int srcFbo = 0;
+    private int srcRgbTex = 0;
+    private int srcFboW = 0;
+    private int srcFboH = 0;
 
     // Programs
-    private int progVs = 0, progBlit = 0, progEasuPerf = 0, progEasuBalanced = 0, progEasuQuality = 0, progRcas = 0;
+
+    private int progVs = 0, progBlit = 0, progOesTo2D = 0, progEasuPerf = 0, progEasuBalanced = 0, progEasuQuality = 0,
+            progEasuPerf2D = 0, progEasuBalanced2D = 0, progEasuQuality2D = 0, progRcas = 0;
 
     // Uniform locations
     private int blit_uTex = -1, blit_uTexMat = -1;
+    private int oes2d_uTex = -1;
     private int easuPerf_uTex = -1, easuPerf_uInvSrcSize = -1, easuPerf_uTexMat = -1;
     private int easuQ_uTex = -1, easuQ_uInvSrcSize = -1, easuQ_uTexMat = -1;
     private int easuBal_uTex = -1, easuBal_uInvSrcSize = -1, easuBal_uTexMat = -1;
+    private int easuPerf2D_uTex = -1, easuPerf2D_uInvSrcSize = -1, easuPerf2D_uTexMat = -1;
+    private int easuBal2D_uTex = -1, easuBal2D_uInvSrcSize = -1, easuBal2D_uTexMat = -1;
+    private int easuQ2D_uTex = -1, easuQ2D_uInvSrcSize = -1, easuQ2D_uTexMat = -1;
 
 
     private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1;
@@ -586,6 +623,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final int CHOREO_MAX_DRAIN_UPDATETEXIMAGE = 2;
 
     // Choreographer late-latch window (sub-ms) to catch frames arriving just after vsync.
+    // Choreographer interval estimation (ns). Used only for adaptive drain budgeting.
+    private static final long CHOREO_INTERVAL_MIN_NS = 8_000_000L;        // ~120Hz
+    private static final long CHOREO_INTERVAL_MAX_NS = 50_000_000L;       // ~20Hz
+    private static final long CHOREO_INTERVAL_DEFAULT_NS = 16_666_666L;   // 60Hz
+
+    private volatile long choreoFrameIntervalNs = CHOREO_INTERVAL_DEFAULT_NS;
+
+    // Adaptive drain budget for Choreographer ticks (1..CHOREO_MAX_DRAIN_UPDATETEXIMAGE).
+    private volatile int choreoDrainBudget = 1;
     private static final int CHOREO_LATE_LATCH_NS = 600_000; // 0.6ms (must be < 1_000_000)
 
     // Last Choreographer frame time (System.nanoTime() timebase), used for eglPresentationTimeANDROID.
@@ -601,6 +647,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // State cache
     private int curVpW = -1, curVpH = -1;
     private boolean twoDNearest = false, oesNearest = false;
+    private int lastTex2DFilterTexId = -1; // per-texture filter cache for unit 0
 
     // Quad bind cache (avoid rebinding attribs/VAO every draw)
     private boolean quadBound = false;
@@ -628,6 +675,25 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private float lastRcasOesSharp = -1f;
 
     private static final long FSR_OVERLAY_UPDATE_NS = 100_000_000L; // 100ms
+    // FSR notes: avoid per-frame allocations (reuse builder + update throttling)
+    private static final int FSR_NOTES_EASU_RCAS = 0;
+    private static final int FSR_NOTES_RCAS_ONLY = 1;
+
+    private static final int FSR_REASON_NEAR_NATIVE = 0;
+    private static final int FSR_REASON_DST_EQ_SRC = 1;
+    private static final int FSR_REASON_EASU_DISABLED = 2;
+    private static final int FSR_REASON_MODE_NOT_EASU_RCAS = 3;
+
+    private final StringBuilder fsrNotesSb = new StringBuilder(96);
+    private long lastFsrNotesUpdateNs = 0L;
+    private int lastFsrNotesKind = -1;
+    private boolean lastFsrNotesOk = false;
+    private int lastFsrNotesPreset = -1;
+    private int lastFsrNotesUpX100 = Integer.MIN_VALUE;
+    private boolean lastFsrNotesNearNative = false;
+    private int lastFsrNotesThrX100 = Integer.MIN_VALUE;
+    private int lastFsrNotesReasonId = -1;
+
     private long lastFsrOverlayUpdateNs = 0L;
     private String lastFsrOverlayMode = "";
     private float lastFsrOverlaySharp = -1f;
@@ -644,21 +710,93 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         if (!__fsr.enabled) return;
 
         final long now = System.nanoTime();
-        final String mode = (__fsr.mode != null ? __fsr.mode : "");
-        final float sharp = __fsr.sharp;
-
-        final boolean modeSame = mode.equals(lastFsrOverlayMode);
-        final boolean sharpSame = (Math.abs(sharp - lastFsrOverlaySharp) < 0.0005f);
+        final boolean modeSame = (__fsr.mode != null && __fsr.mode.equals(lastFsrOverlayMode));
+        final boolean sharpSame = (Math.abs(__fsr.sharp - lastFsrOverlaySharp) < 0.0005f);
 
         if (modeSame && sharpSame && (now - lastFsrOverlayUpdateNs) < FSR_OVERLAY_UPDATE_NS) {
             return;
         }
 
         lastFsrOverlayUpdateNs = now;
-        lastFsrOverlayMode = mode;
-        lastFsrOverlaySharp = sharp;
+        lastFsrOverlayMode = (__fsr.mode != null ? __fsr.mode : "");
+        lastFsrOverlaySharp = __fsr.sharp;
 
         __fsrOverlay = __fsr.overlayLine();
+    }
+
+    private void maybeUpdateFsrNotesEasuRcas(boolean ok, int preset, float upRatio) {
+        final long now = System.nanoTime();
+        final int upX100 = toScaled100(upRatio);
+
+        final boolean same =
+                (lastFsrNotesKind == FSR_NOTES_EASU_RCAS) &&
+                        (ok == lastFsrNotesOk) &&
+                        (preset == lastFsrNotesPreset) &&
+                        (upX100 == lastFsrNotesUpX100);
+
+        if (same && (now - lastFsrNotesUpdateNs) < FSR_OVERLAY_UPDATE_NS) {
+            return;
+        }
+
+        lastFsrNotesUpdateNs = now;
+        lastFsrNotesKind = FSR_NOTES_EASU_RCAS;
+        lastFsrNotesOk = ok;
+        lastFsrNotesPreset = preset;
+        lastFsrNotesUpX100 = upX100;
+
+        fsrNotesSb.setLength(0);
+        fsrNotesSb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
+        fsrNotesSb.append(" easu=").append((preset == 0) ? "P" : (preset == 1 ? "B" : "Q"));
+        fsrNotesSb.append(" | preset=").append(preset);
+        fsrNotesSb.append(" up=");
+        appendFixed2Scaled100(fsrNotesSb, upX100);
+
+        __fsr.notes = fsrNotesSb.toString();
+    }
+
+    private void maybeUpdateFsrNotesRcasOnly(boolean ok, int preset, boolean nearNative, float nearThr, int reasonId) {
+        final long now = System.nanoTime();
+        final int thrX100 = toScaled100(nearThr);
+
+        final boolean same =
+                (lastFsrNotesKind == FSR_NOTES_RCAS_ONLY) &&
+                        (ok == lastFsrNotesOk) &&
+                        (preset == lastFsrNotesPreset) &&
+                        (nearNative == lastFsrNotesNearNative) &&
+                        (thrX100 == lastFsrNotesThrX100) &&
+                        (reasonId == lastFsrNotesReasonId);
+
+        if (same && (now - lastFsrNotesUpdateNs) < FSR_OVERLAY_UPDATE_NS) {
+            return;
+        }
+
+        lastFsrNotesUpdateNs = now;
+        lastFsrNotesKind = FSR_NOTES_RCAS_ONLY;
+        lastFsrNotesOk = ok;
+        lastFsrNotesPreset = preset;
+        lastFsrNotesNearNative = nearNative;
+        lastFsrNotesThrX100 = thrX100;
+        lastFsrNotesReasonId = reasonId;
+
+        fsrNotesSb.setLength(0);
+
+        if (ok) {
+            switch (reasonId) {
+                case FSR_REASON_NEAR_NATIVE: fsrNotesSb.append("reason=nearNative"); break;
+                case FSR_REASON_DST_EQ_SRC: fsrNotesSb.append("reason=dstEqSrc"); break;
+                case FSR_REASON_EASU_DISABLED: fsrNotesSb.append("reason=easu_disabled"); break;
+                default: fsrNotesSb.append("reason=mode!=easu_rcas"); break;
+            }
+        } else {
+            fsrNotesSb.append("fallback:rcas_only_failed");
+        }
+
+        fsrNotesSb.append(" | preset=").append(preset);
+        fsrNotesSb.append(" | nearNative=").append(nearNative);
+        fsrNotesSb.append(" thr=");
+        appendFixed2Scaled100(fsrNotesSb, thrX100);
+
+        __fsr.notes = fsrNotesSb.toString();
     }
 
     private void pollFsrGpuTimers() {
@@ -804,12 +942,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             renderHandler = new Handler(ht.getLooper());
             renderHandler.post(() -> {
                 try {
+                    // Reset Choreographer timing state
+                    lastChoreoFrameTimeNs = 0L;
+                    choreoFrameIntervalNs = CHOREO_INTERVAL_DEFAULT_NS;
+                    choreoDrainBudget = 1;
+
                     Choreographer.getInstance().postFrameCallback(frameCallback);
                 } catch (Throwable t) {
                     LimeLog.warning("Choreographer init failed: " + t);
                 }
             });
             return;
+
         }
 
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
@@ -1024,12 +1168,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             final int total = pendingFrames;
 
-            // Drain budget for this render tick. Avoid long updateTexImage loops under Choreographer.
+// Drain budget for this render tick. Avoid long updateTexImage loops under Choreographer.
+// Use a conservative adaptive budget derived from measured Choreographer interval.
+            final int choreoBudget = Math.max(1, choreoDrainBudget);
+
             final int maxDrainNow = useChoreoVsync
-                    ? Math.min(MAX_DRAIN_UPDATETEXIMAGE, CHOREO_MAX_DRAIN_UPDATETEXIMAGE)
+                    ? Math.min(MAX_DRAIN_UPDATETEXIMAGE, Math.min(CHOREO_MAX_DRAIN_UPDATETEXIMAGE, choreoBudget))
                     : MAX_DRAIN_UPDATETEXIMAGE;
 
             drainCount = Math.min(total, maxDrainNow);
+
 
             // IMPORTANT: keep remainder so we don't "lose" already-signaled frames when draining is capped.
             pendingFrames = total - drainCount;
@@ -1212,7 +1360,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             drawOesToScreen();
 
         } else if (modeEasuRcas
-                && (progEasuPerf != 0 || progEasuBalanced != 0 || progEasuQuality != 0)
+                && (progEasuPerf2D != 0 || progEasuBalanced2D != 0 || progEasuQuality2D != 0 || progEasuPerf != 0 || progEasuBalanced != 0 || progEasuQuality != 0)
                 && !nearNative
                 && (fbW != srcW || fbH != srcH)) {
 
@@ -1230,13 +1378,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.dstH = fbH;
                 __fsr.sharp = effSharp;
                 __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
-                StringBuilder sb = new StringBuilder(96);
-                sb.append(ok ? "reason=easu_rcas" : "fallback:easu_rcas_failed");
-                sb.append(" easu=").append((preset == 0) ? "P" : (preset == 1 ? "B" : "Q"));
-                sb.append(" | preset=").append(preset);
-                sb.append(" up=").append(String.format(Locale.US, "%.2f", upRatio));
-                __fsr.notes = sb.toString();
-
+                maybeUpdateFsrNotesEasuRcas(ok, preset, upRatio);
                 __fsr.frames++;
                 pollFsrGpuTimers();
                 if ((__fsr.frames % 240L) == 0L) {
@@ -1267,16 +1409,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 // __fsr.sampling is set by drawRcasOnlySafe(): RCAS_OES or OES->2D LINEAR + RCAS_2D
 
                 String reason;
-                if (nearNative) reason = "reason=nearNative";
-                else if (srcW == fbW && srcH == fbH) reason = "reason=dstEqSrc";
-                else if (modeRcasOnly) reason = "reason=easu_disabled";
-                else reason = "reason=mode!=easu_rcas";
+                int reasonId;
+                if (nearNative) reasonId = FSR_REASON_NEAR_NATIVE;
+                else if (srcW == fbW && srcH == fbH) reasonId = FSR_REASON_DST_EQ_SRC;
+                else if (modeRcasOnly) reasonId = FSR_REASON_EASU_DISABLED;
+                else reasonId = FSR_REASON_MODE_NOT_EASU_RCAS;
 
-                __fsr.notes = (ok ? reason : "fallback:rcas_only_failed")
-                        + " | preset=" + preset
-                        + " | nearNative=" + nearNative
-                        + " thr=" + String.format(Locale.US, "%.2f", nearThr);
-
+                maybeUpdateFsrNotesRcasOnly(ok, preset, nearNative, nearThr, reasonId);
                 __fsr.frames++;
                 pollFsrGpuTimers();
                 if ((__fsr.frames % 240L) == 0L) {
@@ -1403,12 +1542,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.tocRcas();
             }
             return true;
-
         }
 
         // Fallback: OES -> upscaledTex, then RCAS on 2D
         if (!ensureFbo(dstW, dstH)) return false;
 
+        if (__fsr.enabled) {
+            // Set sampling description based on actual mode
+            if (__fsr.mode != null && __fsr.mode.contains("EASU")) {
+                __fsr.sampling = "OES->2D BLIT + EASU_2D + RCAS_2D";  // EASU + RCAS mode
+            } else {
+                __fsr.sampling = "OES->2D BLIT + RCAS_2D";  // RCAS-only mode
+            }
+        }
         // OES -> upscaledTex
         bindFramebufferCached(fbo);
         ensureViewport(dstW, dstH);
@@ -1428,7 +1574,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         setOesFilter((dstW > srcW || dstH > srcH) ? false : true);
 
+        // Only time EASU when mode explicitly contains "EASU"
+        boolean easuActive = __fsr.enabled && __fsr.mode != null && __fsr.mode.contains("EASU");
+
+        if (easuActive) {
+            __fsr.ticEasu();
+            easuGpuTimer.begin();
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        if (easuActive) {
+            easuGpuTimer.end();
+            __fsr.tocEasu();
+        }
 
         // RCAS: upscaledTex -> screen
         bindFramebufferCached(0);
@@ -1456,19 +1613,26 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             lastRcasSharp = s;
         }
 
-        if (__fsr.enabled) { __fsr.ticRcas(); }
+        if (__fsr.enabled) {
+            __fsr.ticRcas();
+            rcasGpuTimer.begin();
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        if (__fsr.enabled) { __fsr.tocRcas(); }
+        if (__fsr.enabled) {
+            rcasGpuTimer.end();
+            __fsr.tocRcas();
+        }
+
         // Keep NEAREST once enabled to avoid 2x glTexParameteri per frame.
         return true;
     }
 
-
-
-
-
     private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp, int preset) {
-        if (__fsr.enabled) { __fsr.sampling = "OES->2D LINEAR + RCAS_2D"; }
+        final boolean have2DEasu = (progEasuPerf2D != 0 || progEasuBalanced2D != 0 || progEasuQuality2D != 0);
+
+        if (__fsr.enabled) {
+            __fsr.sampling = have2DEasu ? "OES->2D COPY + EASU_2D + RCAS_2D" : "OES_EASU + RCAS_2D";
+        }
         if (!ensureFbo(dstW, dstH)) return false;
 
         if (preset < 0) preset = 0;
@@ -1476,27 +1640,44 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         final float s = clamp01(sharp);
 
+        // Stage OES -> 2D once per frame (src resolution). If staging fails, fall back to OES EASU.
+        boolean stagedOk = false;
+        if (have2DEasu) {
+            stagedOk = stageOesTo2D(srcW, srcH);
+        }
+
         // Select EASU program (0=Perf, 1=Balanced, 2=Quality)
         int easuProg = 0;
         int easuTexMatLoc = -1;
 
-        if (preset == 2 && progEasuQuality != 0) {
-            easuProg = progEasuQuality;
-            easuTexMatLoc = easuQ_uTexMat;
-        } else if (preset == 1 && progEasuBalanced != 0) {
-            easuProg = progEasuBalanced;
-            easuTexMatLoc = easuBal_uTexMat;
-        } else if (progEasuPerf != 0) {
-            easuProg = progEasuPerf;
-            easuTexMatLoc = easuPerf_uTexMat;
-        } else if (progEasuBalanced != 0) {
-            easuProg = progEasuBalanced;
-            easuTexMatLoc = easuBal_uTexMat;
-        } else if (progEasuQuality != 0) {
-            easuProg = progEasuQuality;
-            easuTexMatLoc = easuQ_uTexMat;
-        } else {
-            return false;
+        if (stagedOk) {
+            if (preset == 2 && progEasuQuality2D != 0) {
+                easuProg = progEasuQuality2D;
+                easuTexMatLoc = easuQ2D_uTexMat;
+            } else if (preset == 1 && progEasuBalanced2D != 0) {
+                easuProg = progEasuBalanced2D;
+                easuTexMatLoc = easuBal2D_uTexMat;
+            } else if (progEasuPerf2D != 0) {
+                easuProg = progEasuPerf2D;
+                easuTexMatLoc = easuPerf2D_uTexMat;
+            } else {
+                stagedOk = false;
+            }
+        }
+
+        if (!stagedOk) {
+            if (preset == 2 && progEasuQuality != 0) {
+                easuProg = progEasuQuality;
+                easuTexMatLoc = easuQ_uTexMat;
+            } else if (preset == 1 && progEasuBalanced != 0) {
+                easuProg = progEasuBalanced;
+                easuTexMatLoc = easuBal_uTexMat;
+            } else if (progEasuPerf != 0) {
+                easuProg = progEasuPerf;
+                easuTexMatLoc = easuPerf_uTexMat;
+            } else {
+                return false;
+            }
         }
 
         // EASU -> FBO
@@ -1506,23 +1687,26 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         UseProgram(easuProg);
         bindQuad(easuProg);
 
-        if (__fsr.enabled) {
-            __fsr.ticEasu();
-            easuGpuTimer.begin();
-        }
-
         activeTexture0();
-        if (lastTexture != oesTexId) {
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-            lastTexture = oesTexId;
+        if (stagedOk) {
+            bindTex2DCached(srcRgbTex);
+            setTex2DFilter(false); // LINEAR, to match previous behavior
+        } else {
+            if (lastTexture != oesTexId) {
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+                lastTexture = oesTexId;
+            }
+            setOesFilter(false);
         }
-        setOesFilter(false);
 
         if (easuTexMatLoc >= 0) {
             boolean needUpload;
-            if (easuProg == progEasuQuality) {
+            final boolean isQuality = (easuProg == (stagedOk ? progEasuQuality2D : progEasuQuality));
+            final boolean isBalanced = (easuProg == (stagedOk ? progEasuBalanced2D : progEasuBalanced));
+
+            if (isQuality) {
                 needUpload = (lastEasuQualityTexMatSerial != texMatrixSerial);
-            } else if (easuProg == progEasuBalanced) {
+            } else if (isBalanced) {
                 needUpload = (lastEasuBalTexMatSerial != texMatrixSerial);
             } else {
                 needUpload = (lastEasuPerfTexMatSerial != texMatrixSerial);
@@ -1531,18 +1715,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (needUpload) {
                 GLES20.glUniformMatrix4fv(easuTexMatLoc, 1, false, texMatrix, 0);
 
-                if (easuProg == progEasuQuality) {
-                    lastEasuQualityTexMatSerial = texMatrixSerial;
-                } else if (easuProg == progEasuBalanced) {
-                    lastEasuBalTexMatSerial = texMatrixSerial;
-                } else {
-                    lastEasuPerfTexMatSerial = texMatrixSerial;
-                }
+                if (isQuality) lastEasuQualityTexMatSerial = texMatrixSerial;
+                else if (isBalanced) lastEasuBalTexMatSerial = texMatrixSerial;
+                else lastEasuPerfTexMatSerial = texMatrixSerial;
             }
         }
 
+        if (__fsr.enabled) {
+            __fsr.ticEasu();
+            easuGpuTimer.begin();
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
         if (__fsr.enabled) {
             easuGpuTimer.end();
             __fsr.tocEasu();
@@ -1586,9 +1769,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         return true;
     }
-
-
-
 
     // ====== GL setup ======
     private boolean isGlReady() {
@@ -1642,6 +1822,105 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             curVpW = w;
             curVpH = h;
         }
+    }
+
+    private boolean ensureSrcStageFbo(int w, int h) {
+        if (w <= 0 || h <= 0) return false;
+
+        if (srcRgbTex != 0 && srcFbo != 0 && w == srcFboW && h == srcFboH) {
+            return true;
+        }
+
+        createOrResizeSrcStageFbo(w, h);
+        return (srcRgbTex != 0 && srcFbo != 0);
+    }
+
+    private void createOrResizeSrcStageFbo(int w, int h) {
+        // Delete only stage resources (avoid touching the upscaled FBO)
+        if (srcRgbTex != 0) {
+            if (lastTex2D == srcRgbTex) lastTex2D = -1;
+            if (lastTex2DFilterTexId == srcRgbTex) lastTex2DFilterTexId = -1;
+            tmpIntArray[0] = srcRgbTex;
+            GLES20.glDeleteTextures(1, tmpIntArray, 0);
+            srcRgbTex = 0;
+        }
+        if (srcFbo != 0) {
+            if (lastFbo == srcFbo) lastFbo = -1;
+            tmpIntArray[0] = srcFbo;
+            GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
+            srcFbo = 0;
+        }
+
+        GLES20.glGenFramebuffers(1, tmpIntArray, 0);
+        srcFbo = tmpIntArray[0];
+
+        GLES20.glGenTextures(1, tmpIntArray, 0);
+        srcRgbTex = tmpIntArray[0];
+
+        bindTex2DCached(srcRgbTex);
+        GLES20.glTexImage2D(
+                GLES20.GL_TEXTURE_2D, 0,
+                GLES20.GL_RGBA, w, h, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE,
+                null
+        );
+
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+
+        bindFramebufferCached(srcFbo);
+        GLES20.glFramebufferTexture2D(
+                GLES20.GL_FRAMEBUFFER,
+                GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D,
+                srcRgbTex,
+                0
+        );
+
+        if (!isFboComplete()) {
+            bindFramebufferCached(0);
+
+            if (srcRgbTex != 0) {
+                tmpIntArray[0] = srcRgbTex;
+                GLES20.glDeleteTextures(1, tmpIntArray, 0);
+                srcRgbTex = 0;
+            }
+            if (srcFbo != 0) {
+                tmpIntArray[0] = srcFbo;
+                GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
+                srcFbo = 0;
+            }
+            srcFboW = 0;
+            srcFboH = 0;
+            return;
+        }
+
+        srcFboW = w;
+        srcFboH = h;
+        bindFramebufferCached(0);
+    }
+
+    private boolean stageOesTo2D(int w, int h) {
+        if (progOesTo2D == 0 || oesTexId == 0) return false;
+        if (!ensureSrcStageFbo(w, h)) return false;
+
+        bindFramebufferCached(srcFbo);
+        ensureViewport(w, h);
+
+        UseProgram(progOesTo2D);
+        bindQuad(progOesTo2D);
+
+        activeTexture0();
+        if (lastTexture != oesTexId) {
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+            lastTexture = oesTexId;
+        }
+        setOesFilter(true); // NEAREST: 1:1 staging copy, cheaper and avoids unnecessary blur
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        return true;
     }
 
     private boolean ensureFbo(int w, int h) {
@@ -1718,18 +1997,33 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void destroyFbo() {
+        // Stage resources (OES -> 2D)
+        if (srcRgbTex != 0) {
+            if (lastTex2D == srcRgbTex) lastTex2D = -1;
+            if (lastTex2DFilterTexId == srcRgbTex) lastTex2DFilterTexId = -1;
+            tmpIntArray[0] = srcRgbTex;
+            GLES20.glDeleteTextures(1, tmpIntArray, 0);
+            srcRgbTex = 0;
+        }
+        if (srcFbo != 0) {
+            if (lastFbo == srcFbo) lastFbo = -1;
+            tmpIntArray[0] = srcFbo;
+            GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
+            srcFbo = 0;
+        }
+        srcFboW = 0;
+        srcFboH = 0;
+
+        // Upscale intermediate resources (EASU output)
         if (upscaledTex != 0) {
-            if (lastTex2D == upscaledTex) {
-                lastTex2D = -1;
-            }
+            if (lastTex2D == upscaledTex) lastTex2D = -1;
+            if (lastTex2DFilterTexId == upscaledTex) lastTex2DFilterTexId = -1;
             tmpIntArray[0] = upscaledTex;
             GLES20.glDeleteTextures(1, tmpIntArray, 0);
             upscaledTex = 0;
         }
         if (fbo != 0) {
-            if (lastFbo == fbo) {
-                lastFbo = -1;
-            }
+            if (lastFbo == fbo) lastFbo = -1;
             tmpIntArray[0] = fbo;
             GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
             fbo = 0;
@@ -1739,12 +2033,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         fboH = 0;
     }
 
-
     private void primeStaticUniforms() {
         // Samplers are constant: texture unit 0
         if (progBlit != 0 && blit_uTex >= 0) {
             GLES20.glUseProgram(progBlit);
             GLES20.glUniform1i(blit_uTex, 0);
+        }
+        if (progOesTo2D != 0 && oes2d_uTex >= 0) {
+            GLES20.glUseProgram(progOesTo2D);
+            GLES20.glUniform1i(oes2d_uTex, 0);
         }
 
         if (progEasuPerf != 0) {
@@ -1789,7 +2086,35 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
 
+        if (progEasuPerf2D != 0) {
+            GLES20.glUseProgram(progEasuPerf2D);
+            if (easuPerf2D_uTex >= 0) GLES20.glUniform1i(easuPerf2D_uTex, 0);
+            if (easuPerf2D_uInvSrcSize >= 0) {
+                GLES20.glUniform2f(easuPerf2D_uInvSrcSize,
+                        1.0f / Math.max(1, srcW),
+                        1.0f / Math.max(1, srcH));
+            }
+        }
 
+        if (progEasuBalanced2D != 0) {
+            GLES20.glUseProgram(progEasuBalanced2D);
+            if (easuBal2D_uTex >= 0) GLES20.glUniform1i(easuBal2D_uTex, 0);
+            if (easuBal2D_uInvSrcSize >= 0) {
+                GLES20.glUniform2f(easuBal2D_uInvSrcSize,
+                        1.0f / Math.max(1, srcW),
+                        1.0f / Math.max(1, srcH));
+            }
+        }
+
+        if (progEasuQuality2D != 0) {
+            GLES20.glUseProgram(progEasuQuality2D);
+            if (easuQ2D_uTex >= 0) GLES20.glUniform1i(easuQ2D_uTex, 0);
+            if (easuQ2D_uInvSrcSize >= 0) {
+                GLES20.glUniform2f(easuQ2D_uInvSrcSize,
+                        1.0f / Math.max(1, srcW),
+                        1.0f / Math.max(1, srcH));
+            }
+        }
 
         if (progRcas != 0 && rcas_uTex >= 0) {
             GLES20.glUseProgram(progRcas);
@@ -1920,9 +2245,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Shaders
             progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
             progBlit = linkProgram(progVs, FS_OES_BLIT);
+            progOesTo2D = linkProgram(progVs, FS_OES_TO_2D);
+
+            // EASU programs: keep original OES versions as fallback.
             progEasuPerf = linkProgram(progVs, FS_EASU_PERF);
             progEasuBalanced = linkProgram(progVs, FS_EASU_BALANCED);
             progEasuQuality = linkProgram(progVs, FS_EASU_QUALITY);
+            // 2D variants: identical math, but sample from sampler2D (used with OES->2D staging).
+            try { progEasuPerf2D = linkProgram(progVs, fsOesTo2D(FS_EASU_PERF)); } catch (Throwable t) { progEasuPerf2D = 0; }
+            try { progEasuBalanced2D = linkProgram(progVs, fsOesTo2D(FS_EASU_BALANCED)); } catch (Throwable t) { progEasuBalanced2D = 0; }
+            try { progEasuQuality2D = linkProgram(progVs, fsOesTo2D(FS_EASU_QUALITY)); } catch (Throwable t) { progEasuQuality2D = 0; }
             progRcas = linkProgram(progVs, FS_RCAS);
 
             // Try to link OES variant (single-pass RCAS) with specialized VS to precompute steps
@@ -1966,6 +2298,25 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             blit_uTex    = GLES20.glGetUniformLocation(progBlit, "uTex");
             blit_uTexMat = GLES20.glGetUniformLocation(progBlit, "uTexMatrix");
+            if (progOesTo2D != 0) {
+                oes2d_uTex = GLES20.glGetUniformLocation(progOesTo2D, "uTex");
+            }
+
+            if (progEasuPerf2D != 0) {
+                easuPerf2D_uTex        = GLES20.glGetUniformLocation(progEasuPerf2D, "uTex");
+                easuPerf2D_uInvSrcSize = GLES20.glGetUniformLocation(progEasuPerf2D, "uInvSrcSize");
+                easuPerf2D_uTexMat     = GLES20.glGetUniformLocation(progEasuPerf2D, "uTexMatrix");
+            }
+            if (progEasuBalanced2D != 0) {
+                easuBal2D_uTex        = GLES20.glGetUniformLocation(progEasuBalanced2D, "uTex");
+                easuBal2D_uInvSrcSize = GLES20.glGetUniformLocation(progEasuBalanced2D, "uInvSrcSize");
+                easuBal2D_uTexMat     = GLES20.glGetUniformLocation(progEasuBalanced2D, "uTexMatrix");
+            }
+            if (progEasuQuality2D != 0) {
+                easuQ2D_uTex        = GLES20.glGetUniformLocation(progEasuQuality2D, "uTex");
+                easuQ2D_uInvSrcSize = GLES20.glGetUniformLocation(progEasuQuality2D, "uInvSrcSize");
+                easuQ2D_uTexMat     = GLES20.glGetUniformLocation(progEasuQuality2D, "uTexMatrix");
+            }
             rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
             rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
             rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
@@ -2018,9 +2369,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
 
                 if (progBlit != 0) { GLES20.glDeleteProgram(progBlit); progBlit = 0; }
+                if (progOesTo2D != 0) { GLES20.glDeleteProgram(progOesTo2D); progOesTo2D = 0; }
                 if (progEasuPerf != 0) { GLES20.glDeleteProgram(progEasuPerf); progEasuPerf = 0; }
                 if (progEasuQuality != 0) { GLES20.glDeleteProgram(progEasuQuality); progEasuQuality = 0; }
                 if (progEasuBalanced != 0) { GLES20.glDeleteProgram(progEasuBalanced); progEasuBalanced = 0; }
+                if (progEasuPerf2D != 0) { GLES20.glDeleteProgram(progEasuPerf2D); progEasuPerf2D = 0; }
+                if (progEasuBalanced2D != 0) { GLES20.glDeleteProgram(progEasuBalanced2D); progEasuBalanced2D = 0; }
+                if (progEasuQuality2D != 0) { GLES20.glDeleteProgram(progEasuQuality2D); progEasuQuality2D = 0; }
                 if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
                 if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
             } else {
@@ -2162,10 +2517,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     private void setTex2DFilter(boolean toNearest) {
-        if (twoDNearest == toNearest) return;
+        // Filter state is per-texture object. Cache by currently bound GL_TEXTURE_2D on unit 0.
+        if (lastTex2D < 0) return;
+        if (lastTex2DFilterTexId == lastTex2D && twoDNearest == toNearest) return;
+
+        lastTex2DFilterTexId = lastTex2D;
         twoDNearest = toNearest;
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR);
+
+        final int filter = toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR;
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, filter);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, filter);
     }
 
 
@@ -2186,6 +2547,41 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static float clamp01(float v) {
         return Math.min(1f, Math.max(0f, v));
     }
+    private static int toScaled100(float v) {
+        return (int) (v * 100.0f + (v >= 0f ? 0.5f : -0.5f));
+    }
+
+    private static void appendFixed2Scaled100(StringBuilder sb, int scaled100) {
+        if (scaled100 < 0) {
+            sb.append('-');
+            scaled100 = -scaled100;
+        }
+        final int i = scaled100 / 100;
+        final int f = scaled100 % 100;
+        sb.append(i);
+        sb.append('.');
+        if (f < 10) sb.append('0');
+        sb.append(f);
+    }
+
+    private static void appendFixed2(StringBuilder sb, double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            sb.append(v);
+            return;
+        }
+        boolean neg = v < 0.0;
+        if (neg) {
+            sb.append('-');
+            v = -v;
+        }
+        long scaled = (long) (v * 100.0 + 0.5);
+        sb.append(scaled / 100);
+        sb.append('.');
+        long frac = scaled % 100;
+        if (frac < 10) sb.append('0');
+        sb.append(frac);
+    }
+
     private static float mapUiSharpToInternal(float ui, boolean nearNative) {
         float s = clamp01(ui);
         if (s <= 0.02f) return 0f;
@@ -2239,6 +2635,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         return cap * s;
     }
 
+    private static String fsOesTo2D(String oesFs) {
+        if (oesFs == null) return null;
+        String s = oesFs;
+        s = s.replace("#extension GL_OES_EGL_image_external_essl3 : require\n", "");
+        s = s.replace("precision highp samplerExternalOES;\n", "");
+        s = s.replace("samplerExternalOES", "sampler2D");
+        return s;
+    }
 
     private static int compileShader(int type, String src) {
         int sh = GLES20.glCreateShader(type);
@@ -2318,6 +2722,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  if (uDoGamma==1) c = pow(clamp(c,0.0,1.0), vec3(1.0/2.2));\n" +
                     "  fragColor = vec4(c, 1.0);\n" +
                     "}";
+
+    private static final String FS_OES_TO_2D =
+            "#version 300 es\n" +
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n" +
+                    "precision highp float;\n" +
+                    "in vec2 vUv;\n" +
+                    "layout(location=0) out vec4 fragColor;\n" +
+                    "uniform samplerExternalOES uTex;\n" +
+                    "void main(){ fragColor = vec4(texture(uTex, vUv).rgb, 1.0); }";
 
     // EASU minimal pass (OES -> 2D FBO)
     private static final String FS_EASU_QUALITY =
@@ -2980,7 +3393,34 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             // Choreographer frame time is in the System.nanoTime() timebase.
             // Keep it to drive eglPresentationTimeANDROID for tighter SurfaceFlinger phase alignment.
+            final long prevFrameTime = lastChoreoFrameTimeNs;
+
+            // Guard: ignore duplicate timestamps (rare but possible on some stacks)
+            if (prevFrameTime == frameTimeNanos) {
+                if (running.get() && useChoreoVsync) {
+                    Choreographer.getInstance().postFrameCallback(this);
+                }
+                return;
+            }
+
             lastChoreoFrameTimeNs = frameTimeNanos;
+
+            // Update EWMA interval (filter discontinuities)
+            if (prevFrameTime != 0L) {
+                final long interval = frameTimeNanos - prevFrameTime;
+                if (interval >= CHOREO_INTERVAL_MIN_NS && interval <= CHOREO_INTERVAL_MAX_NS) {
+                    // EWMA alpha=0.2: new = 0.8*old + 0.2*interval
+                    choreoFrameIntervalNs = (choreoFrameIntervalNs * 4 + interval) / 5;
+                } else {
+                    // Large discontinuity (resume/background/jank). Reset to default.
+                    choreoFrameIntervalNs = CHOREO_INTERVAL_DEFAULT_NS;
+                }
+            } else {
+                choreoFrameIntervalNs = CHOREO_INTERVAL_DEFAULT_NS;
+            }
+
+            // Compute adaptive drain budget for this tick (conservative).
+            choreoDrainBudget = calculateAdaptiveDrainConservative(choreoFrameIntervalNs);
 
             try {
                 // Late-latch: allow a tiny wait window to catch frames arriving just after vsync.
@@ -2994,6 +3434,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
     };
+
+
+    private int calculateAdaptiveDrainConservative(long estimatedIntervalNs) {
+        // 120/90Hz: keep updateTexImage loops minimal to stabilize frame time.
+        if (estimatedIntervalNs <= 14_000_000L) {
+            return 1;
+        }
+        // 60Hz-ish: allow at most 2 (still capped by CHOREO_MAX_DRAIN_UPDATETEXIMAGE).
+        return 2;
+    }
 
 
     private boolean ensureEglCurrent() {
