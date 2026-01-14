@@ -540,6 +540,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
     private final PreferenceConfiguration prefs;
+    // Optional context (application context) used for Display.getAppVsyncOffsetNanos() caching
+    private volatile android.content.Context appContext = null;
 
     // EGL
     private EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
@@ -689,6 +691,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Last Choreographer frame time (System.nanoTime() timebase), used for eglPresentationTimeANDROID.
     private volatile long lastChoreoFrameTimeNs = 0L;
+
+    // Cached app vsync offset (Display.getAppVsyncOffsetNanos) for phase alignment (matches MediaCodecDecoderRenderer).
+    private volatile long cachedAppVsyncOffsetNs = 0L;
+    private volatile long lastAppVsyncOffsetQueryNs = 0L;
+    private static final long APP_VSYNC_OFFSET_QUERY_INTERVAL_NS = 2_000_000_000L; // 2s
+
+    // Choreographer pacing state (matches MediaCodecDecoderRenderer Balanced ratio logic).
+    private volatile float lastPacingStreamFps = -1f;
+    private volatile float lastPacingDisplayHz = -1f;
+    private volatile double vsyncsPerFrame = 1.0;
+    private volatile double vsyncAccumulator = 0.0;
 
     private int pendingFrames = 0;
 
@@ -885,14 +898,17 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     public GlUpscaleRenderer(android.content.Context context, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
         this(windowSurface, srcW, srcH, prefs);
+        this.appContext = (context != null) ? context.getApplicationContext() : null;
         try { setPresentationSizeHintFromContext(context); } catch (Throwable ignored) {}
     }
+
 
     public GlUpscaleRenderer(Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
         this.windowSurfaceInput = windowSurface;
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
+        this.appContext = null;
     }
 
     /**
@@ -994,14 +1010,42 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             ht.start();
 
             renderHandler = new Handler(ht.getLooper());
+            renderHandler = new Handler(ht.getLooper());
             renderHandler.post(() -> {
                 renderTid = Process.myTid();
                 applyGlThreadPriorityNow();
                 try {
-                    // Reset Choreographer timing state
+                    // Reset Choreographer timing + pacing state (match MediaCodecDecoderRenderer behavior)
                     lastChoreoFrameTimeNs = 0L;
                     choreoFrameIntervalNs = CHOREO_INTERVAL_DEFAULT_NS;
                     choreoDrainBudget = 1;
+                    lastPacingStreamFps = -1f;
+                    lastPacingDisplayHz = -1f;
+                    vsyncsPerFrame = 1.0;
+                    vsyncAccumulator = 0.0;
+
+                    // Prime cached app vsync offset (optional; match MediaCodecDecoderRenderer)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        try {
+                            final android.content.Context ctx = appContext;
+                            android.view.WindowManager wm = null;
+                            if (ctx != null) {
+                                if (android.os.Build.VERSION.SDK_INT >= 23) {
+                                    wm = ctx.getSystemService(android.view.WindowManager.class);
+                                } else {
+                                    wm = (android.view.WindowManager) ctx.getSystemService(android.content.Context.WINDOW_SERVICE);
+                                }
+                            }
+                            if (wm != null && wm.getDefaultDisplay() != null) {
+                                cachedAppVsyncOffsetNs = wm.getDefaultDisplay().getAppVsyncOffsetNanos();
+                            } else {
+                                cachedAppVsyncOffsetNs = 0L;
+                            }
+                        } catch (Throwable ignored) {
+                            cachedAppVsyncOffsetNs = 0L;
+                        }
+                        lastAppVsyncOffsetQueryNs = System.nanoTime();
+                    }
 
                     Choreographer.getInstance().postFrameCallback(frameCallback);
                 } catch (Throwable t) {
@@ -3347,6 +3391,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         final String mode = prefs.videoUpscaleMode;
         // FSR bypass
         return (mode == null || "none".equals(mode));
+
     }
 
     @androidx.annotation.Keep
@@ -3459,23 +3504,51 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         public void doFrame(long frameTimeNanos) {
             if (!running.get() || !useChoreoVsync) return;
 
-            // Choreographer frame time is in the System.nanoTime() timebase.
-            // Keep it to drive eglPresentationTimeANDROID for tighter SurfaceFlinger phase alignment.
+            // Adjust by app vsync offset (cached; refresh occasionally) to match MediaCodecDecoderRenderer phase behavior.
+            long adjustedFrameTimeNs = frameTimeNanos;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                final long nowNsLocal = System.nanoTime();
+                if (cachedAppVsyncOffsetNs == 0L ||
+                        (nowNsLocal - lastAppVsyncOffsetQueryNs) >= APP_VSYNC_OFFSET_QUERY_INTERVAL_NS) {
+                    lastAppVsyncOffsetQueryNs = nowNsLocal;
+                    try {
+                        final android.content.Context ctx = appContext;
+                        android.view.WindowManager wm = null;
+                        if (ctx != null) {
+                            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                                wm = ctx.getSystemService(android.view.WindowManager.class);
+                            } else {
+                                wm = (android.view.WindowManager) ctx.getSystemService(android.content.Context.WINDOW_SERVICE);
+                            }
+                        }
+                        if (wm != null && wm.getDefaultDisplay() != null) {
+                            cachedAppVsyncOffsetNs = wm.getDefaultDisplay().getAppVsyncOffsetNanos();
+                        } else {
+                            cachedAppVsyncOffsetNs = 0L;
+                        }
+                    } catch (Throwable ignored) {
+                        cachedAppVsyncOffsetNs = 0L;
+                    }
+                }
+                adjustedFrameTimeNs = frameTimeNanos - cachedAppVsyncOffsetNs;
+            }
+
+            // Keep the adjusted timestamp to drive eglPresentationTimeANDROID for tighter SurfaceFlinger phase alignment.
             final long prevFrameTime = lastChoreoFrameTimeNs;
 
             // Guard: ignore duplicate timestamps (rare but possible on some stacks)
-            if (prevFrameTime == frameTimeNanos) {
+            if (prevFrameTime == adjustedFrameTimeNs) {
                 if (running.get() && useChoreoVsync) {
                     Choreographer.getInstance().postFrameCallback(this);
                 }
                 return;
             }
 
-            lastChoreoFrameTimeNs = frameTimeNanos;
+            lastChoreoFrameTimeNs = adjustedFrameTimeNs;
 
             // Update EWMA interval (filter discontinuities)
             if (prevFrameTime != 0L) {
-                final long interval = frameTimeNanos - prevFrameTime;
+                final long interval = adjustedFrameTimeNs - prevFrameTime;
                 if (interval >= CHOREO_INTERVAL_MIN_NS && interval <= CHOREO_INTERVAL_MAX_NS) {
                     // EWMA alpha=0.2: new = 0.8*old + 0.2*interval
                     choreoFrameIntervalNs = (choreoFrameIntervalNs * 4 + interval) / 5;
@@ -3487,14 +3560,54 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 choreoFrameIntervalNs = CHOREO_INTERVAL_DEFAULT_NS;
             }
 
-            // Compute adaptive drain budget for this tick (conservative).
+            // Conservative adaptive drain budget (kept), derived from measured Choreographer interval.
             choreoDrainBudget = calculateAdaptiveDrainConservative(choreoFrameIntervalNs);
 
-            try {
-                // Late-latch: allow a tiny wait window to catch frames arriving just after vsync.
-                renderFrame(true);
-            } catch (Throwable t) {
-                LimeLog.warning("renderFrame error: " + t);
+            // Match MediaCodecDecoderRenderer's ratio-based "render some vsyncs only" policy.
+            final float displayHz =
+                    (choreoFrameIntervalNs > 0L) ? (1_000_000_000f / (float) choreoFrameIntervalNs) : 60f;
+            final float streamFps =
+                    (prefs != null && prefs.fps > 0) ? (float) prefs.fps : displayHz;
+
+            if (Math.abs(streamFps - lastPacingStreamFps) > 0.01f ||
+                    Math.abs(displayHz - lastPacingDisplayHz) > 0.01f) {
+                lastPacingStreamFps = streamFps;
+                lastPacingDisplayHz = displayHz;
+
+                vsyncAccumulator = 0.0;
+                if (streamFps > 0.01f && displayHz > 0.01f) {
+                    vsyncsPerFrame = (double) displayHz / (double) streamFps;
+                } else {
+                    vsyncsPerFrame = 1.0;
+                }
+
+                // Clamp to sane bounds
+                if (vsyncsPerFrame < 0.25) vsyncsPerFrame = 0.25;
+                if (vsyncsPerFrame > 8.0) vsyncsPerFrame = 8.0;
+            }
+
+            boolean shouldRenderThisVsync = true;
+
+            // If stream is slower than display, distribute frames across vsyncs (e.g., 90Hz/60fps -> 1,2,1,2...).
+            if (vsyncsPerFrame > 1.02) {
+                vsyncAccumulator += 1.0;
+                if (vsyncAccumulator + 1e-9 < vsyncsPerFrame) {
+                    shouldRenderThisVsync = false;
+                } else {
+                    vsyncAccumulator -= vsyncsPerFrame;
+                }
+            } else {
+                // Stream >= display: render every vsync.
+                vsyncAccumulator = 0.0;
+            }
+
+            if (shouldRenderThisVsync) {
+                try {
+                    // Late-latch: allow a tiny wait window to catch frames arriving just after vsync.
+                    renderFrame(true);
+                } catch (Throwable t) {
+                    LimeLog.warning("renderFrame error: " + t);
+                }
             }
 
             if (running.get() && useChoreoVsync) {
