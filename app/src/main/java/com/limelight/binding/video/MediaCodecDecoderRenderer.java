@@ -6,7 +6,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import org.jcodec.codecs.h264.H264Utils;
@@ -674,9 +674,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     //    private long lastNetDataNum;
     private volatile long lastNetDataNum;
-    private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
+
+    // Balanced pacing queue: bounded + allocation-free per-frame (no LinkedBlockingQueue Node allocations).
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
+    private final ArrayBlockingQueue<Integer> outputBufferQueue =
+            new ArrayBlockingQueue<>(OUTPUT_BUFFER_QUEUE_LIMIT);
+
     private long lastRenderedFrameTimeNanos;
+
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
     // ---- Balanced (Choreographer) pacing state ----
@@ -1749,7 +1754,7 @@ try {
         if (choreographerHandlerThread == null) {
             choreographerHandlerThread = new HandlerThread(
                     "Video - Choreographer",
-                    Process.THREAD_PRIORITY_URGENT_DISPLAY
+                    Process.THREAD_PRIORITY_DISPLAY
             );
             choreographerHandlerThread.start();
             choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
@@ -2027,8 +2032,11 @@ try {
                                     } catch (Throwable ignored) { }
                                 }
 
-                                outputBufferQueue.offer(lastIndex);
-
+                                if (!outputBufferQueue.offer(lastIndex)) {
+                                    // Should be rare (single producer), but never leak output buffers.
+                                    try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
+                                    catch (Throwable ignored) { }
+                                }
 
                                 final boolean eos =
                                         (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
@@ -4274,7 +4282,7 @@ try {
 
         final int rendererPrio = desiredRendererOsPriority(pacing);
         final int codecPrio = desiredCodecCallbackOsPriority(pacing);
-        final int choreoPrio = Process.THREAD_PRIORITY_URGENT_DISPLAY;
+        final int choreoPrio = rendererPrio;
 
         // Renderer (OS)
         final int tid = rendererTid;
