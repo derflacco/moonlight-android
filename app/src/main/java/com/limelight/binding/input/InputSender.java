@@ -5,6 +5,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Process;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.io.Closeable;
@@ -34,8 +35,6 @@ public final class InputSender implements Closeable {
     private final HandlerThread thread;
     private volatile Handler handler;
     private final AtomicBoolean stopped = new AtomicBoolean(false);
-    private final ReentrantLock shutdownLock = new ReentrantLock();
-    private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
 
     /** Backwards-compatible ctor kept for existing call sites */
     public InputSender(Object unused) {
@@ -122,16 +121,19 @@ public final class InputSender implements Closeable {
         if (h == null) return false;
 
         try {
-            if (delayed) {
-                return h.postDelayed(r, delayMs);
-            } else {
-                return h.post(r);
+            // If we're already on the input looper and not delayed, run inline.
+            if (!delayed && Looper.myLooper() == h.getLooper()) {
+                r.run();
+                return true;
             }
+
+            return delayed ? h.postDelayed(r, delayMs) : h.post(r);
         } catch (Throwable t) {
             Log.w(TAG, "post operation failed", t);
             return false;
         }
     }
+
 
     /** Remove specific pending callbacks */
     public void removeCallbacks(Runnable r) {
@@ -164,21 +166,13 @@ public final class InputSender implements Closeable {
      * Idempotent and safe to call from any thread.
      */
     public void shutdown() {
-        // Use atomic check to avoid lock contention in common case
-        if (!isShuttingDown.compareAndSet(false, true)) {
-            return; // Already shutting down or shut down
+        // Single gate: only the first caller performs shutdown.
+        if (!stopped.compareAndSet(false, true)) {
+            return;
         }
-
-        stopped.set(true);
-
-        // Use lock to ensure orderly shutdown
-        shutdownLock.lock();
-        try {
-            performShutdown();
-        } finally {
-            shutdownLock.unlock();
-        }
+        performShutdown();
     }
+
 
     private void performShutdown() {
         final Handler currentHandler = handler;
@@ -212,43 +206,29 @@ public final class InputSender implements Closeable {
             return;
         }
 
-        if (!thread.isAlive()) {
+        if (!thread.isAlive()) return;
+
+        final long deadline = SystemClock.uptimeMillis() + SHUTDOWN_TIMEOUT_MS;
+
+        try {
+            while (thread.isAlive()) {
+                long remaining = deadline - SystemClock.uptimeMillis();
+                if (remaining <= 0) break;
+
+                thread.join(Math.min(remaining, SHUTDOWN_CHECK_INTERVAL_MS));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.w(TAG, "Shutdown interrupted, exiting join loop");
             return;
         }
 
-        final long deadline = System.currentTimeMillis() + SHUTDOWN_TIMEOUT_MS;
-
-        try {
-            long remaining;
-            while ((remaining = deadline - System.currentTimeMillis()) > 0) {
-                try {
-                    thread.join(Math.min(remaining, SHUTDOWN_CHECK_INTERVAL_MS));
-                    // Check if thread actually terminated after the join
-                    if (!thread.isAlive()) {
-                        return; // Thread terminated successfully
-                    }
-                } catch (InterruptedException e) {
-                    // If interrupted during shutdown, stop waiting immediately
-                    // Don't keep retrying as we are being told to stop NOW
-                    Thread.currentThread().interrupt();
-                    Log.w(TAG, "Shutdown interrupted, exiting join loop");
-                    return; // <--- IMPORTANTE: Esci subito
-                }
-            }
-
-            // If we get here, timeout occurred
+        if (thread.isAlive()) {
             Log.w(TAG, "Thread failed to terminate within timeout, interrupting...");
-            try {
-                thread.interrupt();
-            } catch (SecurityException e) {
-                Log.e(TAG, "No permission to interrupt thread", e);
-            }
-        } finally {
-            // Not strictly needed if we return immediately on interrupt,
-            // but kept as safety net if logic changes.
-            // if (Thread.currentThread().isInterrupted()) ...
+            try { thread.interrupt(); } catch (Throwable ignored) {}
         }
     }
+
 
     /** Get the underlying handler for advanced operations (use with caution) */
     public Handler getHandler() {
