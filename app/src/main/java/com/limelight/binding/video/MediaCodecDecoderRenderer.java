@@ -12,7 +12,6 @@ import java.util.concurrent.locks.LockSupport;
 import org.jcodec.codecs.h264.H264Utils;
 import org.jcodec.codecs.h264.io.model.SeqParameterSet;
 import org.jcodec.codecs.h264.io.model.VUIParameters;
-import android.util.LongSparseArray;
 import com.limelight.BuildConfig;
 import com.limelight.Game;
 import com.limelight.LimeLog;
@@ -22,7 +21,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.TrafficStatsHelper;
-
+import java.util.concurrent.atomic.AtomicLongArray;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
@@ -279,14 +278,101 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private CpuWarmUp cpuWarmUp;
     private boolean cpuWarmUpStarted = false;
 
-// stats
-// Decode latency tracking: map PTS(us) -> enqueue time (ns)
+    // stats
+
+    // Decode latency tracking: PTS(us) -> enqueue time (ns), allocation-free (no boxing / no sparse map).
     private static final long LATENCY_TRACKING_CLEANUP_THRESHOLD_NS = 30_000_000_000L; // 30 seconds
-    private static final int LATENCY_TRACKING_MAX_SIZE = 1000; // Maximum entries in tracking array
+    private static final int LATENCY_TRACKING_MAX_SIZE = 384; // ring capacity (small = bounded scan cost)
     private long lastLatencyTrackingCleanupNs = 0L;
 
-    private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>(64);
-    private final Object enqueueNsLock = new Object();
+    private final PtsEnqueueTracker enqueueNsByPtsUs = new PtsEnqueueTracker(LATENCY_TRACKING_MAX_SIZE);
+
+    // PTS->enqueueNs tracker: fixed-size ring backed by atomic arrays (no per-frame allocations).
+    // put() publishes a slot by writing enqNs first, then the pts key last.
+    private static final class PtsEnqueueTracker {
+
+        private static final long EMPTY_KEY = Long.MIN_VALUE;
+
+        private final AtomicLongArray ptsUs;
+        private final AtomicLongArray enqNs;
+        private final int cap;
+        private final AtomicInteger head = new AtomicInteger(0);
+
+        PtsEnqueueTracker(int capacity) {
+            cap = Math.max(8, capacity);
+            ptsUs = new AtomicLongArray(cap);
+            enqNs = new AtomicLongArray(cap);
+            clear();
+        }
+
+        void clear() {
+            for (int i = 0; i < cap; i++) {
+                ptsUs.set(i, EMPTY_KEY);
+                enqNs.set(i, 0L);
+            }
+            head.set(0);
+        }
+
+        void put(long pts, long ns) {
+            int idx = head.getAndIncrement();
+            if (idx >= cap) {
+                // Wrap head in a bounded way (racy is fine, overwrite behavior is allowed).
+                // Bring idx back in range without expensive modulo in the common case.
+                idx = idx % cap;
+                head.set(idx + 1);
+            }
+
+            // Publish: write value first, then key last.
+            enqNs.set(idx, ns);
+            ptsUs.set(idx, pts);
+        }
+
+        long take(long pts) {
+            // Scan backwards from the newest index to maximize hit probability.
+            int h = head.get();
+            if (h >= cap) h = h % cap;
+
+            int i = h;
+            for (int n = 0; n < cap; n++) {
+                i--;
+                if (i < 0) i = cap - 1;
+
+                final long k = ptsUs.get(i);
+                if (k == pts) {
+                    final long v = enqNs.get(i);
+                    // Claim the slot
+                    if (ptsUs.compareAndSet(i, pts, EMPTY_KEY)) {
+                        return v;
+                    }
+                    // If CAS fails, someone else removed/overwrote; continue scanning.
+                }
+            }
+            return Long.MIN_VALUE;
+        }
+
+        void cleanupOld(long nowNs, long thresholdNs) {
+            for (int i = 0; i < cap; i++) {
+                final long k = ptsUs.get(i);
+                if (k != EMPTY_KEY) {
+                    final long v = enqNs.get(i);
+                    if ((nowNs - v) > thresholdNs) {
+                        // Best-effort: clear only if key unchanged.
+                        ptsUs.compareAndSet(i, k, EMPTY_KEY);
+                    }
+                }
+            }
+        }
+
+        int size() {
+            int count = 0;
+            for (int i = 0; i < cap; i++) {
+                if (ptsUs.get(i) != EMPTY_KEY) count++;
+            }
+            return count;
+        }
+    }
+
+
 
     // Update stats using both decode time (enqueue->dequeue) and end-to-end latency (uptime - PTS)
 
@@ -295,20 +381,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void updateDecodeLatencyStats(long presentationTimeUs, long endNs) {
-        Long enqNs;
+        final long enqNs = enqueueNsByPtsUs.take(presentationTimeUs);
 
-        // Thread-safe retrieval and removal
-        synchronized (enqueueNsLock) {
-            enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
-            if (enqNs != null) {
-                enqueueNsByPtsUs.remove(presentationTimeUs);
-            }
-        }
-
-        if (enqNs == null) {
+        if (enqNs == Long.MIN_VALUE) {
             activeWindowVideoStats.decoderMisses++;
             return;
         }
+
         // Use provided end time instead of current System.nanoTime()
         final long decNs = endNs - enqNs;
         final long decMs = decNs / 1_000_000L;
@@ -330,40 +409,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+
     // cleanup method
     private void cleanupOldLatencyTrackingEntries() {
-        synchronized (enqueueNsLock) {
-            long nowNs = System.nanoTime();
-            if (nowNs - lastLatencyTrackingCleanupNs < LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
-                return;
-            }
-
-            int initialSize = enqueueNsByPtsUs.size();
-
-            // Remove entries older than 30 seconds based on enqueue time
-            for (int i = enqueueNsByPtsUs.size() - 1; i >= 0; i--) {
-                Long enqueueNs = enqueueNsByPtsUs.valueAt(i);
-                if (enqueueNs != null && (nowNs - enqueueNs) > LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
-                    enqueueNsByPtsUs.removeAt(i);
-                }
-            }
-
-            // Enforce maximum size limit (defensive against accumulation)
-            enforceLatencyTrackingSizeLimit();
-
-            lastLatencyTrackingCleanupNs = nowNs;
+        final long nowNs = System.nanoTime();
+        if (nowNs - lastLatencyTrackingCleanupNs < LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
+            return;
         }
+
+        enqueueNsByPtsUs.cleanupOld(nowNs, LATENCY_TRACKING_CLEANUP_THRESHOLD_NS);
+        lastLatencyTrackingCleanupNs = nowNs;
+
     }
+
     // enforce size limits
     private void enforceLatencyTrackingSizeLimit() {
-        synchronized (enqueueNsLock) {
-            if (enqueueNsByPtsUs.size() > LATENCY_TRACKING_MAX_SIZE) {
-                int excess = enqueueNsByPtsUs.size() - LATENCY_TRACKING_MAX_SIZE;
-                for (int i = 0; i < excess; i++) {
-                    enqueueNsByPtsUs.removeAt(0);
-                }
-            }
-        }
+        // No-op: tracker is fixed-size ring (overwrite-on-full).
     }
 
     // end stats //
@@ -457,7 +518,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo =
             new android.util.SparseArray<>(16);
 
+    // Async: output-ready timestamp (ns) per output index, to make decode latency comparable vs sync.
+    // Guarded by synchronized(asyncOutInfo) together with asyncOutInfo (same index lifecycle).
+    private final android.util.SparseLongArray asyncOutReadyNs =
+            new android.util.SparseLongArray(16);
+
+
+    // Async: ready timestamp (ns) for the last index returned by nextOutputIndex().
+    private long lastAsyncOutputReadyNs = 0L;
+
     private boolean preferLowerDelays = false; // Will be set based on frame pacing mode
+
 
     // ---- Async BufferInfo pool (avoid per-frame allocations) ----
     private final java.util.ArrayDeque<android.media.MediaCodec.BufferInfo> asyncInfoPool =
@@ -489,6 +560,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             synchronized (asyncOutInfo) {
                 bi = asyncOutInfo.get(index);
                 asyncOutInfo.remove(index);
+                asyncOutReadyNs.delete(index);
             }
         } catch (Throwable ignored) {}
 
@@ -1187,9 +1259,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         coldCfg.ppsBuffers.clear();
 
 // Clear decode latency tracking when decoder is reconfigured
-        synchronized (enqueueNsLock) {
-            enqueueNsByPtsUs.clear();
-        }
+        enqueueNsByPtsUs.clear();
         csdDirty = false;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -1403,11 +1473,10 @@ try {
                 asyncOutputQueue.clear();
                 synchronized (asyncOutInfo) {
                     asyncOutInfo.clear();
+                    asyncOutReadyNs.clear();
                 }
                 // Clear decode latency tracking during codec recovery
-                synchronized (enqueueNsLock) {
-                    enqueueNsByPtsUs.clear();
-                }
+                enqueueNsByPtsUs.clear();
                 csdDirty = false;
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
@@ -1903,7 +1972,10 @@ try {
                                     (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
 
                         // Track dequeue time for the newest output buffer (latest-only)
-                            long lastDequeueTimeNs = System.nanoTime();
+                            final long nowNsLocal = System.nanoTime();
+                            long lastDequeueTimeNs = (useAsyncCodec && lastAsyncOutputReadyNs != 0L)
+                                    ? lastAsyncOutputReadyNs
+                                    : nowNsLocal;
 
                         // Measure decode latency for the first dequeued buffer too
                             try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
@@ -1922,7 +1994,10 @@ try {
                                     while (drained < drainSoftCap &&
                                             (outIndex = nextOutputIndex(info, 0)) >= 0) {
 
-                                        final long thisDequeueTimeNs = System.nanoTime();
+                                        final long thisDequeueTimeNs = (useAsyncCodec && lastAsyncOutputReadyNs != 0L)
+                                                ? lastAsyncOutputReadyNs
+                                                : nowNsLocal;
+
 
                                         try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
                                         catch (Throwable ignored) { }
@@ -1968,7 +2043,10 @@ try {
                                 } else {
                                     // Existing behavior for other pacing modes
                                     while ((outIndex = nextOutputIndex(info, runtimeOutputDrainTimeoutUs)) >= 0) {
-                                        final long thisDequeueTimeNs = System.nanoTime();
+                                        final long thisDequeueTimeNs = (useAsyncCodec && lastAsyncOutputReadyNs != 0L)
+                                                ? lastAsyncOutputReadyNs
+                                                : nowNsLocal;
+
 
                                         try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
                                         catch (Throwable ignored) { }
@@ -2246,9 +2324,7 @@ try {
         drainOutputBufferQueueNoRender();
 
         // Clear decode latency tracking to prevent memory leaks
-        synchronized (enqueueNsLock) {
-            enqueueNsByPtsUs.clear();
-        }
+        enqueueNsByPtsUs.clear();
 
         // Stop CPU warm-up
         if (cpuWarmUp != null && cpuWarmUpStarted) {
@@ -2549,9 +2625,7 @@ try {
             } catch (Throwable ignored) {}
         }
 
-        synchronized (enqueueNsLock) {
-            enqueueNsByPtsUs.clear();
-        }
+        enqueueNsByPtsUs.clear();
 
         // Final async cleanup
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
@@ -2630,9 +2704,7 @@ try {
     public void cleanup() {
 
         // Clear decode latency tracking to prevent memory leaks
-        synchronized (enqueueNsLock) {
-            enqueueNsByPtsUs.clear();
-        }
+        enqueueNsByPtsUs.clear();
 
         // Ensure async resources are released
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
@@ -2713,9 +2785,7 @@ try {
             // Discard negative or distant future timestamps.
                 long currentTimeUs = System.currentTimeMillis() * 1000L;
                 if (timestampUs > 0 && timestampUs < (currentTimeUs + 3600_000_000L)) {
-                    synchronized (enqueueNsLock) {
-                        enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
-                    }
+                    enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
                 }
             }
 
@@ -3788,15 +3858,25 @@ try {
     // Return next output index and fill outInfo (async => from queue; sync => dequeueOutputBuffer)
     private int nextOutputIndex(android.media.MediaCodec.BufferInfo outInfo, int timeoutUs) {
         if (!useAsyncCodec || videoDecoder == null) {
+            lastAsyncOutputReadyNs = 0L;
             return videoDecoder.dequeueOutputBuffer(outInfo, timeoutUs);
         }
+
         try {
             Integer idx = asyncOutputQueue.poll(timeoutUs, java.util.concurrent.TimeUnit.MICROSECONDS);
-            if (idx == null) return -1;
+            if (idx == null) {
+                lastAsyncOutputReadyNs = 0L;
+                return -1;
+            }
 
             android.media.MediaCodec.BufferInfo bi;
+            long readyNs;
+
             synchronized (asyncOutInfo) {
                 bi = asyncOutInfo.get(idx);
+                readyNs = asyncOutReadyNs.get(idx, 0L);
+                asyncOutReadyNs.delete(idx);
+
                 if (bi != null) {
                     if (outInfo != null) {
                         outInfo.set(bi.offset, bi.size, bi.presentationTimeUs, bi.flags);
@@ -3806,15 +3886,19 @@ try {
             }
 
             if (bi == null) {
-                // Info missing: safest is to release the output buffer (no-render) to avoid codec stalls.
-                try { videoDecoder.releaseOutputBuffer(idx, false); } catch (Throwable ignored) {}
+                lastAsyncOutputReadyNs = 0L;
+                // Info missing: safest is to release the output buffer (no-render) to avoid leaks
+                try { videoDecoder.releaseOutputBuffer(idx, false); } catch (Throwable ignored) { }
                 return -1;
             }
+
+            lastAsyncOutputReadyNs = readyNs;
 
             recycleAsyncInfo(bi);
             return idx;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            lastAsyncOutputReadyNs = 0L;
             return -1;
         }
     }
@@ -3863,9 +3947,11 @@ try {
                     copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
 
                     try {
-                        // Store info for the consumer thread
+                        // Store info for the consumer thread (also capture output-ready timestamp for latency stats)
+                        final long readyNs = System.nanoTime();
                         synchronized (asyncOutInfo) {
                             asyncOutInfo.put(index, copy);
+                            asyncOutReadyNs.put(index, readyNs);
                         }
 
                         // LFR/ULL path: keep only latest buffer for minimal latency
@@ -3970,6 +4056,7 @@ try {
             // Clear asyncOutInfo with synchronization
             synchronized (asyncOutInfo) {
                 try { asyncOutInfo.clear(); } catch (Throwable ignored) {}
+                try { asyncOutReadyNs.clear(); } catch (Throwable ignored) {}
             }
 
             // Safely stop and wait for callback thread
