@@ -788,6 +788,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile double vsyncsPerFrame = 1.0;
     private volatile double vsyncAccumulator = 0.0;
 
+    private final Runnable repostChoreographerCallback = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
+            } catch (Throwable ignored) { }
+        }
+    };
+
     private int numSpsIn;
     private int numPpsIn;
     private int numVpsIn;
@@ -1839,14 +1848,14 @@ try {
 
         // Request another callback for next frame (unless stopped concurrently).
         if (!stopping && choreographerHandler != null && choreographerHandlerThread != null) {
-            choreographerHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
-                    } catch (Throwable ignored) { }
-                }
-            });
+            // Avoid per-frame allocations: repost directly when already on the Choreographer looper.
+            if (Looper.myLooper() == choreographerHandler.getLooper()) {
+                try {
+                    Choreographer.getInstance().postFrameCallback(this);
+                } catch (Throwable ignored) { }
+            } else {
+                choreographerHandler.post(repostChoreographerCallback);
+            }
         }
     }
 
@@ -1873,15 +1882,11 @@ try {
         vsyncAccumulator = 0.0;
 
         // Start callbacks (no appVsyncOffset adjustment)
-        choreographerHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
-                } catch (Throwable ignored) {
-                }
-            }
-        });
+        if (choreographerHandler != null) {
+            // Avoid enqueueing multiple reposts if startChoreographerThread() is called repeatedly.
+            choreographerHandler.removeCallbacks(repostChoreographerCallback);
+            choreographerHandler.post(repostChoreographerCallback);
+        }
     }
 
 
@@ -1900,6 +1905,10 @@ try {
         h.post(new Runnable() {
             @Override
             public void run() {
+                try {
+                    h.removeCallbacks(repostChoreographerCallback);
+                } catch (Throwable ignored) { }
+
                 try {
                     Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
                 } catch (Throwable ignored) {
