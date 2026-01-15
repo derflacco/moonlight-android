@@ -10,33 +10,28 @@ import android.util.Log;
 
 import java.io.Closeable;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Lightweight input task scheduler with a dedicated high-priority HandlerThread.
- * - Zero GC churn on the hot path (no allocations beyond the Runnable provided)
- * - Backpressure-aware: drops posts after shutdown
- * - Safe shutdown with quitSafely() + join()
- * - Thread-safe operations with reduced synchronization overhead
- *
- * Backwards compatible with the old single-argument constructor used by callers.
+ * High-performance input task scheduler with dedicated thread.
+ * Zero GC overhead on hot path, thread-safe with minimal synchronization.
  */
 public final class InputSender implements Closeable {
     private static final String TAG = "InputSender";
 
-    // Sensible defaults for latency-sensitive input work
+    // Thread priorities for latency-sensitive work
     public static final int PRIORITY_URGENT_INPUT = Process.THREAD_PRIORITY_URGENT_DISPLAY;
     public static final int PRIORITY_HIGH_INPUT   = Process.THREAD_PRIORITY_DISPLAY;
 
-    // Shutdown timeout
+    // Shutdown configuration
     private static final long SHUTDOWN_TIMEOUT_MS = 500L;
     private static final long SHUTDOWN_CHECK_INTERVAL_MS = 50L;
 
-    private final HandlerThread thread;
+    // Optimized: volatile handler for low-latency access
     private volatile Handler handler;
+    private final HandlerThread thread;
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
-    /** Backwards-compatible ctor kept for existing call sites */
+    // Backwards compatibility
     public InputSender(Object unused) {
         this("InputSender", PRIORITY_HIGH_INPUT);
     }
@@ -46,26 +41,29 @@ public final class InputSender implements Closeable {
             name = "InputSender";
         }
 
-        // Create worker with requested priority; HandlerThread applies it in run()
+        // Create high-priority worker thread
         HandlerThread ht = new HandlerThread(name, priority);
         ht.start();
 
-        // Ensure the Looper is ready; mTid is now valid
-        Looper looper = ht.getLooper(); // blocks until looper is prepared
+        // Get looper (blocks until ready)
+        Looper looper = ht.getLooper();
 
-        // Best-effort: set priority by TID (covers OEMs ignoring HandlerThread.mPriority)
+        // Set thread priority using thread ID
         try {
             Process.setThreadPriority(ht.getThreadId(), priority);
         } catch (Throwable t) {
-            Log.w(TAG, "setThreadPriority(TID) failed; will set inside thread", t);
+            Log.w(TAG, "setThreadPriority failed", t);
         }
 
-        // Prefer async handler to bypass sync barriers (API 28+)
-        Handler h = (Build.VERSION.SDK_INT >= 28)
-                ? Handler.createAsync(looper)
-                : new Handler(looper);
+        // Use async handler on API 28+ for better throughput
+        Handler h;
+        if (Build.VERSION.SDK_INT >= 28) {
+            h = Handler.createAsync(looper);
+        } else {
+            h = new Handler(looper);
+        }
 
-        // Fallback: enforce the same requested priority from within the HandlerThread
+        // Enforce priority from within thread (fallback)
         h.postAtFrontOfQueue(() -> {
             try {
                 Process.setThreadPriority(priority);
@@ -76,12 +74,10 @@ public final class InputSender implements Closeable {
         this.handler = h;
     }
 
-    /** True if the worker looper is alive and accepting work */
+    /** Check if worker is alive and accepting work */
     public boolean isRunning() {
-        return !stopped.get() && isLooperAlive();
-    }
+        if (stopped.get()) return false;
 
-    private boolean isLooperAlive() {
         final Handler h = handler;
         if (h == null) return false;
 
@@ -89,12 +85,13 @@ public final class InputSender implements Closeable {
         return looper != null && looper.getThread().isAlive();
     }
 
-    /** Post a task; returns false if the worker is stopped or unavailable */
+
+    /** Post task; returns false if stopped or unavailable */
     public boolean post(Runnable r) {
         return postInternal(r, false, 0);
     }
 
-    /** Post a task at the front of the queue for ultra-low-latency events */
+    /** Post task at front of queue for minimum latency */
     public boolean postAtFront(Runnable r) {
         if (r == null || stopped.get()) return false;
 
@@ -104,12 +101,15 @@ public final class InputSender implements Closeable {
         try {
             return h.postAtFrontOfQueue(r);
         } catch (Throwable t) {
-            Log.w(TAG, "postAtFront() failed", t);
+            // Minimal logging in hot path
+            if (Log.isLoggable(TAG, Log.DEBUG)) {
+                Log.d(TAG, "postAtFront failed", t);
+            }
             return false;
         }
     }
 
-    /** Post a delayed task; returns false after shutdown */
+    /** Post delayed task */
     public boolean postDelayed(Runnable r, long delayMs) {
         return postInternal(r, true, Math.max(0L, delayMs));
     }
@@ -121,19 +121,15 @@ public final class InputSender implements Closeable {
         if (h == null) return false;
 
         try {
-            // If we're already on the input looper and not delayed, run inline.
-            if (!delayed && Looper.myLooper() == h.getLooper()) {
-                r.run();
-                return true;
-            }
-
             return delayed ? h.postDelayed(r, delayMs) : h.post(r);
         } catch (Throwable t) {
-            Log.w(TAG, "post operation failed", t);
+            // Minimal logging in hot path
+            if (Log.isLoggable(TAG, Log.DEBUG)) {
+                Log.d(TAG, "post operation failed", t);
+            }
             return false;
         }
     }
-
 
     /** Remove specific pending callbacks */
     public void removeCallbacks(Runnable r) {
@@ -141,44 +137,36 @@ public final class InputSender implements Closeable {
 
         final Handler h = handler;
         if (h != null) {
-            try {
+            try { // Safety against race conditions
                 h.removeCallbacks(r);
-            } catch (Throwable t) {
-                Log.w(TAG, "removeCallbacks() failed", t);
-            }
+            } catch (Throwable ignored) {}
         }
     }
 
-    /** Drop any queued callbacks to prevent stale input after focus loss */
+    /** Remove all queued callbacks */
     public void cancelAll() {
         final Handler h = handler;
         if (h != null) {
-            try {
+            try { // Safety against race conditions
                 h.removeCallbacksAndMessages(null);
-            } catch (Throwable t) {
-                Log.w(TAG, "cancelAll() failed", t);
-            }
+            } catch (Throwable ignored) {}
         }
     }
 
-    /**
-     * Gracefully stop the worker thread and wait briefly for it to exit.
-     * Idempotent and safe to call from any thread.
-     */
+    /** Gracefully stop worker thread */
     public void shutdown() {
-        // Single gate: only the first caller performs shutdown.
+        // Single atomic gate - only first caller proceeds
         if (!stopped.compareAndSet(false, true)) {
             return;
         }
         performShutdown();
     }
 
-
     private void performShutdown() {
         final Handler currentHandler = handler;
-        final Looper looper = (currentHandler != null) ? currentHandler.getLooper() : null;
+        final Looper looper = currentHandler != null ? currentHandler.getLooper() : null;
 
-        // Prevent any new callbacks from being enqueued
+        // Prevent new callbacks
         cancelAll();
         handler = null;
 
@@ -186,23 +174,21 @@ public final class InputSender implements Closeable {
             try {
                 looper.quitSafely();
             } catch (Throwable t) {
-                Log.w(TAG, "quitSafely() failed, trying quit()", t);
+                Log.w(TAG, "quitSafely failed, trying quit", t);
                 try {
                     looper.quit();
                 } catch (Throwable t2) {
-                    Log.e(TAG, "quit() also failed", t2);
+                    Log.e(TAG, "quit also failed", t2);
                 }
             }
         }
 
-        // Wait for thread termination with progress checks
         waitForThreadTermination();
     }
 
     private void waitForThreadTermination() {
-        // Avoid deadlock if called from worker itself
+        // Avoid deadlock if called from worker thread
         if (Thread.currentThread() == thread) {
-            Log.w(TAG, "shutdown() called on input thread; skipping join");
             return;
         }
 
@@ -219,28 +205,26 @@ public final class InputSender implements Closeable {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            Log.w(TAG, "Shutdown interrupted, exiting join loop");
             return;
         }
 
+        // Force interrupt if timeout
         if (thread.isAlive()) {
-            Log.w(TAG, "Thread failed to terminate within timeout, interrupting...");
-            try { thread.interrupt(); } catch (Throwable ignored) {}
+            thread.interrupt();
         }
     }
 
-
-    /** Get the underlying handler for advanced operations (use with caution) */
+    /** Get handler for advanced operations */
     public Handler getHandler() {
         return isRunning() ? handler : null;
     }
 
-    /** Get the underlying thread for monitoring/debugging */
+    /** Get underlying thread */
     public Thread getThread() {
         return thread;
     }
 
-    /** java.io.Closeable compatibility */
+    /** Closeable compatibility */
     @Override
     public void close() {
         shutdown();
