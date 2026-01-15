@@ -540,8 +540,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
     private final PreferenceConfiguration prefs;
-    // Optional context (application context) used for Display.getAppVsyncOffsetNanos() caching
-    private volatile android.content.Context appContext = null;
 
     // EGL
     private EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
@@ -692,10 +690,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Last Choreographer frame time (System.nanoTime() timebase), used for eglPresentationTimeANDROID.
     private volatile long lastChoreoFrameTimeNs = 0L;
 
-    // Cached app vsync offset (Display.getAppVsyncOffsetNanos) for phase alignment (matches MediaCodecDecoderRenderer).
-    private volatile long cachedAppVsyncOffsetNs = 0L;
-    private volatile long lastAppVsyncOffsetQueryNs = 0L;
-    private static final long APP_VSYNC_OFFSET_QUERY_INTERVAL_NS = 2_000_000_000L; // 2s
 
     // Choreographer pacing state (matches MediaCodecDecoderRenderer Balanced ratio logic).
     private volatile float lastPacingStreamFps = -1f;
@@ -898,7 +892,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     public GlUpscaleRenderer(android.content.Context context, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
         this(windowSurface, srcW, srcH, prefs);
-        this.appContext = (context != null) ? context.getApplicationContext() : null;
         try { setPresentationSizeHintFromContext(context); } catch (Throwable ignored) {}
     }
 
@@ -908,7 +901,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         this.srcW = Math.max(1, srcW);
         this.srcH = Math.max(1, srcH);
         this.prefs = prefs;
-        this.appContext = null;
     }
 
     /**
@@ -1008,8 +1000,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     osPrio);
             renderThread = ht;
             ht.start();
-
-            renderHandler = new Handler(ht.getLooper());
             renderHandler = new Handler(ht.getLooper());
             renderHandler.post(() -> {
                 renderTid = Process.myTid();
@@ -1024,36 +1014,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     vsyncsPerFrame = 1.0;
                     vsyncAccumulator = 0.0;
 
-                    // Prime cached app vsync offset (optional; match MediaCodecDecoderRenderer)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                        try {
-                            final android.content.Context ctx = appContext;
-                            android.view.WindowManager wm = null;
-                            if (ctx != null) {
-                                if (android.os.Build.VERSION.SDK_INT >= 23) {
-                                    wm = ctx.getSystemService(android.view.WindowManager.class);
-                                } else {
-                                    wm = (android.view.WindowManager) ctx.getSystemService(android.content.Context.WINDOW_SERVICE);
-                                }
-                            }
-                            if (wm != null && wm.getDefaultDisplay() != null) {
-                                cachedAppVsyncOffsetNs = wm.getDefaultDisplay().getAppVsyncOffsetNanos();
-                            } else {
-                                cachedAppVsyncOffsetNs = 0L;
-                            }
-                        } catch (Throwable ignored) {
-                            cachedAppVsyncOffsetNs = 0L;
-                        }
-                        lastAppVsyncOffsetQueryNs = System.nanoTime();
-                    }
-
                     Choreographer.getInstance().postFrameCallback(frameCallback);
                 } catch (Throwable t) {
                     LimeLog.warning("Choreographer init failed: " + t);
                 }
             });
             return;
-
         }
 
         final int osPrio = desiredGlOsPriority(getEffectivePacing(), false);
@@ -1061,8 +1027,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         renderThread = new Thread(this::renderLoop, "GL-FSR1-Renderer");
         try {
             renderThread.setPriority((osPrio == Process.THREAD_PRIORITY_URGENT_DISPLAY)
-                    ? (Thread.NORM_PRIORITY + 3)
-                    : (Thread.NORM_PRIORITY + 2));
+                    ? (Thread.NORM_PRIORITY + 2)
+                    : (Thread.NORM_PRIORITY + 1));
         } catch (Throwable ignored) {}
 
         renderThread.start();
@@ -3504,34 +3470,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         public void doFrame(long frameTimeNanos) {
             if (!running.get() || !useChoreoVsync) return;
 
-            // Adjust by app vsync offset (cached; refresh occasionally) to match MediaCodecDecoderRenderer phase behavior.
-            long adjustedFrameTimeNs = frameTimeNanos;
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                final long nowNsLocal = System.nanoTime();
-                if (cachedAppVsyncOffsetNs == 0L ||
-                        (nowNsLocal - lastAppVsyncOffsetQueryNs) >= APP_VSYNC_OFFSET_QUERY_INTERVAL_NS) {
-                    lastAppVsyncOffsetQueryNs = nowNsLocal;
-                    try {
-                        final android.content.Context ctx = appContext;
-                        android.view.WindowManager wm = null;
-                        if (ctx != null) {
-                            if (android.os.Build.VERSION.SDK_INT >= 23) {
-                                wm = ctx.getSystemService(android.view.WindowManager.class);
-                            } else {
-                                wm = (android.view.WindowManager) ctx.getSystemService(android.content.Context.WINDOW_SERVICE);
-                            }
-                        }
-                        if (wm != null && wm.getDefaultDisplay() != null) {
-                            cachedAppVsyncOffsetNs = wm.getDefaultDisplay().getAppVsyncOffsetNanos();
-                        } else {
-                            cachedAppVsyncOffsetNs = 0L;
-                        }
-                    } catch (Throwable ignored) {
-                        cachedAppVsyncOffsetNs = 0L;
-                    }
-                }
-                adjustedFrameTimeNs = frameTimeNanos - cachedAppVsyncOffsetNs;
-            }
+            // Keep raw Choreographer timestamp (no appVsyncOffset adjustment).
+            final long adjustedFrameTimeNs = frameTimeNanos;
 
             // Keep the adjusted timestamp to drive eglPresentationTimeANDROID for tighter SurfaceFlinger phase alignment.
             final long prevFrameTime = lastChoreoFrameTimeNs;
