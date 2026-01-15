@@ -553,7 +553,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void releaseAsyncOutputNoRenderAndRecycleInfo(MediaCodec codec, int index) {
         if (codec == null || index < 0) return;
 
-        try { codec.releaseOutputBuffer(index, false); } catch (Throwable ignored) {}
+        try { releaseOutputBufferNoRenderLocked(codec, index); } catch (Throwable ignored) {}
 
         android.media.MediaCodec.BufferInfo bi = null;
         try {
@@ -586,7 +586,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             try {
                 final MediaCodec codec = MediaCodecDecoderRenderer.this.videoDecoder;
                 if (codec != null) {
-                    codec.releaseOutputBuffer(index, render);
+                    releaseOutputBufferRenderLocked(codec, index, render);
                 }
             } catch (Throwable ignored) { }
         }
@@ -608,6 +608,32 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Context context;
     private Activity activity;
     private MediaCodec videoDecoder;
+
+    // Serialize MediaCodec.releaseOutputBuffer() across threads to reduce contention/stutter.
+    private final Object releaseOutputBufferLock = new Object();
+
+    private void releaseOutputBufferNoRenderLocked(MediaCodec codec, int index) {
+        if (codec == null || index < 0) return;
+        synchronized (releaseOutputBufferLock) {
+            codec.releaseOutputBuffer(index, false);
+        }
+    }
+
+    private void releaseOutputBufferRenderLocked(MediaCodec codec, int index, boolean render) {
+        if (codec == null || index < 0) return;
+        synchronized (releaseOutputBufferLock) {
+            codec.releaseOutputBuffer(index, render);
+        }
+    }
+
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    private void releaseOutputBufferAtTimeLockedLollipop(MediaCodec codec, int index, long renderTimeNs) {
+        if (codec == null || index < 0) return;
+        synchronized (releaseOutputBufferLock) {
+            codec.releaseOutputBuffer(index, renderTimeNs);
+        }
+    }
+
     private Thread rendererThread;
     private int videoFormat;
     private Surface renderTarget;
@@ -761,12 +787,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile float lastPacingDisplayHz = -1f;
     private volatile double vsyncsPerFrame = 1.0;
     private volatile double vsyncAccumulator = 0.0;
-
-    // Cache app vsync offset (avoid querying every vsync)
-    private volatile long cachedAppVsyncOffsetNs = 0L;
-    private volatile long lastAppVsyncOffsetQueryNs = 0L;
-    private static final long APP_VSYNC_OFFSET_QUERY_INTERVAL_NS = 2_000_000_000L; // 2s
-
 
     private int numSpsIn;
     private int numPpsIn;
@@ -1721,97 +1741,112 @@ try {
             return;
         }
 
-        // Adjust by app vsync offset (cached; refresh occasionally)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            final long nowNsLocal = System.nanoTime();
-            if (cachedAppVsyncOffsetNs == 0L ||
-                    (nowNsLocal - lastAppVsyncOffsetQueryNs) >= APP_VSYNC_OFFSET_QUERY_INTERVAL_NS) {
-                lastAppVsyncOffsetQueryNs = nowNsLocal;
-                try {
-                    cachedAppVsyncOffsetNs =
-                            activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-                } catch (Throwable ignored) {
-                    cachedAppVsyncOffsetNs = 0L;
-                }
-            }
-            frameTimeNanos -= cachedAppVsyncOffsetNs;
-        }
-
         // Only pace/present via Choreographer in Balanced mode.
         final boolean isBalanced =
                 (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
 
-        if (isBalanced) {
-            // Stream FPS if available, otherwise fall back to display refresh rate.
-            final float streamFps =
-                    (prefs != null && prefs.fps > 0) ? prefs.fps : (refreshRate > 0 ? (float) refreshRate : 60f);
-            final float displayHz =
-                    (refreshRate > 0) ? (float) refreshRate : streamFps;
+        if (!isBalanced) {
+            // Attempt codec recovery even if we are not presenting right now.
+            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+            return;
+        }
 
-            // Recompute ratio when inputs change.
-            if (Math.abs(streamFps - lastPacingStreamFps) > 0.01f ||
-                    Math.abs(displayHz - lastPacingDisplayHz) > 0.01f) {
-                lastPacingStreamFps = streamFps;
-                lastPacingDisplayHz = displayHz;
+        // Stream FPS if available, otherwise fall back to last known stream target.
+        final float streamFps =
+                (prefs != null && prefs.fps > 0)
+                        ? prefs.fps
+                        : (streamTargetFps > 0 ? (float) streamTargetFps : 60f);
 
-                vsyncAccumulator = 0.0;
-                if (streamFps > 0.01f && displayHz > 0.01f) {
-                    vsyncsPerFrame = (double) displayHz / (double) streamFps;
-                } else {
-                    vsyncsPerFrame = 1.0;
-                }
+        final float displayHz =
+                (refreshRate > 0) ? (float) refreshRate : 60f;
 
-                // Clamp to sane bounds
-                if (vsyncsPerFrame < 0.25) vsyncsPerFrame = 0.25;
-                if (vsyncsPerFrame > 8.0) vsyncsPerFrame = 8.0;
-            }
+        // Recompute ratio when inputs change.
+        if (Math.abs(streamFps - lastPacingStreamFps) > 0.01f ||
+                Math.abs(displayHz - lastPacingDisplayHz) > 0.01f) {
+            lastPacingStreamFps = streamFps;
+            lastPacingDisplayHz = displayHz;
 
-            boolean shouldRenderThisVsync = true;
-
-            // If stream is slower than display, distribute frames across vsyncs (e.g., 90Hz/60fps -> 1,2,1,2...).
-            if (vsyncsPerFrame > 1.02) {
-                vsyncAccumulator += 1.0;
-                if (vsyncAccumulator + 1e-9 < vsyncsPerFrame) {
-                    shouldRenderThisVsync = false;
-                } else {
-                    vsyncAccumulator -= vsyncsPerFrame;
-                }
+            vsyncAccumulator = 0.0;
+            if (streamFps > 0.01f && displayHz > 0.01f) {
+                vsyncsPerFrame = (double) displayHz / (double) streamFps;
             } else {
-                // Stream >= display: render every vsync (decoder-side dropping is handled by queue limit).
-                vsyncAccumulator = 0.0;
+                vsyncsPerFrame = 1.0;
             }
 
-            if (shouldRenderThisVsync) {
-                Integer nextOutputBuffer = outputBufferQueue.poll();
-                if (nextOutputBuffer != null) {
+            // Clamp to sane bounds
+            if (vsyncsPerFrame < 0.25) vsyncsPerFrame = 0.25;
+            if (vsyncsPerFrame > 8.0) vsyncsPerFrame = 8.0;
+        }
+
+        boolean shouldRenderThisVsync = true;
+
+        // If stream is slower than display, distribute frames across vsyncs (e.g., 90Hz/60fps -> 1,2,1,2...).
+        if (vsyncsPerFrame > 1.02) {
+            vsyncAccumulator += 1.0;
+            if (vsyncAccumulator + 1e-9 < vsyncsPerFrame) {
+                shouldRenderThisVsync = false;
+            } else {
+                vsyncAccumulator -= vsyncsPerFrame;
+            }
+        } else {
+            // Stream >= display: render every vsync (decoder-side dropping is handled by queue limit).
+            vsyncAccumulator = 0.0;
+        }
+
+        if (shouldRenderThisVsync) {
+            Integer nextOutputBuffer = outputBufferQueue.poll();
+            if (nextOutputBuffer != null) {
+                final MediaCodec codec = videoDecoder;
+                if (codec != null) {
+                    boolean released = false;
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                            releaseOutputBufferAtTimeLockedLollipop(codec, nextOutputBuffer, frameTimeNanos);
                         } else {
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                            releaseOutputBufferRenderLocked(codec, nextOutputBuffer, true);
                         }
-
-                        lastRenderedFrameTimeNanos = frameTimeNanos;
-                        activeWindowVideoStats.totalFramesRendered++;
+                        released = true;
                     } catch (IllegalStateException ignored) {
+                        // handled below
+                    }
+
+                    if (released) {
+                        lastRenderedFrameTimeNanos = frameTimeNanos;
+                        if (activeWindowVideoStats != null) {
+                            activeWindowVideoStats.totalFramesRendered++;
+                        }
+                    } else {
                         try {
                             // Try to avoid leaking the output buffer by releasing it without rendering
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                            releaseOutputBufferNoRenderLocked(codec, nextOutputBuffer);
                         } catch (IllegalStateException e) {
                             e.printStackTrace();
                             handleDecoderException(e);
                         }
                     }
                 }
+            } else {
+                // No buffer ready: avoid drifting phase while decoder is starved.
+                if (vsyncsPerFrame > 1.02) {
+                    vsyncAccumulator = 0.0;
+                }
             }
         }
+
 
         // Attempt codec recovery even if we have nothing to render right now.
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
         // Request another callback for next frame (unless stopped concurrently).
-        if (!stopping && choreographerHandlerThread != null) {
-            Choreographer.getInstance().postFrameCallback(this);
+        if (!stopping && choreographerHandler != null && choreographerHandlerThread != null) {
+            choreographerHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
+                    } catch (Throwable ignored) { }
+                }
+            });
         }
     }
 
@@ -1837,27 +1872,18 @@ try {
         vsyncsPerFrame = 1.0;
         vsyncAccumulator = 0.0;
 
-        // Prime cached app vsync offset (optional) and start callbacks
+        // Start callbacks (no appVsyncOffset adjustment)
         choreographerHandler.post(new Runnable() {
             @Override
             public void run() {
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        try {
-                            cachedAppVsyncOffsetNs =
-                                    activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-                        } catch (Throwable ignored) {
-                            cachedAppVsyncOffsetNs = 0L;
-                        }
-                        lastAppVsyncOffsetQueryNs = System.nanoTime();
-                    }
-
                     Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
                 } catch (Throwable ignored) {
                 }
             }
         });
     }
+
 
     private void stopChoreographerThread() {
         final Handler h = choreographerHandler;
@@ -1999,7 +2025,7 @@ try {
                                                 : nowNsLocal;
 
 
-                                        try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
+                                        try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
                                         catch (Throwable ignored) { }
 
                                         numFramesOut++;
@@ -2048,7 +2074,7 @@ try {
                                                 : nowNsLocal;
 
 
-                                        try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
+                                        try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
                                         catch (Throwable ignored) { }
 
                                         numFramesOut++;
@@ -2106,13 +2132,13 @@ try {
                                         break;
                                     }
                                     try {
-                                        videoDecoder.releaseOutputBuffer(old, false);
+                                        releaseOutputBufferNoRenderLocked(videoDecoder, old);
                                     } catch (Throwable ignored) { }
                                 }
 
                                 if (!outputBufferQueue.offer(lastIndex)) {
                                     // Should be rare (single producer), but never leak output buffers.
-                                    try { videoDecoder.releaseOutputBuffer(lastIndex, false); }
+                                    try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
                                     catch (Throwable ignored) { }
                                 }
 
@@ -2446,7 +2472,8 @@ try {
         while ((idx = outputBufferQueue.poll()) != null) {
             try {
                 if (videoDecoder != null) {
-                    videoDecoder.releaseOutputBuffer(idx, false);
+                                                         releaseOutputBufferNoRenderLocked(videoDecoder, idx);
+
                 }
             } catch (Throwable ignored) { }
         }
@@ -3800,7 +3827,7 @@ try {
         // Apply OLED shift (prepend spaces)
         if (prefsSnapshot.enablePerfOverlayLite && prefsSnapshot.enablePerfOverlayLiteOledShift) {
             try {
-                sb.insert(0, new String(new char[Math.max(0, liteShiftSpaces)]).replace('\0', ' '));
+                sb.insert(0, LITE_SHIFT_PREFIX[Math.min(LITE_SHIFT_MAX_SPACES, Math.max(0, liteShiftSpaces))]);
             } catch (Throwable ignored) {}
         }
 
@@ -3888,7 +3915,7 @@ try {
             if (bi == null) {
                 lastAsyncOutputReadyNs = 0L;
                 // Info missing: safest is to release the output buffer (no-render) to avoid leaks
-                try { videoDecoder.releaseOutputBuffer(idx, false); } catch (Throwable ignored) { }
+                try { releaseOutputBufferNoRenderLocked(videoDecoder, idx); } catch (Throwable ignored) { }
                 return -1;
             }
 
@@ -4153,23 +4180,25 @@ try {
         if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 final long tsNs = System.nanoTime();
-                videoDecoder.releaseOutputBuffer(bufferIndex, tsNs);
+                releaseOutputBufferAtTimeLockedLollipop(videoDecoder, bufferIndex, tsNs);
+
             } else {
-                videoDecoder.releaseOutputBuffer(bufferIndex, true);
+                releaseOutputBufferRenderLocked(videoDecoder, bufferIndex, true);
             }
         } else if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                 prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
             // Never-drop policy (do not hold output buffers)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                videoDecoder.releaseOutputBuffer(bufferIndex, 0);
+                releaseOutputBufferAtTimeLockedLollipop(videoDecoder, bufferIndex, 0L);
+
             } else {
-                videoDecoder.releaseOutputBuffer(bufferIndex, true);
+                releaseOutputBufferRenderLocked(videoDecoder, bufferIndex, true);
             }
         } else {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                videoDecoder.releaseOutputBuffer(bufferIndex, System.nanoTime());
+                releaseOutputBufferAtTimeLockedLollipop(videoDecoder, bufferIndex, System.nanoTime());
             } else {
-                videoDecoder.releaseOutputBuffer(bufferIndex, true);
+                releaseOutputBufferRenderLocked(videoDecoder, bufferIndex, true);
             }
         }
     }
