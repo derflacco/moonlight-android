@@ -518,6 +518,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncReleaseQueue =
             new java.util.concurrent.ArrayBlockingQueue<>(32);
 
+    // Cap how many releaseOutputBuffer(false) we do per render-loop tick to avoid bursts.
+    private static final int ASYNC_RELEASE_DRAIN_CAP = 8;
 
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo =
             new android.util.SparseArray<>(16);
@@ -593,26 +595,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Safety wrapper for the callback thread: if the queue is full, release immediately to prevent leaks.
     private void enqueueAsyncNoRenderReleaseOrReleaseNow(MediaCodec codec, int index) {
-        if (index < 0) return;
+        if (codec == null || index < 0) return;
         if (!enqueueAsyncNoRenderRelease(index)) {
-            // Extremely rare: renderer is stalled and release queue is full.
-            // Fall back to direct no-render release to avoid BufferQueue stalls.
-            try { releaseOutputBufferNoRenderLocked(codec, index); } catch (Throwable ignored) {}
+            try { releaseOutputBufferNoRenderLocked(codec, index); } catch (Throwable ignored) { }
         }
     }
 
-    // Drain queued no-render releases on the renderer thread to keep codec output pressure low.
+    // Drain queued no-render releases on the renderer thread.
+    // Bounded to avoid large bursts of binder calls in a single tick.
     private void drainAsyncNoRenderReleaseQueue() {
         final MediaCodec codec = videoDecoder;
         if (codec == null) {
-            // Drop queued indices (best-effort) if codec is already gone.
+            // Drop queued indices if codec is gone.
             while (asyncReleaseQueue.poll() != null) { }
             return;
         }
 
+        int n = 0;
         Integer idx;
-        while ((idx = asyncReleaseQueue.poll()) != null) {
+        while (n < ASYNC_RELEASE_DRAIN_CAP && (idx = asyncReleaseQueue.poll()) != null) {
             try { releaseOutputBufferNoRenderLocked(codec, idx); } catch (Throwable ignored) { }
+            n++;
         }
     }
 
@@ -2226,7 +2229,7 @@ try {
                         } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                             // Non-blocking output dequeue (0us) must not busy spin.
                             if (firstOutTimeoutUs == 0) {
-                                outputNonBlockingBackoff();
+                                inputNonBlockingBackoff(); // reuse existing 0.2ms backoff
                             }
                         }
                     } catch (IllegalStateException e) {
@@ -4040,15 +4043,17 @@ try {
                 @Override
                 public void onOutputBufferAvailable(MediaCodec codec, int index, BufferInfo info) {
                     // Defensive copy; the system reuses 'info' for the next frame
-                    android.media.MediaCodec.BufferInfo copy = obtainAsyncInfo();
+                    final android.media.MediaCodec.BufferInfo copy = obtainAsyncInfo();
                     copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
 
+                    boolean stored = false;
                     try {
                         // Store info for the consumer thread (also capture output-ready timestamp for latency stats)
                         final long readyNs = System.nanoTime();
                         synchronized (asyncOutInfo) {
                             asyncOutInfo.put(index, copy);
                             asyncOutReadyNs.put(index, readyNs);
+                            stored = true;
                         }
 
                         // Keep only latest buffer for minimal latency (no binder calls in callback)
@@ -4065,7 +4070,7 @@ try {
 
                         // Managed profiles: bounded queue with drop-oldest policy (no binder calls in callback)
                         if (!asyncOutputQueue.offer(index)) {
-                            Integer old = asyncOutputQueue.poll();
+                            final Integer old = asyncOutputQueue.poll();
                             if (old != null) {
                                 enqueueAsyncNoRenderReleaseOrReleaseNow(codec, old);
                             }
@@ -4075,9 +4080,17 @@ try {
                         }
                     } catch (Throwable t) {
                         // Make sure we don't leak output buffers or BufferInfo objects
-                        try { enqueueAsyncNoRenderReleaseOrReleaseNow(codec, index); } catch (Throwable ignored) {}
+                        try {
+                            if (stored) {
+                                enqueueAsyncNoRenderReleaseOrReleaseNow(codec, index);
+                            } else {
+                                recycleAsyncInfo(copy);
+                                try { releaseOutputBufferNoRenderLocked(codec, index); } catch (Throwable ignored) { }
+                            }
+                        } catch (Throwable ignored) { }
                     }
                 }
+
 
                 @Override
                 public void onOutputFormatChanged(MediaCodec codec,
