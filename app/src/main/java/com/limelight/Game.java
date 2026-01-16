@@ -449,6 +449,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Best-effort: request sustained performance mode to reduce DVFS oscillations.
+       // This can improve frame pacing on some vendor stacks when FPS is capped.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                getWindow().setSustainedPerformanceMode(true);
+            }
+        } catch (Throwable ignored) { }
 
         instance = this;
         timerHandler = new Handler(Looper.getMainLooper());
