@@ -514,6 +514,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             new java.util.concurrent.ArrayBlockingQueue<>(64);
     private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncOutputQueue =
             new java.util.concurrent.ArrayBlockingQueue<>(8);
+    // Async: indices queued for NO-RENDER release on the renderer thread (avoid binder calls in callback).
+    private final java.util.concurrent.ArrayBlockingQueue<Integer> asyncReleaseQueue =
+            new java.util.concurrent.ArrayBlockingQueue<>(32);
+
 
     private final android.util.SparseArray<android.media.MediaCodec.BufferInfo> asyncOutInfo =
             new android.util.SparseArray<>(16);
@@ -565,6 +569,51 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         } catch (Throwable ignored) {}
 
         recycleAsyncInfo(bi);
+    }
+    // Async: queue an output buffer index for NO-RENDER release on the renderer thread.
+    // Always recycles BufferInfo immediately to avoid leaks.
+    // Returns true if queued, false if the queue is full.
+    private boolean enqueueAsyncNoRenderRelease(int index) {
+        if (index < 0) return true;
+
+        android.media.MediaCodec.BufferInfo bi = null;
+        try {
+            synchronized (asyncOutInfo) {
+                bi = asyncOutInfo.get(index);
+                asyncOutInfo.remove(index);
+                asyncOutReadyNs.delete(index);
+            }
+        } catch (Throwable ignored) {}
+
+        recycleAsyncInfo(bi);
+
+        // Best-effort: never block the callback thread.
+        return asyncReleaseQueue.offer(index);
+    }
+
+    // Safety wrapper for the callback thread: if the queue is full, release immediately to prevent leaks.
+    private void enqueueAsyncNoRenderReleaseOrReleaseNow(MediaCodec codec, int index) {
+        if (index < 0) return;
+        if (!enqueueAsyncNoRenderRelease(index)) {
+            // Extremely rare: renderer is stalled and release queue is full.
+            // Fall back to direct no-render release to avoid BufferQueue stalls.
+            try { releaseOutputBufferNoRenderLocked(codec, index); } catch (Throwable ignored) {}
+        }
+    }
+
+    // Drain queued no-render releases on the renderer thread to keep codec output pressure low.
+    private void drainAsyncNoRenderReleaseQueue() {
+        final MediaCodec codec = videoDecoder;
+        if (codec == null) {
+            // Drop queued indices (best-effort) if codec is already gone.
+            while (asyncReleaseQueue.poll() != null) { }
+            return;
+        }
+
+        Integer idx;
+        while ((idx = asyncReleaseQueue.poll()) != null) {
+            try { releaseOutputBufferNoRenderLocked(codec, idx); } catch (Throwable ignored) { }
+        }
     }
 
 // ==== End async decoding ====
@@ -1948,6 +1997,8 @@ try {
 
                     // Live-tune decoder timeouts from app settings
                     maybeReloadDecoderTimingPrefs();
+                    // Drain async no-render releases here to avoid output backpressure and callback-thread binder calls.
+                    drainAsyncNoRenderReleaseQueue();
 
                     // Timeout: 0 for immediate delivery, otherwise user-configurable wait
                     final int decodeTimeout = (prefs != null && prefs.immediateFrameDelivery)
@@ -2077,11 +2128,14 @@ try {
 
                                 } else {
                                     // Existing behavior for other pacing modes
-                                    while ((outIndex = nextOutputIndex(info, runtimeOutputDrainTimeoutUs)) >= 0) {
+                                   // to avoid large bursts of releaseOutputBuffer() binder calls.
+                                    int drained = 1;
+                                    final int drainSoftCap = 6;
+                                    while (drained < drainSoftCap &&
+                                            (outIndex = nextOutputIndex(info, runtimeOutputDrainTimeoutUs)) >= 0) {
                                         final long thisDequeueTimeNs = (useAsyncCodec && lastAsyncOutputReadyNs != 0L)
                                                 ? lastAsyncOutputReadyNs
                                                 : nowNsLocal;
-
 
                                         try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
                                         catch (Throwable ignored) { }
@@ -2096,6 +2150,7 @@ try {
                                         catch (Throwable ignored) { }
 
                                         lastDequeueTimeNs = thisDequeueTimeNs;
+                                        drained++;
                                     }
                                 }
 
@@ -2166,6 +2221,12 @@ try {
                             // Only handle in sync mode (async handled in callback)
                             if (!useAsyncCodec) {
                                 handleOutputFormatChangeSync();
+                            }
+
+                        } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                            // Non-blocking output dequeue (0us) must not busy spin.
+                            if (firstOutTimeoutUs == 0) {
+                                outputNonBlockingBackoff();
                             }
                         }
                     } catch (IllegalStateException e) {
@@ -3990,31 +4051,31 @@ try {
                             asyncOutReadyNs.put(index, readyNs);
                         }
 
-                        // LFR/ULL path: keep only latest buffer for minimal latency
+                        // Keep only latest buffer for minimal latency (no binder calls in callback)
                         if (preferLowerDelays) {
                             Integer old;
                             while ((old = asyncOutputQueue.poll()) != null) {
-                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, old);
+                                enqueueAsyncNoRenderReleaseOrReleaseNow(codec, old);
                             }
                             if (!asyncOutputQueue.offer(index)) {
-                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, index);
+                                enqueueAsyncNoRenderReleaseOrReleaseNow(codec, index);
                             }
                             return;
                         }
 
-                        // Managed profiles: bounded queue with drop-oldest policy
+                        // Managed profiles: bounded queue with drop-oldest policy (no binder calls in callback)
                         if (!asyncOutputQueue.offer(index)) {
                             Integer old = asyncOutputQueue.poll();
                             if (old != null) {
-                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, old);
+                                enqueueAsyncNoRenderReleaseOrReleaseNow(codec, old);
                             }
                             if (!asyncOutputQueue.offer(index)) {
-                                releaseAsyncOutputNoRenderAndRecycleInfo(codec, index);
+                                enqueueAsyncNoRenderReleaseOrReleaseNow(codec, index);
                             }
                         }
                     } catch (Throwable t) {
                         // Make sure we don't leak output buffers or BufferInfo objects
-                        try { releaseAsyncOutputNoRenderAndRecycleInfo(codec, index); } catch (Throwable ignored) {}
+                        try { enqueueAsyncNoRenderReleaseOrReleaseNow(codec, index); } catch (Throwable ignored) {}
                     }
                 }
 
@@ -4085,9 +4146,29 @@ try {
                 } catch (Throwable ignored) {}
             }
         } finally {
-            // Clear queues first
+            // Clear input queue first (safe: indices are not owned by us)
             try { asyncInputQueue.clear(); } catch (Throwable ignored) {}
-            try { asyncOutputQueue.clear(); } catch (Throwable ignored) {}
+
+            // Release outstanding async output buffers before clearing queues (avoid BufferQueue stalls).
+            try {
+                final MediaCodec codec = videoDecoder;
+                if (codec != null) {
+                    Integer idx;
+                    while ((idx = asyncOutputQueue.poll()) != null) {
+                        releaseAsyncOutputNoRenderAndRecycleInfo(codec, idx);
+                    }
+                    while ((idx = asyncReleaseQueue.poll()) != null) {
+                        try { releaseOutputBufferNoRenderLocked(codec, idx); } catch (Throwable ignored) { }
+                    }
+                } else {
+                    asyncOutputQueue.clear();
+                    asyncReleaseQueue.clear();
+                }
+            } catch (Throwable ignored) {
+                try { asyncOutputQueue.clear(); } catch (Throwable ignored2) {}
+                try { asyncReleaseQueue.clear(); } catch (Throwable ignored2) {}
+            }
+
 
             // Clear asyncOutInfo with synchronization
             synchronized (asyncOutInfo) {
@@ -4349,6 +4430,12 @@ try {
         Thread.yield();
         java.util.concurrent.locks.LockSupport.parkNanos(200_000L); // 0.2 ms
     }
+    // Backoff used only when output dequeue timeout is non-blocking (0us) to avoid busy spinning.
+    private static void outputNonBlockingBackoff() {
+        Thread.yield();
+        java.util.concurrent.locks.LockSupport.parkNanos(200_000L); // 0.2 ms
+    }
+
     // ---- Thread priority tuning (runtime) ----
     private volatile int rendererTid = 0;
 
