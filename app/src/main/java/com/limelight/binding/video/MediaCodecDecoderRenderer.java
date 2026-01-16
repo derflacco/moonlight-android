@@ -2160,27 +2160,30 @@ try {
                                 final boolean eos =
                                         (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
 
-                                nanoPacer.updatePacingMode(
-                                        (prefs != null && prefs.fastVsync),
-                                        MediaCodecDecoderRenderer.this.streamTargetFps,
-                                        refreshRate
-                                );
+                                final boolean useNanoPacer = (prefs != null && prefs.fastVsync);
 
-// Cooperative nano-pacer: drain while waiting to avoid output backpressure
-                                nanoLatest.index = lastIndex;
-                                nanoLatest.ptsUs = presentationTimeUs;
-                                nanoLatest.flags = lastFlags;
-                                nanoLatest.dequeueNs = lastDequeueTimeNs;
+                                if (useNanoPacer) {
+                                    nanoPacer.updatePacingMode(
+                                            true,
+                                            MediaCodecDecoderRenderer.this.streamTargetFps,
+                                            refreshRate
+                                    );
 
-                                numFramesOut += nanoPacer.waitAndDrainLatest(info, nanoLatest, nanoPacerCallbacks);
+                                    // Cooperative nano-pacer: drain while waiting to avoid output backpressure
+                                    nanoLatest.index = lastIndex;
+                                    nanoLatest.ptsUs = presentationTimeUs;
+                                    nanoLatest.flags = lastFlags;
+                                    nanoLatest.dequeueNs = lastDequeueTimeNs;
 
-// Pull back the possibly-updated newest output
-                                lastIndex = nanoLatest.index;
-                                presentationTimeUs = nanoLatest.ptsUs;
-                                lastFlags = nanoLatest.flags;
-                                lastDequeueTimeNs = nanoLatest.dequeueNs;
+                                    numFramesOut += nanoPacer.waitAndDrainLatest(info, nanoLatest, nanoPacerCallbacks);
 
-// Present/release newest buffer
+                                    // Pull back the possibly-updated newest output
+                                    lastIndex = nanoLatest.index;
+                                    presentationTimeUs = nanoLatest.ptsUs;
+                                    lastFlags = nanoLatest.flags;
+                                    lastDequeueTimeNs = nanoLatest.dequeueNs;
+                                }
+                                // Present/release newest buffer
                                 releaseBufferAccordingToMode(lastIndex, presentationTimeUs);
 
                                 activeWindowVideoStats.totalFramesRendered++;
