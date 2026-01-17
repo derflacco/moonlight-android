@@ -1247,17 +1247,20 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
 // Drain budget for this render tick. Avoid long updateTexImage loops under Choreographer.
 // Use a conservative adaptive budget derived from measured Choreographer interval.
-            final int choreoBudget = Math.max(1, choreoDrainBudget);
-
-            final int maxDrainNow = useChoreoVsync
-                    ? Math.min(MAX_DRAIN_UPDATETEXIMAGE, Math.min(CHOREO_MAX_DRAIN_UPDATETEXIMAGE, choreoBudget))
-                    : MAX_DRAIN_UPDATETEXIMAGE;
+            final int maxDrainNow;
+            if (useChoreoVsync) {
+                // If backlog is building, drain more aggressively to keep latency bounded.
+                final int base = Math.min(CHOREO_MAX_DRAIN_UPDATETEXIMAGE, Math.max(1, choreoDrainBudget));
+                maxDrainNow = (total >= 3) ? MAX_DRAIN_UPDATETEXIMAGE : Math.min(MAX_DRAIN_UPDATETEXIMAGE, base);
+            } else {
+                maxDrainNow = MAX_DRAIN_UPDATETEXIMAGE;
+            }
 
             drainCount = Math.min(total, maxDrainNow);
 
-
-            // IMPORTANT: keep remainder so we don't "lose" already-signaled frames when draining is capped.
+// IMPORTANT: keep remainder so we don't "lose" already-signaled frames when draining is capped.
             pendingFrames = total - drainCount;
+
         }
 
 
@@ -3503,51 +3506,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Conservative adaptive drain budget (kept), derived from measured Choreographer interval.
             choreoDrainBudget = calculateAdaptiveDrainConservative(choreoFrameIntervalNs);
 
-            // Match MediaCodecDecoderRenderer's ratio-based "render some vsyncs only" policy.
-            final float displayHz =
-                    (choreoFrameIntervalNs > 0L) ? (1_000_000_000f / (float) choreoFrameIntervalNs) : 60f;
-            final float streamFps =
-                    (prefs != null && prefs.fps > 0) ? (float) prefs.fps : displayHz;
-
-            if (Math.abs(streamFps - lastPacingStreamFps) > 0.01f ||
-                    Math.abs(displayHz - lastPacingDisplayHz) > 0.01f) {
-                lastPacingStreamFps = streamFps;
-                lastPacingDisplayHz = displayHz;
-
-                vsyncAccumulator = 0.0;
-                if (streamFps > 0.01f && displayHz > 0.01f) {
-                    vsyncsPerFrame = (double) displayHz / (double) streamFps;
-                } else {
-                    vsyncsPerFrame = 1.0;
-                }
-
-                // Clamp to sane bounds
-                if (vsyncsPerFrame < 0.25) vsyncsPerFrame = 0.25;
-                if (vsyncsPerFrame > 8.0) vsyncsPerFrame = 8.0;
-            }
-
-            boolean shouldRenderThisVsync = true;
-
-            // If stream is slower than display, distribute frames across vsyncs (e.g., 90Hz/60fps -> 1,2,1,2...).
-            if (vsyncsPerFrame > 1.02) {
-                vsyncAccumulator += 1.0;
-                if (vsyncAccumulator + 1e-9 < vsyncsPerFrame) {
-                    shouldRenderThisVsync = false;
-                } else {
-                    vsyncAccumulator -= vsyncsPerFrame;
-                }
-            } else {
-                // Stream >= display: render every vsync.
-                vsyncAccumulator = 0.0;
-            }
-
-            if (shouldRenderThisVsync) {
-                try {
-                    // Late-latch: allow a tiny wait window to catch frames arriving just after vsync.
-                    renderFrame(true);
-                } catch (Throwable t) {
-                    LimeLog.warning("renderFrame error: " + t);
-                }
+            try {
+                // GL-VSync pacing:
+                // - Tick on every display vsync (Choreographer is the gate).
+                // - renderFrame(true) provides a tiny late-latch wait to catch frames arriving just after vsync.
+                // - Backlog control is handled in renderFrame() by the drain budgeting.
+                renderFrame(true);
+            } catch (Throwable t) {
+                LimeLog.warning("renderFrame error: " + t);
             }
 
             if (running.get() && useChoreoVsync) {
