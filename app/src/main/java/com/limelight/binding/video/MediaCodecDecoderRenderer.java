@@ -533,8 +533,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Async: ready timestamp (ns) for the last index returned by nextOutputIndex().
     private long lastAsyncOutputReadyNs = 0L;
 
-    private boolean preferLowerDelays = false; // Will be set based on frame pacing mode
+    // Async callback may run on a different thread: keep this volatile for cross-thread visibility.
+    private volatile boolean preferLowerDelays = false; // Derived from frame pacing mode
 
+    private void updateAsyncPreferLowerDelaysFromCurrentPrefs(int effectivePacing) {
+        final PreferenceConfiguration p = prefs;
+        final boolean newValue =
+                (p != null) && (
+                        effectivePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ||
+                                effectivePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW ||
+                                effectivePacing == PreferenceConfiguration.FRAME_PACING_WARP ||
+                                effectivePacing == PreferenceConfiguration.FRAME_PACING_WARP2 ||
+                                p.immediateFrameDelivery
+                );
+        preferLowerDelays = newValue;
+    }
 
     // ---- Async BufferInfo pool (avoid per-frame allocations) ----
     private final java.util.ArrayDeque<android.media.MediaCodec.BufferInfo> asyncInfoPool =
@@ -1546,16 +1559,44 @@ try {
 
             // This is the final thread to quiesce, so let's perform the codec recovery now.
             if (codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL) {
-                // Input and output buffers are invalidated by stop() and reset().
+            // Input and output buffers are invalidated by stop() and reset().
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
-                outputBufferQueue.clear();
+
+            // Best-effort: return any queued output buffers before recovery actions (flush in particular
+            // requires that the client has no outstanding buffers).
+                drainOutputBufferQueueNoRender();
+
                 asyncInputQueue.clear();
-                asyncOutputQueue.clear();
+
+                try {
+                    final MediaCodec codec = videoDecoder;
+
+                    // Return async output buffers that have been handed to us by callbacks.
+                    if (codec != null) {
+                        Integer idx;
+                        while ((idx = asyncOutputQueue.poll()) != null) {
+                            releaseAsyncOutputNoRenderAndRecycleInfo(codec, idx);
+                        }
+                        while ((idx = asyncReleaseQueue.poll()) != null) {
+                            try { releaseOutputBufferNoRenderLocked(codec, idx); } catch (Throwable ignored) { }
+                        }
+                    } else {
+                        asyncOutputQueue.clear();
+                        asyncReleaseQueue.clear();
+                    }
+                } catch (Throwable ignored) {
+                    asyncOutputQueue.clear();
+                    asyncReleaseQueue.clear();
+                }
+
                 synchronized (asyncOutInfo) {
                     asyncOutInfo.clear();
                     asyncOutReadyNs.clear();
                 }
+
+                lastAsyncOutputReadyNs = 0L;
+
                 // Clear decode latency tracking during codec recovery
                 enqueueNsByPtsUs.clear();
                 csdDirty = false;
@@ -1564,6 +1605,10 @@ try {
                     LimeLog.warning("Flushing decoder");
                     try {
                         videoDecoder.flush();
+                        // Async codec requires start() after flush to resume callbacks/output.
+                        if (useAsyncCodec && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            videoDecoder.start();
+                        }
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
@@ -2559,6 +2604,8 @@ try {
         if (prefs != null) {
             prefs.framePacing = newPacing;
         }
+        // Keep async callback drop-policy in sync with the active pacing mode (and immediate delivery).
+        updateAsyncPreferLowerDelaysFromCurrentPrefs(newPacing);
 
         // Leaving Balanced: release queued buffers immediately and stop Choreographer.
         if (oldPacing == PreferenceConfiguration.FRAME_PACING_BALANCED &&
@@ -2652,6 +2699,7 @@ try {
         if (prefs != null) {
             prefs.framePacing = effective;
         }
+        updateAsyncPreferLowerDelaysFromCurrentPrefs(effective);
     }
 
 
@@ -2704,6 +2752,8 @@ try {
         }
 
         final int effective = selected;
+        // Update async drop-policy even when pacing doesn't change (e.g., immediate-frame toggle).
+        updateAsyncPreferLowerDelaysFromCurrentPrefs(effective);
 
         if (effective == appliedFramePacing) {
             return;
@@ -4008,13 +4058,7 @@ try {
 
     private void attachAsyncCodecIfNeeded() {
         if (!useAsyncCodec || videoDecoder == null) return;
-
-        preferLowerDelays = (prefs != null && (
-                prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ||
-                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW ||
-                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_WARP ||
-                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2 ||
-                        prefs.immediateFrameDelivery));
+        updateAsyncPreferLowerDelaysFromCurrentPrefs(getEffectivePacingForThreadPriorities());
 
         if (codecCallbackThread == null) {
             codecCallbackThread = new android.os.HandlerThread(
