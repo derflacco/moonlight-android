@@ -52,6 +52,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // RCAS_OES health-check state
     private boolean rcasOesChecked = false;
     private boolean rcasOesHealthy = false;
+    private int rcasOesCheckAttempts = 0;
+    private static final int RCAS_OES_CHECK_MAX_ATTEMPTS = 3;
+
     private int lastProgram = -1;
     private int lastTexture = -1;
     private EGLContext attachedEglContext = EGL14.EGL_NO_CONTEXT;
@@ -611,6 +614,37 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread renderThread;
     private volatile boolean useChoreoVsync = false;
+    // Backend restarts (switching Choreographer vs manual loop) must never block the caller thread.
+    private final AtomicBoolean restartInProgress = new AtomicBoolean(false);
+
+    private void requestBackendRestartAsync() {
+        if (!restartInProgress.compareAndSet(false, true)) return;
+
+        new Thread(() -> {
+            try {
+                stop();
+
+                final Thread t = renderThread;
+                if (t != null && t.isAlive()) {
+                    try {
+                        t.join(STOP_JOIN_TIMEOUT_MS + STOP_JOIN_GRACE_MS);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                if (renderThread != null && renderThread.isAlive()) {
+                    LimeLog.warning("FSR: backend restart aborted (render thread still alive)");
+                    return;
+                }
+
+                start();
+            } finally {
+                restartInProgress.set(false);
+            }
+        }, "GL-FSR1-Restart").start();
+    }
+
     private volatile Handler renderHandler = null;
     // Cached Linux TID for non-HandlerThread renderer (so we can retune OS priority at runtime).
     private volatile int renderTid = 0;
@@ -2460,22 +2494,34 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
             } else {
                 // Best-effort fallback: drop references even if we cannot bind EGL here.
+                // IDs are only valid in the old context; keep state consistent for a clean re-init.
                 vao = 0;
                 hasVao = false;
                 vboPos = 0;
                 vboUv = 0;
+
                 progBlit = 0;
+                progOesTo2D = 0;
                 progEasuPerf = 0;
-                progEasuQuality = 0;
                 progEasuBalanced = 0;
+                progEasuQuality = 0;
+                progEasuPerf2D = 0;
+                progEasuBalanced2D = 0;
+                progEasuQuality2D = 0;
                 progRcas = 0;
                 progRcasOes = 0;
+
+                srcFbo = 0;
+                srcRgbTex = 0;
+                srcFboW = 0;
+                srcFboH = 0;
 
                 fbo = 0;
                 upscaledTex = 0;
                 fboW = 0;
                 fboH = 0;
             }
+
         } finally {
             // Reset cached GL bindings/state (context resources no longer valid)
             lastProgram = -1;
@@ -2486,7 +2532,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             oesNearest = false;
             rcasOesChecked = false;
             rcasOesHealthy = false;
-
+            rcasOesCheckAttempts = 0;
             // Avoid drawing stale/undefined content after a GL re-init
             hasEverUpdatedTex = false;
 
@@ -3147,9 +3193,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     public void setPresentationSizeHint(int w, int h) {
         hintOutW = Math.max(0, w);
         hintOutH = Math.max(0, h);
-        // Ensure we render at least once with the new target even if no new frame arrives
+
+        // Ensure we render at least once with the new target even if no new frame arrives.
         sizeChangedSinceLastSwap = true;
+        synchronized (frameLock) {
+            frameLock.notifyAll();
+        }
     }
+
     public void setPresentationSizeHintFromDisplay(android.view.Display display) {
         if (display == null) return;
         try {
@@ -3240,8 +3291,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Optimized and safe RCAS_OES health check (low-overhead)
     private void checkRcasOesHealthOnce(int dstW, int dstH) {
         if (rcasOesChecked) return;
-        rcasOesChecked = true;
-        if (progRcasOes == 0) return;
+
+        if (progRcasOes == 0) {
+            rcasOesHealthy = false;
+            rcasOesChecked = true;
+            return;
+        }
+
+        // Avoid false negatives on the first frames (often black): retry a few times.
+        if (rcasOesCheckAttempts >= RCAS_OES_CHECK_MAX_ATTEMPTS) {
+            rcasOesChecked = true;
+            return;
+        }
+        rcasOesCheckAttempts++;
 
         activeTexture0();
 
@@ -3257,11 +3319,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
         int[] prevViewport = new int[4];
-        GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevViewport, 0);
+        try { GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevViewport, 0); } catch (Throwable ignored) { }
 
         int testFbo = 0, testTex = 0;
+        boolean ambiguousAllZero = false;
 
         try {
+            // Clear stale errors before probing
+            clearGlErrors();
+
             GLES20.glGenFramebuffers(1, tmpIntArray, 0);
             testFbo = tmpIntArray[0];
 
@@ -3282,6 +3348,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             if (!isFboComplete()) {
                 rcasOesHealthy = false;
+                rcasOesChecked = true;
                 return;
             }
 
@@ -3308,17 +3375,20 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             int sum = 0;
             for (int i = 0; i < 16; i++) sum |= (bb.get(i) & 0xFF);
-            rcasOesHealthy = (sum != 0);
+
+            ambiguousAllZero = (sum == 0);
+            rcasOesHealthy = !ambiguousAllZero;
 
             if (hasVao) {
                 try {
                     int[] attachments = { GLES30.GL_COLOR_ATTACHMENT0 };
                     GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, attachments, 0);
-                } catch (Throwable ignored) { }
+                } catch (Throwable ignored) {}
             }
+
         } finally {
             // Restore viewport
-            GLES20.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+            try { GLES20.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]); } catch (Throwable ignored) { }
 
             // Keep viewport cache coherent
             curVpW = prevViewport[2];
@@ -3333,13 +3403,22 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Delete test resources
             if (testTex != 0) {
                 tmpIntArray[0] = testTex;
-                GLES20.glDeleteTextures(1, tmpIntArray, 0);
+                try { GLES20.glDeleteTextures(1, tmpIntArray, 0); } catch (Throwable ignored) {}
             }
             if (testFbo != 0) {
                 tmpIntArray[0] = testFbo;
-                GLES20.glDeleteFramebuffers(1, tmpIntArray, 0);
+                try { GLES20.glDeleteFramebuffers(1, tmpIntArray, 0); } catch (Throwable ignored) {}
             }
         }
+
+        // If the frame was likely black, retry later (bounded attempts).
+        if (ambiguousAllZero && rcasOesCheckAttempts < RCAS_OES_CHECK_MAX_ATTEMPTS) {
+            rcasOesChecked = false;
+            rcasOesHealthy = false;
+            return;
+        }
+
+        rcasOesChecked = true;
 
         // Force next uniform uploads for OES path (safe)
         lastRcasOesInvDstW = lastRcasOesInvDstH = -1;
@@ -3348,7 +3427,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         LimeLog.info("RCAS_OES health=" + rcasOesHealthy);
     }
-
 
     // Cheap check used per-frame (supports hot-reload) to allow the ultra-thin path.
    // True when GPU direct path is forced or FSR is logically disabled.
@@ -3368,27 +3446,30 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     public void applyVsyncSetting() {
         final boolean wantVsync = (prefs != null && prefs.enableVsync);
 
+        // Balanced pacing already runs a Choreographer loop in MediaCodecDecoderRenderer.
+        // Avoid a second independent Choreographer loop here.
         final boolean balancedPacing =
                 (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
 
         final boolean wantChoreoBackend = (wantVsync && !balancedPacing);
 
-        // If the backend changed while running, restart to switch implementation.
-        if (running.get() && (wantChoreoBackend != useChoreoVsync) && Thread.currentThread() != renderThread) {
-            stop();
-            start();
+        // Do NOT flip backend flags in-place while running.
+        // Switching backend requires a controlled stop/start; otherwise we can stall rendering.
+        if (running.get() && (wantChoreoBackend != useChoreoVsync)) {
+            requestBackendRestartAsync();
             return;
         }
 
+        // Safe when not running (start() will recompute anyway).
         useChoreoVsync = wantChoreoBackend;
+
         applyGlThreadPriorityNow();
 
-        // Wake render thread (useful for non-choreo loop and for immediate redraw)
+        // Wake render thread (useful for immediate redraw)
         synchronized (frameLock) {
-            frameLock.notify();
+            frameLock.notifyAll();
         }
     }
-
 
     private void UseProgram(int program) {
         if (lastProgram != program) {
