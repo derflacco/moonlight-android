@@ -49,224 +49,7 @@ import com.limelight.perf.CpuWarmUp;
 import android.os.Looper;
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
-    // --- FSR-like upscaler reflection helpers (no hard dependency) ---
-// Derived from AMD FidelityFX Super Resolution 1.0 (MIT). See third_party/amd-fsr1/LICENSE
-    private static final class UpscalerReflect {
-        private static volatile java.lang.reflect.Constructor<?> sCtor;
-        private static volatile java.lang.reflect.Method sCreateInputSurface;
-        private static volatile java.lang.reflect.Method sSetDebugEnabled;
-        private static volatile java.lang.reflect.Method sGetOverlayLine;
-        private static volatile java.lang.reflect.Method sSetPresentationHint;
 
-        private static final java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method> sNoArg =
-                new java.util.concurrent.ConcurrentHashMap<>(4);
-
-        private static java.lang.reflect.Constructor<?> ctor() throws Throwable {
-            java.lang.reflect.Constructor<?> c = sCtor;
-            if (c != null) return c;
-            synchronized (UpscalerReflect.class) {
-                c = sCtor;
-                if (c == null) {
-                    Class<?> cls = Class.forName("com.limelight.render.GlUpscaleRenderer");
-                    c = cls.getConstructor(Surface.class, int.class, int.class, PreferenceConfiguration.class);
-                    sCtor = c;
-                }
-            }
-            return c;
-        }
-
-        private static java.lang.reflect.Method noArg(Object upscaler, String name) throws Throwable {
-            java.lang.reflect.Method m = sNoArg.get(name);
-            if (m != null) return m;
-            m = upscaler.getClass().getMethod(name);
-            java.lang.reflect.Method prev = sNoArg.putIfAbsent(name, m);
-            return (prev != null) ? prev : m;
-        }
-
-        private static java.lang.reflect.Method createInputSurface(Object upscaler) throws Throwable {
-            java.lang.reflect.Method m = sCreateInputSurface;
-            if (m != null) return m;
-            synchronized (UpscalerReflect.class) {
-                m = sCreateInputSurface;
-                if (m == null) {
-                    m = upscaler.getClass().getMethod("createDecoderInputSurface");
-                    sCreateInputSurface = m;
-                }
-            }
-            return m;
-        }
-
-        private static java.lang.reflect.Method setDebugEnabled(Object upscaler) throws Throwable {
-            java.lang.reflect.Method m = sSetDebugEnabled;
-            if (m != null) return m;
-            synchronized (UpscalerReflect.class) {
-                m = sSetDebugEnabled;
-                if (m == null) {
-                    m = upscaler.getClass().getMethod("setFsrDebugEnabled", boolean.class);
-                    sSetDebugEnabled = m;
-                }
-            }
-            return m;
-        }
-
-        private static java.lang.reflect.Method getOverlayLine(Object upscaler) throws Throwable {
-            java.lang.reflect.Method m = sGetOverlayLine;
-            if (m != null) return m;
-            synchronized (UpscalerReflect.class) {
-                m = sGetOverlayLine;
-                if (m == null) {
-                    m = upscaler.getClass().getMethod("getFsrOverlayLine");
-                    sGetOverlayLine = m;
-                }
-            }
-            return m;
-        }
-
-        private static java.lang.reflect.Method setPresentationHint(Object upscaler) throws Throwable {
-            java.lang.reflect.Method m = sSetPresentationHint;
-            if (m != null) return m;
-            synchronized (UpscalerReflect.class) {
-                m = sSetPresentationHint;
-                if (m == null) {
-                    m = upscaler.getClass().getMethod(
-                            "setPresentationSizeHintFromContext",
-                            android.content.Context.class);
-                    sSetPresentationHint = m;
-                }
-            }
-            return m;
-        }
-    }
-
-    private static void __fsrCall(Object upscaler, String method) {
-        if (upscaler == null) return;
-        try {
-            UpscalerReflect.noArg(upscaler, method).invoke(upscaler);
-        } catch (Throwable ignored) {}
-    }
-
-    private static Surface __fsrCreateInputSurface(Object upscaler) {
-        if (upscaler == null) return null;
-        try {
-            Object s = UpscalerReflect.createInputSurface(upscaler).invoke(upscaler);
-            return (Surface) s;
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    private static Object __fsrMaybeCreate(Object existing, Surface windowSurface, int srcW, int srcH, PreferenceConfiguration prefs) {
-        if (existing != null) return existing;
-        try {
-            return UpscalerReflect.ctor().newInstance(windowSurface, srcW, srcH, prefs);
-        } catch (Throwable t) {
-            LimeLog.warning("GL upscaler unavailable: " + t);
-            return null;
-        }
-    }
-
-    private static void __fsrSetDebugEnabled(Object upscaler, boolean enabled) {
-        if (upscaler == null) return;
-        try {
-            UpscalerReflect.setDebugEnabled(upscaler).invoke(upscaler, enabled);
-        } catch (Throwable ignored) {}
-    }
-
-    private static void __fsrSetPresentationHint(Object upscaler, android.content.Context ctx) {
-        if (upscaler == null || ctx == null) return;
-        try {
-            UpscalerReflect.setPresentationHint(upscaler).invoke(upscaler, ctx);
-        } catch (Throwable ignored) {}
-    }
-
-
-    private static String __fsrGetOverlayLine(Object upscaler) {
-        if (upscaler == null) return "";
-        try {
-            Object s = UpscalerReflect.getOverlayLine(upscaler).invoke(upscaler);
-            return (s != null) ? s.toString() : "";
-        } catch (Throwable ignored) { return ""; }
-    }
-
-    private static float __fsrGetWeightMs(Object upscaler) {
-        if (upscaler == null) return 0f;
-
-        final String line = __fsrGetOverlayLine(upscaler);
-        if (line == null || line.isEmpty()) return 0f;
-
-        final float ms = __fsrParseMaxMsToken(line);
-        // Sanity clamp: ignore clearly bogus values
-        if (ms <= 0f || ms > 50f) return 0f;
-
-        return ms;
-    }
-
-    // Parse the maximum "<number>ms" token found in the overlay line (case-insensitive).
-    private static float __fsrParseMaxMsToken(String s) {
-        if (s == null) return 0f;
-
-        float max = 0f;
-
-        for (int i = s.length() - 1; i >= 1; i--) {
-            final char cs = s.charAt(i);
-            if (cs != 's' && cs != 'S') continue;
-
-            final char cm = s.charAt(i - 1);
-            if (cm != 'm' && cm != 'M') continue;
-
-            final int end = i - 1; // exclusive end of number (points to 'm')
-            int start = end - 1;
-            while (start >= 0) {
-                final char c = s.charAt(start);
-                if ((c >= '0' && c <= '9') || c == '.') {
-                    start--;
-                } else {
-                    break;
-                }
-            }
-            start++;
-
-            if (start >= end) continue;
-
-            final float v = __fsrParseFloatRange(s, start, end);
-            if (v > max) max = v;
-
-            // Skip over the parsed number to avoid re-parsing overlapping tokens
-            i = start;
-        }
-
-        return max;
-    }
-
-    private static float __fsrParseFloatRange(String s, int start, int endExclusive) {
-        float v = 0f;
-        float frac = 0.1f;
-        boolean seenDot = false;
-
-        for (int i = start; i < endExclusive; i++) {
-            final char c = s.charAt(i);
-            if (c == '.') {
-                if (seenDot) return 0f;
-                seenDot = true;
-                continue;
-            }
-
-            final int d = c - '0';
-            if (d < 0 || d > 9) return 0f;
-
-            if (!seenDot) {
-                v = (v * 10f) + (float) d;
-            } else {
-                v += ((float) d) * frac;
-                frac *= 0.1f;
-            }
-        }
-
-        return v;
-    }
-
-
-    // --- end helpers ---
 
     // True when new VPS/SPS/PPS has been received since last submission
     private boolean csdDirty = false;
@@ -1034,18 +817,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void setRenderTarget(Surface renderTarget) {
         // Tear down previous upscaler if surface changed
         if (this.renderTarget != null && this.renderTarget != renderTarget && glUpscaler != null) {
-            try { __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
+            glUpscaler.release();
             glUpscaler = null;
-            if (decoderInputSurfaceForUpscale != null) {
-                try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-                decoderInputSurfaceForUpscale = null;
-            }
         }
 
         this.renderTarget = renderTarget;
 
         // Re-apply presentation hint to upscaler when render target may change
-        __fsrSetPresentationHint(glUpscaler, context);
+        if (glUpscaler != null) {
+            glUpscaler.setPresentationHint(context);
+        }
     }
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
@@ -1301,48 +1082,44 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Enable async callbacks after start
         try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
 
-        // If FSR-like upscaling is enabled, configure decoder to output to GL upscaler input surface
+        // If GL upscaling is enabled, configure decoder to output to the upscaler's input surface.
         Surface __codecSurface = renderTarget;
+
         if (prefs != null && prefs.videoUpscaleEnable) {
-            try {
-                if (glUpscaler == null) {
-                    glUpscaler = __fsrMaybeCreate((Object)glUpscaler, renderTarget, coldCfg.initialWidth, coldCfg.initialHeight, prefs);
-                    decoderInputSurfaceForUpscale = __fsrCreateInputSurface(glUpscaler);
-                    // Provide presentation-size hint from Context if available
-                    try {
-                        java.lang.reflect.Method __m = glUpscaler.getClass().getMethod("setPresentationSizeHintFromContext", android.content.Context.class);
-                        __m.invoke(glUpscaler, context);
-                    } catch (Throwable ignored) {}
-}
-                __codecSurface = decoderInputSurfaceForUpscale;
-            } catch (Throwable t) {
-                LimeLog.warning("GL upscaler init failed; falling back: " + t);
-                try { if (glUpscaler != null) __fsrCall(glUpscaler, "release"); } catch (Throwable ignored) {}
-                glUpscaler = null; decoderInputSurfaceForUpscale = null;
+            if (glUpscaler == null) {
+                glUpscaler = new GlUpscalerBridge();
+            }
+
+            if (glUpscaler.ensureCreated(renderTarget, coldCfg.initialWidth, coldCfg.initialHeight, prefs, context)) {
+                final Surface in = glUpscaler.getDecoderInputSurface();
+                if (in != null) {
+                    __codecSurface = in;
+                }
+            } else {
+                // Hard fallback: upscaler unavailable or init failed
+                try { glUpscaler.release(); } catch (Throwable ignored) { }
+                glUpscaler = null;
             }
         }
+
         videoDecoder.configure(format, __codecSurface, null, 0);
 
         // Start GL upscaler loop if present
-        try { if (glUpscaler != null) __fsrCall(glUpscaler, "start"); } catch (Throwable ignored) {}
-        // Apply user VSync setting (checkbox_Vsync)
-        applyUpscalerVsyncSettingIfSupported();
+        if (glUpscaler != null) {
+            glUpscaler.start();
 
+            // Apply user VSync setting (checkbox_Vsync)
+            applyUpscalerVsyncSettingIfSupported();
 
-        try {
-            if (glUpscaler != null) {
-                boolean dbg = false;
-                if (prefs != null) {
-                    dbg = prefs.enablePerfOverlayLite
-                            && prefs.enablePerfOverlayLiteAdvanced
-                            && prefs.videoUpscaleEnable
-                            && !prefs.gpuPathMode;
-                }
-                __fsrSetDebugEnabled(glUpscaler, dbg);
+            boolean dbg = false;
+            if (prefs != null) {
+                dbg = prefs.enablePerfOverlayLite
+                        && prefs.enablePerfOverlayLiteAdvanced
+                        && prefs.videoUpscaleEnable
+                        && !prefs.gpuPathMode;
             }
-        } catch (Throwable ignored) {}
-
-
+            glUpscaler.setDebugEnabled(dbg);
+        }
 
         coldCfg.configuredFormat = format;
 
@@ -1535,9 +1312,7 @@ try {
 
         return initializeDecoder(false);
     }
-    private Object glUpscaler; // usato via reflection
-    private android.view.Surface decoderInputSurfaceForUpscale;
-
+    private GlUpscalerBridge glUpscaler;
 
     // All threads that interact with the MediaCodec instance must call this function regularly!
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
@@ -2496,11 +2271,9 @@ try {
         nanoPacer.reset();
 
         // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+        if (glUpscaler != null) {
+            glUpscaler.release();
+            glUpscaler = null;
         }
         // Stop any active codec recovery operations
         synchronized (codecRecoveryMonitor) {
@@ -2580,14 +2353,16 @@ try {
     }
 
     private void applyUpscalerVsyncSettingIfSupported() {
-        // Cached no-arg reflection through UpscalerReflect.noArg()
-        __fsrCall(glUpscaler, "applyVsyncSetting");
-    }
-    private void applyUpscalerThreadPrioritiesIfSupported() {
-        // Cached no-arg reflection through UpscalerReflect.noArg()
-        __fsrCall(glUpscaler, "applyThreadPriorities");
+        if (glUpscaler != null) {
+            glUpscaler.applyVsyncSetting();
+        }
     }
 
+    private void applyUpscalerThreadPrioritiesIfSupported() {
+        if (glUpscaler != null) {
+            glUpscaler.applyThreadPriorities();
+        }
+    }
     private void drainOutputBufferQueueNoRender() {
         Integer idx;
         while ((idx = outputBufferQueue.poll()) != null) {
@@ -2844,13 +2619,10 @@ try {
         }
 
         // Final safety: ensure GL upscaler is torn down
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+        if (glUpscaler != null) {
+            glUpscaler.release();
+            glUpscaler = null;
         }
-
     }
 
     @Override
@@ -2885,11 +2657,9 @@ try {
         }
 
         // Ensure decoder and any GL upscaler resources are released
-        try { if (glUpscaler != null) { __fsrCall(glUpscaler, "release"); } } catch (Throwable ignored) {}
-        glUpscaler = null;
-        if (decoderInputSurfaceForUpscale != null) {
-            try { decoderInputSurfaceForUpscale.release(); } catch (Throwable ignored) {}
-            decoderInputSurfaceForUpscale = null;
+        if (glUpscaler != null) {
+            glUpscaler.release();
+            glUpscaler = null;
         }
         videoDecoder.release();
     }
@@ -3731,8 +3501,9 @@ try {
 
         StringBuilder sb = new StringBuilder(sbCap);
 
-        final boolean __fsrActiveForE2e = prefsSnapshot.videoUpscaleEnable && glUpscaler != null;
-        final float __fsrWeightMsForE2e = __fsrActiveForE2e ? __fsrGetWeightMs(glUpscaler) : 0f;
+        final boolean __fsrActiveForE2e =
+                prefsSnapshot.videoUpscaleEnable && glUpscaler != null && glUpscaler.isReady();
+        final float __fsrWeightMsForE2e = __fsrActiveForE2e ? glUpscaler.getWeightMs() : 0f;
         final float e2eTotalMs = endToEndTimeMs + __fsrWeightMsForE2e;
 
         // --- MINI OVERLAY ---
@@ -4513,6 +4284,7 @@ try {
         // If upscaler is active and GL is running its own Choreographer backend (VSync ON, not Balanced),
         // GL becomes the vsync gate. In that case, keep the decoder renderer at DISPLAY to avoid contention.
         if (glUpscaler == null || prefs == null) return false;
+        if (!glUpscaler.isReady()) return false;
         if (!prefs.videoUpscaleEnable) return false;
         if (prefs.gpuPathMode) return false;
         if (!prefs.enableVsync) return false;
