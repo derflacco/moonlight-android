@@ -62,176 +62,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean cpuWarmUpStarted = false;
 
     // stats
-
-    // Decode latency tracking: PTS(us) -> enqueue time (ns), allocation-free (no boxing / no sparse map).
-    private static final long LATENCY_TRACKING_CLEANUP_THRESHOLD_NS = 30_000_000_000L; // 30 seconds
-    private static final int LATENCY_TRACKING_MAX_SIZE = 384; // ring capacity (small = bounded scan cost)
-    private long lastLatencyTrackingCleanupNs = 0L;
-
-    private final PtsEnqueueTracker enqueueNsByPtsUs = new PtsEnqueueTracker(LATENCY_TRACKING_MAX_SIZE);
-
-    // PTS->enqueueNs tracker: fixed-size ring backed by atomic arrays (no per-frame allocations).
-    // put() publishes a slot by writing enqNs first, then the pts key last.
-    private static final class PtsEnqueueTracker {
-
-        private static final long EMPTY_KEY = Long.MIN_VALUE;
-
-        private final AtomicLongArray ptsUs;
-        private final AtomicLongArray enqNs;
-        private final int cap;
-        private final AtomicInteger head = new AtomicInteger(0);
-
-        PtsEnqueueTracker(int capacity) {
-            cap = Math.max(8, capacity);
-            ptsUs = new AtomicLongArray(cap);
-            enqNs = new AtomicLongArray(cap);
-            clear();
-        }
-
-        void clear() {
-            for (int i = 0; i < cap; i++) {
-                ptsUs.set(i, EMPTY_KEY);
-                enqNs.set(i, 0L);
-            }
-            head.set(0);
-        }
-
-        void put(long pts, long ns) {
-            int idx = head.getAndIncrement();
-            if (idx >= cap) {
-                // Wrap head in a bounded way (racy is fine, overwrite behavior is allowed).
-                // Bring idx back in range without expensive modulo in the common case.
-                idx = idx % cap;
-                head.set(idx + 1);
-            }
-
-            // Publish: write value first, then key last.
-            enqNs.set(idx, ns);
-            ptsUs.set(idx, pts);
-        }
-
-        long take(long pts) {
-            // Scan backwards from the newest index to maximize hit probability.
-            int h = head.get();
-            if (h >= cap) h = h % cap;
-
-            int i = h;
-            for (int n = 0; n < cap; n++) {
-                i--;
-                if (i < 0) i = cap - 1;
-
-                final long k = ptsUs.get(i);
-                if (k == pts) {
-                    final long v = enqNs.get(i);
-                    // Claim the slot
-                    if (ptsUs.compareAndSet(i, pts, EMPTY_KEY)) {
-                        return v;
-                    }
-                    // If CAS fails, someone else removed/overwrote; continue scanning.
-                }
-            }
-            return Long.MIN_VALUE;
-        }
-
-        void cleanupOld(long nowNs, long thresholdNs) {
-            for (int i = 0; i < cap; i++) {
-                final long k = ptsUs.get(i);
-                if (k != EMPTY_KEY) {
-                    final long v = enqNs.get(i);
-                    if ((nowNs - v) > thresholdNs) {
-                        // Best-effort: clear only if key unchanged.
-                        ptsUs.compareAndSet(i, k, EMPTY_KEY);
-                    }
-                }
-            }
-        }
-
-        int size() {
-            int count = 0;
-            for (int i = 0; i < cap; i++) {
-                if (ptsUs.get(i) != EMPTY_KEY) count++;
-            }
-            return count;
-        }
-    }
-
-
-
-    // Update stats using both decode time (enqueue->dequeue) and end-to-end latency (uptime - PTS)
-
-    private void updateDecodeLatencyStats(long presentationTimeUs) {
-        updateDecodeLatencyStats(presentationTimeUs, System.nanoTime());
-    }
-
-    private void updateDecodeLatencyStats(long presentationTimeUs, long endNs) {
-        final long enqNs = enqueueNsByPtsUs.take(presentationTimeUs);
-
-        if (enqNs == Long.MIN_VALUE) {
-            activeWindowVideoStats.decoderMisses++;
-            return;
-        }
-
-        // Use provided end time instead of current System.nanoTime()
-        final long decNs = endNs - enqNs;
-        final long decMs = decNs / 1_000_000L;
-
-        if (decMs >= 0 && decMs < 1000) {
-            activeWindowVideoStats.decoderTimeMs += decMs;
-            activeWindowVideoStats.decoderSamples++;
-        }
-
-        // Also calculate old end-to-end latency for comparison
-        if (!USE_FRAME_RENDER_TIME) {
-            final long e2eMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
-            if (e2eMs >= 0 && e2eMs < 1000) {
-                activeWindowVideoStats.endToEndLatencyMs += e2eMs;
-
-                // Keep backward-compatible totalTimeMs behavior when render-time is not used
-                activeWindowVideoStats.totalTimeMs += e2eMs;
-            }
-        }
-    }
-
-
-    // cleanup method
-    private void cleanupOldLatencyTrackingEntries() {
-        final long nowNs = System.nanoTime();
-        if (nowNs - lastLatencyTrackingCleanupNs < LATENCY_TRACKING_CLEANUP_THRESHOLD_NS) {
-            return;
-        }
-
-        enqueueNsByPtsUs.cleanupOld(nowNs, LATENCY_TRACKING_CLEANUP_THRESHOLD_NS);
-        lastLatencyTrackingCleanupNs = nowNs;
-
-    }
-
-    // enforce size limits
-    private void enforceLatencyTrackingSizeLimit() {
-        // No-op: tracker is fixed-size ring (overwrite-on-full).
-    }
-
-    // end stats //
+    private final DecodeLatencyTracker decodeLatencyTracker = new DecodeLatencyTracker();
 
     // Offload heavy perf overlay formatting off the decode thread
     private final Handler perfOverlayHandler = new Handler(Looper.getMainLooper());
-    // Max horizontal shift steps for lite OLED overlay
-    private static final int LITE_SHIFT_MAX_SPACES = 8;
-
     // Throttle overlay updates to reduce main-thread churn
     private static final long PERF_OVERLAY_DISPATCH_INTERVAL_NS = 100_000_000L; // 100 ms
     private long lastPerfOverlayDispatchNs = 0L;
-
-    // Cached prefixes for Lite overlay OLED shift (0..LITE_SHIFT_MAX_SPACES)
-    private static final String[] LITE_SHIFT_PREFIX = new String[LITE_SHIFT_MAX_SPACES + 1];
-    static {
-        StringBuilder sb = new StringBuilder(LITE_SHIFT_MAX_SPACES);
-        LITE_SHIFT_PREFIX[0] = "";
-        for (int i = 1; i <= LITE_SHIFT_MAX_SPACES; i++) {
-            sb.append(' ');
-            LITE_SHIFT_PREFIX[i] = sb.toString();
-        }
-    }
-
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
@@ -329,7 +166,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         @Override
         public void onDequeued(long presentationTimeUs, long dequeueNs) {
             try {
-                MediaCodecDecoderRenderer.this.updateDecodeLatencyStats(presentationTimeUs, dequeueNs);
+                decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, dequeueNs, USE_FRAME_RENDER_TIME);
             } catch (Throwable ignored) { }
         }
     };
@@ -379,17 +216,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private String glRenderer;
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
-    // --- OLED burn-in protection for Lite overlay (horizontal pixel/text shift) ---
-    private static final long LITE_SHIFT_PERIOD_NS = 30_000_000_000L; // 30s
-    // --- OLED "pixel refresh" blink for Lite overlay ---
-    // Briefly blanks the Lite overlay to let OLED pixels rest (default: 250ms every 5 minutes).
-    private static final long LITE_BLINK_PERIOD_NS = 300_000_000_000L;   // 5 min
-    private static final long LITE_BLINK_DURATION_NS = 250_000_000L;     // 250 ms
-    private long liteBlinkNextStartNs = 0L;
-    private long liteBlinkEndNs = 0L;
-    private long liteShiftNextNs = 0L;
-    private int liteShiftSpaces = 0; // 0..2
-    // end of lite blink\shift
+    private final PerfOverlayComposer perfOverlayComposer = new PerfOverlayComposer();
 
     // Fetchinputbuffer utils:
     private long inputDequeueHangStartMs = 0L;
@@ -400,9 +227,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         nextInputBufferIndex = -1;
         nextInputBuffer = null;
     }
-    //
-
-
 
     // Decoder output timeouts configurable at runtime.
 
@@ -483,6 +307,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int lastFrameNumber;
     private int refreshRate;
     private PreferenceConfiguration prefs;
+
     // ---- Runtime frame pacing refresh (overlay-first, UI fallback) ----
     private static final long FRAME_PACING_POLL_INTERVAL_NS = 250_000_000L; // 250 ms
     private long nextFramePacingPollNs = 0L;
@@ -503,10 +328,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Starts small; auto-tunes at runtime (only used for FRAME_PACING_MAX_SMOOTHNESS)
     private volatile int maxSmoothAdaptiveDequeueTimeoutUs = 500;
-
-
-    //    private long lastNetDataNum;
-    private volatile long lastNetDataNum;
 
     // Balanced pacing queue: bounded + allocation-free per-frame (no LinkedBlockingQueue Node allocations).
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
@@ -966,8 +787,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
-        // Enable async callbacks after start
-        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
 
         // If GL upscaling is enabled, configure decoder to output to the upscaler's input surface.
         Surface __codecSurface = renderTarget;
@@ -990,6 +809,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         videoDecoder.configure(format, __codecSurface, null, 0);
+
+        // Enable async callbacks after configure (before start)
+        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
 
         // Start GL upscaler loop if present
         if (glUpscaler != null) {
@@ -1016,8 +838,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         coldCfg.spsBuffers.clear();
         coldCfg.ppsBuffers.clear();
 
-// Clear decode latency tracking when decoder is reconfigured
-        enqueueNsByPtsUs.clear();
+        // Clear per-frame trackers when decoder is reconfigured
+        decodeLatencyTracker.clear();
+        perfOverlayComposer.reset();
+
+
         csdDirty = false;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -1229,7 +1054,8 @@ try {
                 try { asyncCodec.quiesceAndRelease(videoDecoder, asyncOutputRelease); } catch (Throwable ignored) { }
 
                 // Clear decode latency tracking during codec recovery
-                enqueueNsByPtsUs.clear();
+                decodeLatencyTracker.clear();
+
                 csdDirty = false;
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
@@ -1719,7 +1545,8 @@ try {
                     // Throttle cleanup to avoid performance spikes
                     final long nowNs = System.nanoTime();
                     if (nowNs - lastCleanupNs > CLEANUP_INTERVAL_NS) {
-                        cleanupOldLatencyTrackingEntries();
+                        decodeLatencyTracker.maybeCleanup();
+
                         lastCleanupNs = nowNs;
                     }
 
@@ -1743,7 +1570,7 @@ try {
                                     : nowNsLocal;
 
                         // Measure decode latency for the first dequeued buffer too
-                            try { updateDecodeLatencyStats(presentationTimeUs, lastDequeueTimeNs); }
+                            try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, lastDequeueTimeNs, USE_FRAME_RENDER_TIME); }
                             catch (Throwable ignored) { }
 
                             if (!isBalanced) {
@@ -1773,7 +1600,7 @@ try {
                                         lastFlags = info.flags;
 
                                         // Measure decode latency for this dequeued buffer
-                                        try { updateDecodeLatencyStats(presentationTimeUs, thisDequeueTimeNs); }
+                                        try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, thisDequeueTimeNs, USE_FRAME_RENDER_TIME); }
                                         catch (Throwable ignored) { }
 
                                         lastDequeueTimeNs = thisDequeueTimeNs;
@@ -1825,7 +1652,7 @@ try {
                                         lastFlags = info.flags;
 
                                         // Measure decode latency per-buffer at dequeue time (more stable samples)
-                                        try { updateDecodeLatencyStats(presentationTimeUs, thisDequeueTimeNs); }
+                                        try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, thisDequeueTimeNs, USE_FRAME_RENDER_TIME); }
                                         catch (Throwable ignored) { }
 
                                         lastDequeueTimeNs = thisDequeueTimeNs;
@@ -2102,7 +1929,8 @@ try {
         drainOutputBufferQueueNoRender();
 
         // Clear decode latency tracking to prevent memory leaks
-        enqueueNsByPtsUs.clear();
+        decodeLatencyTracker.clear();
+
 
         // Stop CPU warm-up
         if (cpuWarmUp != null && cpuWarmUpStarted) {
@@ -2126,11 +1954,19 @@ try {
         // Reset NanoPacer
         nanoPacer.reset();
 
-        // Stop FSR upscaler ASAP to avoid rendering to an abandoned BufferQueue
+        // Ensure decoder and any GL upscaler resources are released
         if (glUpscaler != null) {
             glUpscaler.release();
             glUpscaler = null;
         }
+
+        if (videoDecoder != null) {
+            try { videoDecoder.release(); } catch (Throwable ignored) {}
+            videoDecoder = null;
+        }
+
+        perfOverlayComposer.reset();
+
         // Stop any active codec recovery operations
         synchronized (codecRecoveryMonitor) {
             codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
@@ -2409,7 +2245,8 @@ try {
             } catch (Throwable ignored) {}
         }
 
-        enqueueNsByPtsUs.clear();
+        decodeLatencyTracker.clear();
+        perfOverlayComposer.reset();
 
         // Final async cleanup
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
@@ -2485,7 +2322,8 @@ try {
     public void cleanup() {
 
         // Clear decode latency tracking to prevent memory leaks
-        enqueueNsByPtsUs.clear();
+        decodeLatencyTracker.clear();
+        perfOverlayComposer.reset();
 
         // Ensure async resources are released
         try { detachAsyncCodec(); } catch (Throwable ignored) {}
@@ -2502,6 +2340,7 @@ try {
         nanoPacer.reset();
 
         // Clear output buffer queue
+        drainOutputBufferQueueNoRender();
         outputBufferQueue.clear();
 
         // Stop CpuWarmUp
@@ -2517,7 +2356,10 @@ try {
             glUpscaler.release();
             glUpscaler = null;
         }
-        videoDecoder.release();
+        if (videoDecoder != null) {
+            try { videoDecoder.release(); } catch (Throwable ignored) {}
+            videoDecoder = null;
+        }
     }
 
     @Override
@@ -2564,7 +2406,7 @@ try {
             // Discard negative or distant future timestamps.
                 long currentTimeUs = System.currentTimeMillis() * 1000L;
                 if (timestampUs > 0 && timestampUs < (currentTimeUs + 3600_000_000L)) {
-                    enqueueNsByPtsUs.put(timestampUs, System.nanoTime());
+                    decodeLatencyTracker.onEnqueue(timestampUs);
                 }
             }
 
@@ -2723,7 +2565,12 @@ try {
                                 final float endToEndTimeMsSnapshot = endToEndTimeMs;
                                 final boolean hdrActiveSnapshot = hdrActive;
 
-                                buildAndDispatchPerfOverlay(
+                                final boolean isFsrActive =
+                                        prefsSnapshot.videoUpscaleEnable && glUpscaler != null && glUpscaler.isReady();
+                                final float fsrWeightMs = isFsrActive ? glUpscaler.getWeightMs() : 0f;
+
+                                final PerfOverlayComposer.Result overlay = perfOverlayComposer.build(
+                                        context,
                                         prefsSnapshot,
                                         lastTwoSnapshot,
                                         fpsSnapshot,
@@ -2731,8 +2578,24 @@ try {
                                         rttInfoSnapshot,
                                         decoderSnapshot,
                                         endToEndTimeMsSnapshot,
-                                        hdrActiveSnapshot
+                                        hdrActiveSnapshot,
+                                        coldCfg.initialWidth,
+                                        coldCfg.initialHeight,
+                                        isFsrActive,
+                                        fsrWeightMs
                                 );
+
+                                // Notify overlay listener
+                                if (perfListener != null && prefsSnapshot.enablePerfOverlay) {
+                                    perfListener.onPerfUpdate(overlay.renderedLog);
+                                }
+
+                                // Track best decode time at target FPS
+                                boolean targetFpsMatched = ((int) fpsSnapshot.totalFps == (int) prefsSnapshot.fps);
+                                if (minDecodeTime > decodeTimeMsSnapshot && targetFpsMatched) {
+                                    minDecodeTime = decodeTimeMsSnapshot;
+                                    minDecodeTimeFullLog = overlay.fullLog;
+                                }
                             }
                         });
                     }
@@ -3327,289 +3190,6 @@ try {
             return str;
         }
     }
-    /**
-     * Heavy perf overlay formatting.
-     * Runs on the UI/main thread via perfOverlayHandler to avoid blocking the decode loop.
-     */
-    /**
-     * Builds performance overlay string with minimal allocations.
-     * Called on UI thread via perfOverlayHandler to avoid blocking decode loop.
-     */
-    private void buildAndDispatchPerfOverlay(final PreferenceConfiguration prefsSnapshot,
-                                             final VideoStats lastTwo,
-                                             final VideoStatsFps fps,
-                                             final float decodeTimeMs,
-                                             final long rttInfo,
-                                             final String decoder,
-                                             final float endToEndTimeMs,
-                                             final boolean hdrActive) {
-        if (prefsSnapshot == null) return;
-
-        // Pre-size StringBuilder based on overlay type to reduce allocations
-        final int sbCap;
-        if (prefsSnapshot.enablePerfOverlayMini) {
-            sbCap = 96;
-        } else if (prefsSnapshot.enablePerfOverlayLite) {
-            sbCap = 192;
-        } else {
-            sbCap = 384;
-        }
-
-        StringBuilder sb = new StringBuilder(sbCap);
-
-        final boolean __fsrActiveForE2e =
-                prefsSnapshot.videoUpscaleEnable && glUpscaler != null && glUpscaler.isReady();
-        final float __fsrWeightMsForE2e = __fsrActiveForE2e ? glUpscaler.getWeightMs() : 0f;
-        final float e2eTotalMs = endToEndTimeMs + __fsrWeightMsForE2e;
-
-        // --- MINI OVERLAY ---
-        if (prefsSnapshot.enablePerfOverlayMini) {
-            // Network bandwidth
-            if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
-                long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
-                        + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
-                if (lastNetDataNum != 0) {
-                    float realtimeNetData = (netData - lastNetDataNum) / 1024f;
-                    if (realtimeNetData >= 1000) {
-                        sb.append("BW: ").append(String.format("%.1f", realtimeNetData / 1024f)).append(" M/s\n");
-                    } else {
-                        sb.append("BW: ").append(String.format("%.1f", realtimeNetData)).append(" K/s\n");
-                    }
-                }
-                lastNetDataNum = netData;
-            }
-
-            // Packet loss percentage
-            float plPct = 0f;
-            if (lastTwo.totalFrames > 0) {
-                plPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
-            }
-            sb.append("PL: ").append(String.format("%.0f", plPct)).append("%\n");
-
-            // Network latency and decode time
-            sb.append("Net: ").append((int) (rttInfo >> 32))
-                    .append("ms | Dec: ").append(String.format("%.1f", decodeTimeMs)).append("ms\n");
-
-            // FPS
-            sb.append(String.format("%.2f", fps.totalFps)).append(" FPS");
-        }
-        // --- LITE OVERLAY ---
-        else if (prefsSnapshot.enablePerfOverlayLite) {
-            // Network bandwidth with localization
-            if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
-                long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
-                        + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
-                if (lastNetDataNum != 0) {
-                    sb.append(context.getString(R.string.perf_overlay_lite_bandwidth)).append(": ");
-                    float realtimeNetData = (netData - lastNetDataNum) / 1024f;
-                    if (realtimeNetData >= 1000) {
-                        sb.append(String.format("%.2f", realtimeNetData / 1024f)).append("M/s\t ");
-                    } else {
-                        sb.append(String.format("%.2f", realtimeNetData)).append("K/s\t ");
-                    }
-                }
-                lastNetDataNum = netData;
-            }
-
-            // Network latency and decode time
-            sb.append(context.getString(R.string.perf_overlay_lite_network_decoding_delay)).append(": ");
-            sb.append(context.getString(R.string.perf_overlay_lite_net, (int) (rttInfo >> 32)));
-            sb.append(" / ");
-            sb.append(context.getString(R.string.perf_overlay_lite_dectime, decodeTimeMs));
-
-
-            sb.append("\t");
-            sb.append(" ");
-
-            // Packet loss percentage
-            sb.append(context.getString(R.string.perf_overlay_lite_packet_loss)).append(": ");
-            float liteLossPct = 0f;
-            if (lastTwo.totalFrames > 0) {
-                liteLossPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
-            }
-            sb.append(context.getString(R.string.perf_overlay_lite_netdrops, liteLossPct));
-
-            // Advanced Lite: end-to-end latency
-            if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
-                sb.append(" / ");
-                sb.append(context.getString(R.string.perf_overlay_lite_e2e, e2eTotalMs));
-                sb.append("  ");
-            }
-
-            // FPS
-            sb.append("\t FPS：");
-            sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
-
-            // OLED protection: horizontal shifting
-            try {
-                if (prefsSnapshot.enablePerfOverlayLiteOledShift) {
-                    long now = System.nanoTime();
-                    if (now >= liteShiftNextNs) {
-                        liteShiftNextNs = now + LITE_SHIFT_PERIOD_NS;
-                        // Ping-pong shift: 0 → 1 → 2 → 1 → 0
-                        if (liteShiftSpaces == 0) liteShiftSpaces = 1;
-                        else if (liteShiftSpaces == 1) liteShiftSpaces = 2;
-                        else if (liteShiftSpaces == 2) liteShiftSpaces = 1;
-                        else liteShiftSpaces = 0;
-                    }
-                } else {
-                    liteShiftSpaces = 0;
-                }
-            } catch (Throwable ignored) {}
-
-            // OLED protection: blinking
-            try {
-                if (prefsSnapshot.enablePerfOverlayLiteOledShift) {
-                    long now = System.nanoTime();
-                    if (now >= liteBlinkNextStartNs) {
-                        liteBlinkNextStartNs = now + LITE_BLINK_PERIOD_NS;
-                        liteBlinkEndNs = now + LITE_BLINK_DURATION_NS;
-                    }
-                } else {
-                    liteBlinkEndNs = 0L;
-                }
-            } catch (Throwable ignored) {}
-
-            // Advanced Lite metrics: received/rendered FPS and HDR status
-            if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
-                sb.append("  R:").append((int) fps.renderedFps);
-                sb.append("  ").append(hdrActive ? "HDR" : "SDR");
-                // Single compact token: [R|L|B|S|C|W|2] + optional [U] per FSR + optional [F] per GPU Path
-                boolean isFsrActive = prefsSnapshot.videoUpscaleEnable && glUpscaler != null;
-                sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
-                //not needed in this branch, we are forcing it anyway
-/*                if (prefsSnapshot.gpuPathMode) {
-                    sb.append('G');
-                }*/
-            }
-
-
-            // Stereo 3D renderer info if active
-            if (Stereo3DRenderer.isActive) {
-                sb.append(" ");
-                sb.append(context.getString(R.string.perf_overlay_ai_fps));
-                sb.append(" ");
-                sb.append(Stereo3DRenderer.threeDFps);
-                sb.append(" ");
-                sb.append(context.getString(R.string.perf_overlay_ai_delegate));
-                sb.append(" ");
-                sb.append(Stereo3DRenderer.renderer);
-                sb.append(" ");
-                sb.append(context.getString(R.string.perf_overlay_drawdelay, Stereo3DRenderer.drawDelay));
-            }
-        }
-        // --- FULL OVERLAY ---
-        else {
-            // Stream resolution and FPS
-            if (Stereo3DRenderer.isActive) {
-                sb.append(context.getString(R.string.perf_overlay_streamdetails,
-                        coldCfg.initialWidth + "x" + coldCfg.initialHeight, fps.totalFps));
-                sb.append('\n');
-                sb.append(" ");
-                sb.append(context.getString(R.string.perf_overlay_ai_fps));
-                sb.append(" ");
-                sb.append(Stereo3DRenderer.threeDFps);
-                sb.append(" ");
-                sb.append(context.getString(R.string.perf_overlay_ai_delegate));
-                sb.append(" ");
-                sb.append(Stereo3DRenderer.renderer);
-                sb.append(" ");
-                sb.append(context.getString(R.string.perf_overlay_drawdelay, Stereo3DRenderer.drawDelay));
-            } else {
-                sb.append(context.getString(R.string.perf_overlay_streamdetails,
-                        coldCfg.initialWidth + "x" + coldCfg.initialHeight, fps.totalFps));
-            }
-
-            sb.append('\n');
-            sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
-            sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
-            sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
-
-            // Packet loss
-            float fullLossPct = 0f;
-            if (lastTwo.totalFrames > 0) {
-                fullLossPct = (float) lastTwo.framesLost / (float) lastTwo.totalFrames * 100f;
-            }
-            sb.append(context.getString(R.string.perf_overlay_netdrops, fullLossPct)).append('\n');
-
-            // Network bandwidth
-            if (TrafficStatsHelper.getPackageRxBytes(Process.myUid()) != TrafficStats.UNSUPPORTED) {
-                long netData = TrafficStatsHelper.getPackageRxBytes(Process.myUid())
-                        + TrafficStatsHelper.getPackageTxBytes(Process.myUid());
-                if (lastNetDataNum != 0) {
-                    sb.append(context.getString(R.string.perf_overlay_lite_bandwidth)).append(": ");
-                    float realtimeNetData = (netData - lastNetDataNum) / 1024f;
-                    if (realtimeNetData >= 1000) {
-                        sb.append(String.format("%.2f", realtimeNetData / 1024f)).append("M/s\n");
-                    } else {
-                        sb.append(String.format("%.2f", realtimeNetData)).append("K/s\n");
-                    }
-                }
-                lastNetDataNum = netData;
-            }
-
-            // Network latency (min/current)
-            sb.append(context.getString(R.string.perf_overlay_netlatency,
-                    (int) (rttInfo >> 32), (int) rttInfo)).append('\n');
-
-            // Host processing latency stats
-            if (lastTwo.framesWithHostProcessingLatency > 0) {
-                sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
-                        (float) lastTwo.minHostProcessingLatency / 10,
-                        (float) lastTwo.maxHostProcessingLatency / 10,
-                        (float) lastTwo.totalHostProcessingLatency / 10 /
-                                lastTwo.framesWithHostProcessingLatency)).append('\n');
-            }
-
-            // Decode time and end-to-end latency
-            sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
-            sb.append(context.getString(R.string.perf_overlay_lite_e2e, e2eTotalMs));
-        }
-
-/*        // Append FSR upscaler info if available
-        try {
-            String __fsr = __fsrGetOverlayLine(glUpscaler);
-            if (__fsr != null && !__fsr.isEmpty()) {
-                if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append('\n');
-                sb.append(__fsr).append('\n');
-            }
-        } catch (Throwable ignored) {}*/
-
-        String fullLog = sb.toString();
-
-        // Apply OLED shift (prepend spaces)
-        if (prefsSnapshot.enablePerfOverlayLite && prefsSnapshot.enablePerfOverlayLiteOledShift) {
-            try {
-                sb.insert(0, LITE_SHIFT_PREFIX[Math.min(LITE_SHIFT_MAX_SPACES, Math.max(0, liteShiftSpaces))]);
-            } catch (Throwable ignored) {}
-        }
-
-        // Apply OLED blink (clear overlay during blink period)
-        if (prefsSnapshot.enablePerfOverlayLite && prefsSnapshot.enablePerfOverlayLiteOledShift) {
-            try {
-                long now = System.nanoTime();
-                if (liteBlinkEndNs > 0L && now < liteBlinkEndNs) {
-                    sb.setLength(0);
-                    sb.append(' '); // Minimal content for transparent overlay
-                }
-            } catch (Throwable ignored) {}
-        }
-
-        String rawLog = fullLog;         // Before OLED transformations
-        String renderedLog = sb.toString(); // After shift/blink
-
-        // Notify overlay listener
-        if (perfListener != null && prefsSnapshot.enablePerfOverlay) {
-            perfListener.onPerfUpdate(renderedLog);
-        }
-
-        // Track best decode time at target FPS
-        boolean targetFpsMatched = ((int) fps.totalFps == (int) prefsSnapshot.fps);
-        if (minDecodeTime > decodeTimeMs && targetFpsMatched) {
-            minDecodeTime = decodeTimeMs;
-            minDecodeTimeFullLog = fullLog;
-        }
-    }
 
     // Async Decoding Helpers
 
@@ -3730,64 +3310,6 @@ try {
         asyncCodec.drainNoRenderReleaseQueue(videoDecoder, asyncOutputRelease);
     }
    // Async Decoding Helpers End
-
-
-    // Lite pacing glyph
-    private static String getLitePacingGlyph(final PreferenceConfiguration p, final boolean isFsrActive) {
-        if (p == null) {
-            return "?";
-        }
-
-        StringBuilder glyph = new StringBuilder(3);
-
-        // GPU Raw
-        if (p.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
-            glyph.append('R');
-        }
-        // Min Latency
-        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY) {
-            glyph.append('L');
-        }
-        // Balanced
-        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            glyph.append('B');
-        }
-        // Smoothness
-        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
-            glyph.append('S');
-        }
-        // FPS Cap
-        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-            glyph.append('C');
-        }
-        // Warp modes
-        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP) {
-            glyph.append('W');
-        }
-        else if (p.framePacing == PreferenceConfiguration.FRAME_PACING_WARP2) {
-            glyph.append('2'); // W2 per differenziare
-        }
-        else {
-            glyph.append('?');
-        }
-
-        // Add 'U' if FSR is active
-        if (isFsrActive) {
-            glyph.append('U');
-        }
-
-        // Add 'V' if standard VSync is enabled
-        if (p.enableVsync && p.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            glyph.append('V');
-        }
-
-        // Add 'F' if FastVSync is enabled
-        if (p.fastVsync) {
-            glyph.append('F');
-        }
-
-        return glyph.toString();
-    }
 
 
     // Helper method for buffer release based on mode
