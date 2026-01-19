@@ -18,6 +18,11 @@ public class PreferenceConfiguration {
     public boolean immediateFrameDelivery = false; // Skip decoder wait for lower latency
     private static final String IMMEDIATE_FRAME_DELIVERY_PREF_STRING = "checkbox_immediate_frame_delivery";
     private static final boolean DEFAULT_IMMEDIATE_FRAME_DELIVERY = false;
+    // Async decoder callback mode (UI toggle)
+    public boolean asyncDecodeEnabled = true;
+    private static final String ASYNC_DECODE_ENABLED_PREF_STRING = "checkbox_async_decode";
+    private static final boolean DEFAULT_ASYNC_DECODE_ENABLED = true;
+
     // Customize decoder output dequeue timeout slider (UI gating)
     public boolean decoderOutputDequeueTimeoutCustom = false;
     private static final String DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING =
@@ -1132,6 +1137,7 @@ public class PreferenceConfiguration {
         config.preventPacketLoss = prefs.getBoolean(PREVENT_PACKET_LOSS_PREF_STRING, DEFAULT_PREVENT_PACKET_LOSS);
         config.snappyInput = prefs.getBoolean(SNAPPY_INPUT_PREF_STRING, DEFAULT_SNAPPY_INPUT);
         config.immediateFrameDelivery = prefs.getBoolean(IMMEDIATE_FRAME_DELIVERY_PREF_STRING, DEFAULT_IMMEDIATE_FRAME_DELIVERY);
+        config.asyncDecodeEnabled = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) && prefs.getBoolean(ASYNC_DECODE_ENABLED_PREF_STRING, DEFAULT_ASYNC_DECODE_ENABLED);
         config.decoderOutputDequeueTimeoutCustom = prefs.getBoolean(
                 DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING,
                 DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM);

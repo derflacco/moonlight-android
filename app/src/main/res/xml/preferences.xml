@@ -74,6 +74,13 @@
             app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
+            android:key="checkbox_async_decode"
+            android:title="Async decode"
+            android:summary="Enable MediaCodec async callback mode. Changes apply after decoder restart."
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
             android:key="checkbox_custom_decoder_output_timeout_us"
             android:title="@string/decoder_output_dequeue_timeout_custom_title"
             android:summary="@string/decoder_output_dequeue_timeout_custom_summary"

@@ -344,6 +344,10 @@ public final class PerfOverlayComposer {
         } else {
             glyph.append('?');
         }
+        // Async decode glyph
+        if (p.asyncDecodeEnabled) {
+            glyph.append('A');
+        }
 
         if (isFsrActive) {
             glyph.append('U');

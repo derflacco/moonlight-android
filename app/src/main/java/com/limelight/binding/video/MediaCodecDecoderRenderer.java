@@ -123,20 +123,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // ColdCfg end
 
     // ==== Async decoding ====
-    // Always-on on API 21+; fall back to sync below 21
+    // Async callback mode is selectable at runtime via SharedPreferences.
+    // NOTE: MediaCodec's callback mode must be decided before (re)configure, so toggling this
+    // will request a decoder restart (not an in-place switch).
     private static final boolean ENABLE_ASYNC_DECODING = true;
+    private static final String KEY_ASYNC_DECODE_ENABLED = "checkbox_async_decode";
+    private static final long ASYNC_DECODE_POLL_INTERVAL_NS = 500_000_000L; // 500 ms
+
+    // Current codec mode (must not change while codec is executing).
     private boolean useAsyncCodec = ENABLE_ASYNC_DECODING &&
             (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M);
+
+    // Desired mode requested by UI/overlay (applied on next codec restart/reset).
+    private volatile boolean requestedUseAsyncCodec = useAsyncCodec;
+    private long nextAsyncDecodePollNs = 0L;
 
     private final AsyncCodecAdapter asyncCodec = new AsyncCodecAdapter();
 
     private boolean computeAsyncPreferLowerDelaysFromCurrentPrefs(int effectivePacing) {
         final PreferenceConfiguration p = prefs;
-        return (p != null) && (
-                        p.immediateFrameDelivery
-        );
+        return (p != null) && p.immediateFrameDelivery;
     }
-    // ==== End async decoding ====
+// ==== End async decoding ====
+
 
     // ==== Nano Pacer ====
     private volatile int streamTargetFps = 60;
@@ -274,6 +283,46 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             prefs.decoderOutputDequeueTimeoutUs = dequeueUs;
         }
     }
+
+    // ---- Runtime async decode toggle (requires decoder restart) ----
+    private boolean computeDesiredUseAsyncCodecFromPrefs() {
+        // Overlay-first, UI fallback. Default is enabled.
+        final boolean userEnabled = readBooleanOverlayFirst(KEY_ASYNC_DECODE_ENABLED, true);
+        return ENABLE_ASYNC_DECODING
+                && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                && userEnabled;
+    }
+
+    private void initAsyncDecodingFromSettings() {
+        requestedUseAsyncCodec = computeDesiredUseAsyncCodecFromPrefs();
+        useAsyncCodec = requestedUseAsyncCodec; // Safe before codec is configured
+        nextAsyncDecodePollNs = 0L;
+    }
+
+    private void maybeApplyRuntimeAsyncDecodingRequest() {
+        final long nowNs = System.nanoTime();
+        if (nowNs < nextAsyncDecodePollNs) {
+            return;
+        }
+        nextAsyncDecodePollNs = nowNs + ASYNC_DECODE_POLL_INTERVAL_NS;
+
+        final boolean desired = computeDesiredUseAsyncCodecFromPrefs();
+        if (desired == requestedUseAsyncCodec) {
+            return;
+        }
+
+        requestedUseAsyncCodec = desired;
+
+        // Apply only via restart/reset. Do NOT flip useAsyncCodec while executing.
+        if (!stopping && videoDecoder != null) {
+            if (codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESTART) ||
+                    codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_RESTART)) {
+                LimeLog.info("Async decode mode change requested -> decoder restart (desired=" +
+                        (desired ? "async" : "sync") + ")");
+            }
+        }
+    }
+
 
     // END: Decoder output timeouts configurable at runtime.
 
@@ -1023,7 +1072,7 @@ try {
         this.coldCfg.initialHeight = coldCfg.invertResolution ? width : height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
-
+        initAsyncDecodingFromSettings();
         return initializeDecoder(false);
     }
     private GlUpscalerBridge glUpscaler;
@@ -1064,20 +1113,20 @@ try {
                     LimeLog.warning("Flushing decoder");
                     try {
                         videoDecoder.flush();
-                        // Async codec requires start() after flush to resume callbacks/output.
-                        if (useAsyncCodec && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+                        // Resume only if we are still in FLUSH (no concurrent promotion to RESTART/RESET)
+                        if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH &&
+                                useAsyncCodec && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             videoDecoder.start();
                         }
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+
+                        // Only clear if we are still in FLUSH
+                        codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
-
-                        // Something went wrong during the restart, let's use a bigger hammer
-                        // and try a reset instead.
                         codecRecoveryType.set(CR_RECOVERY_TYPE_RESTART);
                     }
                 }
-
                 // We don't count flushes as codec recovery attempts
                 if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                     codecRecoveryAttempts++;
@@ -1088,6 +1137,9 @@ try {
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESTART) {
                     LimeLog.warning("Trying to restart decoder after CodecException");
                     try {
+                        // Async \ Sync
+                        useAsyncCodec = requestedUseAsyncCodec;
+
                         videoDecoder.stop();
                         configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
@@ -1111,6 +1163,8 @@ try {
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     LimeLog.warning("Trying to reset decoder after CodecException");
                     try {
+                        // Async \ Sync
+                        useAsyncCodec = requestedUseAsyncCodec;
                         videoDecoder.reset();
                         configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
@@ -1132,6 +1186,8 @@ try {
                 // throw away the old decoder and reinitialize a new one from scratch.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET) {
                     LimeLog.warning("Trying to recreate decoder after CodecException");
+                    // Async \ Sync
+                    useAsyncCodec = requestedUseAsyncCodec;
                     videoDecoder.release();
 
                     try {
@@ -1501,7 +1557,7 @@ try {
 
                     // Apply settings changes while streaming (frame pacing hot-reload)
                     maybeApplyRuntimeFramePacing();
-
+                    maybeApplyRuntimeAsyncDecodingRequest();
                     // Live-tune decoder timeouts from app settings
                     maybeReloadDecoderTimingPrefs();
                     // Drain async no-render releases here to avoid output backpressure and callback-thread binder calls.
