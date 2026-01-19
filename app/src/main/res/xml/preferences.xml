@@ -73,27 +73,21 @@
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
+        <CheckBoxPreference
+            android:key="checkbox_custom_decoder_output_timeout_us"
+            android:title="@string/decoder_output_dequeue_timeout_custom_title"
+            android:summary="@string/decoder_output_dequeue_timeout_custom_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.SeekBarPreference
             android:defaultValue="50000"
             android:key="seekbar_decoder_output_timeout_us"
+            android:dependency="checkbox_custom_decoder_output_timeout_us"
             android:max="50000"
             android:title="@string/decoder_output_dequeue_timeout_title"
             android:summary="@string/decoder_output_dequeue_timeout_summary"
             android:dialogMessage="@string/decoder_output_dequeue_timeout_dialog"
-            android:text="@string/unit_microseconds"
-            app:iconSpaceReserved="false"
-            seekbar:min="0"
-            seekbar:step="250"
-            seekbar:keyStep="250" />
-
-        <com.limelight.preferences.SeekBarPreference
-            android:defaultValue="0"
-            android:key="seekbar_decoder_output_drain_timeout_us"
-            android:max="50000"
-            android:title="@string/decoder_output_drain_timeout_title"
-            android:summary="@string/decoder_output_drain_timeout_summary"
-            android:dialogMessage="@string/decoder_output_drain_timeout_dialog"
             android:text="@string/unit_microseconds"
             app:iconSpaceReserved="false"
             seekbar:min="0"

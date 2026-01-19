@@ -18,6 +18,11 @@ public class PreferenceConfiguration {
     public boolean immediateFrameDelivery = false; // Skip decoder wait for lower latency
     private static final String IMMEDIATE_FRAME_DELIVERY_PREF_STRING = "checkbox_immediate_frame_delivery";
     private static final boolean DEFAULT_IMMEDIATE_FRAME_DELIVERY = false;
+    // Customize decoder output dequeue timeout slider (UI gating)
+    public boolean decoderOutputDequeueTimeoutCustom = false;
+    private static final String DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING =
+            "checkbox_custom_decoder_output_timeout_us";
+    private static final boolean DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM = false;
 
     // Decoder output dequeue timeout (µs) used when immediateFrameDelivery=false
     public int decoderOutputDequeueTimeoutUs = 50000;
@@ -25,11 +30,6 @@ public class PreferenceConfiguration {
             "seekbar_decoder_output_timeout_us";
     private static final int DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_US = 50000;
 
-    // Decoder output drain timeout (µs) used in latest-only drain loop
-    public int decoderOutputDrainTimeoutUs = 0;
-    private static final String DECODER_OUTPUT_DRAIN_TIMEOUT_US_PREF_STRING =
-            "seekbar_decoder_output_drain_timeout_us";
-    private static final int DEFAULT_DECODER_OUTPUT_DRAIN_TIMEOUT_US = 0;
     private static int clampInt(int v, int min, int max) {
         if (v < min) return min;
         if (v > max) return max;
@@ -1132,12 +1132,12 @@ public class PreferenceConfiguration {
         config.preventPacketLoss = prefs.getBoolean(PREVENT_PACKET_LOSS_PREF_STRING, DEFAULT_PREVENT_PACKET_LOSS);
         config.snappyInput = prefs.getBoolean(SNAPPY_INPUT_PREF_STRING, DEFAULT_SNAPPY_INPUT);
         config.immediateFrameDelivery = prefs.getBoolean(IMMEDIATE_FRAME_DELIVERY_PREF_STRING, DEFAULT_IMMEDIATE_FRAME_DELIVERY);
+        config.decoderOutputDequeueTimeoutCustom = prefs.getBoolean(
+                DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING,
+                DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM);
+
         config.decoderOutputDequeueTimeoutUs =
                 clampInt(prefs.getInt(DECODER_OUTPUT_DEQUEUE_TIMEOUT_US_PREF_STRING, DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_US),
-                        0, 50000);
-
-        config.decoderOutputDrainTimeoutUs =
-                clampInt(prefs.getInt(DECODER_OUTPUT_DRAIN_TIMEOUT_US_PREF_STRING, DEFAULT_DECODER_OUTPUT_DRAIN_TIMEOUT_US),
                         0, 50000);
 
         // Read custom values
