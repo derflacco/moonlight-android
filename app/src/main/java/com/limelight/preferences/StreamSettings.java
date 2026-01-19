@@ -70,6 +70,7 @@ import java.util.List;
 import java.util.Collections;
 import java.util.HashSet;
 import androidx.appcompat.app.AlertDialog;
+import androidx.preference.PreferenceGroup;
 
 public class StreamSettings extends AppCompatActivity {
     private PreferenceConfiguration previousPrefs;
@@ -185,11 +186,43 @@ public class StreamSettings extends AppCompatActivity {
                             || "checkbox_enable_perf_overlay_lite_advanced".equals(key) // Lite Mode +
                             || "checkbox_enable_perf_overlay_lite_oledshift".equals(key)// OLED shift
                             || "checkbox_enable_perf_overlay_mini".equals(key)          // PerfOverlay Mini
+                            || (key != null && key.contains("async"))                      // Async decode prefs
                     ) {
                         // Re-evaluate UI locks and dependent visibility
                         updateLocks();
                     }
                 };
+
+        private Preference findFirstPrefKeyContains(PreferenceGroup group,
+                                                    String mustContainA,
+                                                    String mustContainB,
+                                                    String mustNotContain) {
+            if (group == null) return null;
+
+            final int count = group.getPreferenceCount();
+            for (int i = 0; i < count; i++) {
+                final Preference p = group.getPreference(i);
+                if (p == null) continue;
+
+                if (p instanceof PreferenceGroup) {
+                    final Preference hit = findFirstPrefKeyContains((PreferenceGroup) p,
+                            mustContainA, mustContainB, mustNotContain);
+                    if (hit != null) return hit;
+                }
+
+                final String k = p.getKey();
+                if (k == null) continue;
+
+                if (mustContainA != null && !k.contains(mustContainA)) continue;
+                if (mustContainB != null && !k.contains(mustContainB)) continue;
+                if (mustNotContain != null && k.contains(mustNotContain)) continue;
+
+                return p;
+            }
+
+            return null;
+        }
+
         private void updateLocks() {
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
@@ -289,7 +322,7 @@ public class StreamSettings extends AppCompatActivity {
             // --- PerfOverlay Lite dependent options visibility ---
             final boolean perfOverlayLiteOn = sp.getBoolean("checkbox_enable_perf_overlay_lite", false);
 
-// Lite Mode + (Lite Advanced)
+            // Lite Mode + (Lite Advanced)
             final Preference perfOverlayLiteAdvanced = findPreference("checkbox_enable_perf_overlay_lite_advanced");
             if (perfOverlayLiteAdvanced != null) {
                 try { perfOverlayLiteAdvanced.setVisible(perfOverlayLiteOn); } catch (Throwable ignored) {}
@@ -303,7 +336,7 @@ public class StreamSettings extends AppCompatActivity {
                 }
             }
 
-// Lite mode quick options (dialog)
+            // Lite mode quick options (dialog)
             final Preference perfOverlayLiteDialog = findPreference("checkbox_enable_perf_overlay_lite_dialog");
             if (perfOverlayLiteDialog != null) {
                 try { perfOverlayLiteDialog.setVisible(perfOverlayLiteOn); } catch (Throwable ignored) {}
@@ -317,7 +350,7 @@ public class StreamSettings extends AppCompatActivity {
                 }
             }
 
-// OLED burn-in protection (pixel shift)
+            // OLED burn-in protection (pixel shift)
             final Preference perfOverlayLiteOledShift = findPreference("checkbox_enable_perf_overlay_lite_oledshift");
             if (perfOverlayLiteOledShift != null) {
                 try { perfOverlayLiteOledShift.setVisible(perfOverlayLiteOn); } catch (Throwable ignored) {}
@@ -327,6 +360,44 @@ public class StreamSettings extends AppCompatActivity {
                     sp.edit().putBoolean("checkbox_enable_perf_overlay_lite_oledshift", false).apply();
                     if (perfOverlayLiteOledShift instanceof CheckBoxPreference) {
                         ((CheckBoxPreference) perfOverlayLiteOledShift).setChecked(false);
+                    }
+                }
+            }
+
+            // --- Async: Prefer lower delays (visible only when async decode is enabled) ---
+            final PreferenceGroup root = getPreferenceScreen();
+
+            // Try to locate the async decode master toggle (key may vary across branches)
+            Preference asyncDecodeToggle = findPreference("checkbox_enable_async_decode");
+            if (asyncDecodeToggle == null) asyncDecodeToggle = findPreference("pref_async_decode_enable");
+            if (asyncDecodeToggle == null) asyncDecodeToggle = findFirstPrefKeyContains(root, "async", "decode", "prefer");
+            if (asyncDecodeToggle == null) asyncDecodeToggle = findFirstPrefKeyContains(root, "async", "decoder", "prefer");
+
+            // Default to enabled if we can't find the toggle (safer than hiding incorrectly)
+            boolean asyncDecodeEnabled = true;
+            if (asyncDecodeToggle != null) {
+                final String k = asyncDecodeToggle.getKey();
+                if (k != null) asyncDecodeEnabled = sp.getBoolean(k, true);
+            }
+
+            // Locate "Async: Prefer lower delays"
+            Preference asyncPreferLowerDelays = findPreference("pref_async_prefer_lower_delays");
+            if (asyncPreferLowerDelays == null) asyncPreferLowerDelays = findPreference("checkbox_async_prefer_lower_delays");
+            if (asyncPreferLowerDelays == null) asyncPreferLowerDelays = findFirstPrefKeyContains(root, "async", "prefer", null);
+            if (asyncPreferLowerDelays == null) asyncPreferLowerDelays = findFirstPrefKeyContains(root, "async", "lower", null);
+
+            if (asyncPreferLowerDelays != null) {
+                try { asyncPreferLowerDelays.setVisible(asyncDecodeEnabled); } catch (Throwable ignored) {}
+                asyncPreferLowerDelays.setEnabled(asyncDecodeEnabled);
+
+                // Safety: do not keep this enabled when async decode is off
+                if (!asyncDecodeEnabled) {
+                    final String k = asyncPreferLowerDelays.getKey();
+                    if (k != null && sp.getBoolean(k, false)) {
+                        sp.edit().putBoolean(k, false).apply();
+                    }
+                    if (asyncPreferLowerDelays instanceof CheckBoxPreference) {
+                        ((CheckBoxPreference) asyncPreferLowerDelays).setChecked(false);
                     }
                 }
             }
