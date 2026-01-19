@@ -133,10 +133,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean computeAsyncPreferLowerDelaysFromCurrentPrefs(int effectivePacing) {
         final PreferenceConfiguration p = prefs;
         return (p != null) && (
-                effectivePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ||
-                        effectivePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW ||
-                        effectivePacing == PreferenceConfiguration.FRAME_PACING_WARP ||
-                        effectivePacing == PreferenceConfiguration.FRAME_PACING_WARP2 ||
                         p.immediateFrameDelivery
         );
     }
