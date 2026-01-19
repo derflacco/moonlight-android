@@ -194,6 +194,9 @@ public class StreamSettings extends AppCompatActivity {
                             || "checkbox_enable_perf_overlay_lite_oledshift".equals(key)
                             || "checkbox_enable_perf_overlay_lite_dialog".equals(key)
                             || "checkbox_enable_perf_overlay_lite_advanced".equals(key)
+                            // Vsync \ FastVsync
+                            || "checkbox_Vsync".equals(key)
+                            || "checkbox_fastVsync".equals(key)
                     ) {
                         // Re-evaluate UI locks and dependent visibility
                         updateLocks();
@@ -245,6 +248,56 @@ public class StreamSettings extends AppCompatActivity {
 
             // Do not force "frame_pacing" from the UI layer.
             // Frame pacing must remain user-controlled and be applied by the streaming session.
+
+            // --- Hide/disable Vsync + FastVsync when frame_pacing == "balanced" ---
+            final String framePacingValue = sp.getString("frame_pacing", "latency");
+            final boolean balancedSelected = "balanced".equals(framePacingValue);
+
+            final Preference vsyncPref = findPreference("checkbox_Vsync");
+            final Preference fastVsyncPref = findPreference("checkbox_fastVsync");
+
+            if (vsyncPref != null) {
+                if (balancedSelected) {
+                    hidePreferenceBestEffort(vsyncPref);
+                } else {
+                    try { vsyncPref.setVisible(true); } catch (Throwable ignored) {}
+                }
+                vsyncPref.setEnabled(!balancedSelected);
+            }
+
+            if (fastVsyncPref != null) {
+                if (balancedSelected) {
+                    hidePreferenceBestEffort(fastVsyncPref);
+                } else {
+                    try { fastVsyncPref.setVisible(true); } catch (Throwable ignored) {}
+                }
+                fastVsyncPref.setEnabled(!balancedSelected);
+            }
+
+            // Safety: ensure stored values can't remain enabled while Balanced is active
+            if (balancedSelected) {
+                SharedPreferences.Editor e = null;
+
+                if (sp.getBoolean("checkbox_Vsync", false)) {
+                    if (e == null) e = sp.edit();
+                    e.putBoolean("checkbox_Vsync", false);
+                    if (vsyncPref instanceof CheckBoxPreference) {
+                        ((CheckBoxPreference) vsyncPref).setChecked(false);
+                    }
+                }
+
+                if (sp.getBoolean("checkbox_fastVsync", false)) {
+                    if (e == null) e = sp.edit();
+                    e.putBoolean("checkbox_fastVsync", false);
+                    if (fastVsyncPref instanceof CheckBoxPreference) {
+                        ((CheckBoxPreference) fastVsyncPref).setChecked(false);
+                    }
+                }
+
+                if (e != null) {
+                    e.apply();
+                }
+            }
 
             // LFR preference
             boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
