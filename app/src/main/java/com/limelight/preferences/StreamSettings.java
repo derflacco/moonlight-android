@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.app.Activity;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Vibrator;
 
 import androidx.annotation.NonNull;
@@ -197,6 +198,10 @@ public class StreamSettings extends AppCompatActivity {
                             // Vsync \ FastVsync
                             || "checkbox_Vsync".equals(key)
                             || "checkbox_fastVsync".equals(key)
+                            || "checkbox_gpupath".equals(key)                // GPUPath (adjust if different)
+                            || "pref_video_upscale_enable".equals(key)       // Upscaling enable
+                            || "pref_video_upscale_mode".equals(key)         // Upscaling mode
+                            || "pref_video_upscale_preset".equals(key)       // Upscaling preset
                     ) {
                         // Re-evaluate UI locks and dependent visibility
                         updateLocks();
@@ -302,67 +307,56 @@ public class StreamSettings extends AppCompatActivity {
             // LFR preference
             boolean preferLowerDelays = sp.getBoolean("pref_low_latency_frame_balance", false);
 
-            // Dependency locks - FSR bloccato solo da HDR
-            boolean lockFsrEn = hdrOn; // GPU Path non blocca più FSR
+            // Dependency locks - FSR blocked ONLY by HDR (behavior), but UI is greyed-out by GPUPath
+            final boolean lockFsrEn = hdrOn;               // behavior lock (forces FSR off)
+            final boolean lockFsrUi = gpuPathStored;       // UI lock only (grey out, do NOT force off)
 
-            Preference fsrEn       = findPreference("pref_video_upscale_enable");
-            Preference fsrMode     = findPreference("pref_video_upscale_mode");
-            Preference fsrPreset   = findPreference("pref_video_upscale_preset");
-            Preference sharpness   = findPreference("pref_video_upscale_sharpness");
+            Preference fsrEn     = findPreference("pref_video_upscale_enable");
+            Preference fsrMode   = findPreference("pref_video_upscale_mode");
+            Preference fsrPreset = findPreference("pref_video_upscale_preset");
+            Preference sharpness = findPreference("pref_video_upscale_sharpness");
 
-            // Determine FSR enabled state
-            boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;
+            // Determine FSR enabled state (behavior)
+            final boolean fsrEnabled = sp.getBoolean("pref_video_upscale_enable", false) && !lockFsrEn;
 
             final String fsrModeValue = sp.getString("pref_video_upscale_mode", "rcas");
             // Show preset for both RCAS-only and EASU+RCAS. Hide only when mode is "none" or FSR disabled.
             final boolean showPreset = fsrEnabled && !"none".equals(fsrModeValue);
 
-            final boolean easuActive = "easu_rcas".equals(fsrModeValue);
-            final boolean presetVisible = fsrEnabled && easuActive;
-
-            // FSR enable toggle
+            // FSR enable toggle (visible, but greyed out when HDR locks OR GPUPath is active)
             if (fsrEn != null) {
-                fsrEn.setEnabled(!lockFsrEn);
+                try { fsrEn.setVisible(true); } catch (Throwable ignored) {}
+                fsrEn.setEnabled(!lockFsrEn && !lockFsrUi);
             }
 
-            // FSR mode selector
+            // FSR mode selector (visible only when FSR is enabled; greyed out when GPUPath is active)
             if (fsrMode != null) {
                 try {
                     fsrMode.setVisible(fsrEnabled);
                 } catch (Throwable ignored) {
                     fsrMode.setEnabled(fsrEnabled);
                 }
-                fsrMode.setEnabled(fsrEnabled);
+                fsrMode.setEnabled(fsrEnabled && !lockFsrUi);
             }
 
-            // FSR preset slider (only meaningful for EASU+RCAS)
-            if (fsrPreset != null) {
-                try {
-                    fsrPreset.setVisible(presetVisible);
-                } catch (Throwable ignored) {
-                    fsrPreset.setEnabled(presetVisible);
-                }
-                fsrPreset.setEnabled(presetVisible);
-            }
-
-            // FSR sharpness slider
-            if (sharpness != null) {
-                try {
-                    sharpness.setVisible(fsrEnabled);
-                } catch (Throwable ignored) {
-                    sharpness.setEnabled(fsrEnabled);
-                }
-                sharpness.setEnabled(fsrEnabled);
-            }
-
-            // FSR preset (applies to RCAS-only and EASU+RCAS)
+            // FSR preset slider (applies to RCAS-only and EASU+RCAS; greyed out when GPUPath is active)
             if (fsrPreset != null) {
                 try {
                     fsrPreset.setVisible(showPreset);
                 } catch (Throwable ignored) {
                     fsrPreset.setEnabled(showPreset);
                 }
-                fsrPreset.setEnabled(showPreset);
+                fsrPreset.setEnabled(showPreset && !lockFsrUi);
+            }
+
+            // FSR sharpness slider (visible only when FSR is enabled; greyed out when GPUPath is active)
+            if (sharpness != null) {
+                try {
+                    sharpness.setVisible(fsrEnabled);
+                } catch (Throwable ignored) {
+                    sharpness.setEnabled(fsrEnabled);
+                }
+                sharpness.setEnabled(fsrEnabled && !lockFsrUi);
             }
 
             // --- Decoder output dequeue timeout slider: show only when customization is enabled ---
@@ -395,6 +389,7 @@ public class StreamSettings extends AppCompatActivity {
                     }
                 }
             }
+
             // --- PerfOverlay Lite dependent options visibility ---
             final boolean perfOverlayLiteOn = sp.getBoolean("checkbox_enable_perf_overlay_lite", false);
 
@@ -477,6 +472,7 @@ public class StreamSettings extends AppCompatActivity {
                     }
                 }
             }
+
             // --- Decoder output dequeue timeout visibility: only when customization is enabled ---
             final boolean dequeueCustomEnabled = sp.getBoolean("runtimeOutputDequeueTimeoutCustomEnabled", false);
 
@@ -501,9 +497,9 @@ public class StreamSettings extends AppCompatActivity {
 
         @Override
         public void onPause() {
-            super.onPause();
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
             sp.unregisterOnSharedPreferenceChangeListener(lockWatcher);
+            super.onPause();
         }
 
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
@@ -1159,6 +1155,15 @@ public class StreamSettings extends AppCompatActivity {
         @Override
         public void onCreatePreferences(Bundle bundle, String s) {
             initializePreferences();
+            final Preference gpuPathPref = findPreference("checkbox_gpu_path_mode");
+            if (gpuPathPref != null) {
+                gpuPathPref.setOnPreferenceChangeListener((preference, newValue) -> {
+                    // Let the preference framework persist the new value, then refresh UI
+                    new Handler(Looper.getMainLooper()).post(this::updateLocks);
+                    return true;
+                });
+            }
+
         }
 
         public void initializePreferences() {
