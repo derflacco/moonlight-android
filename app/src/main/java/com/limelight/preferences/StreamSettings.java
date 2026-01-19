@@ -198,7 +198,8 @@ public class StreamSettings extends AppCompatActivity {
                             // Vsync \ FastVsync
                             || "checkbox_Vsync".equals(key)
                             || "checkbox_fastVsync".equals(key)
-                            || "checkbox_gpupath".equals(key)                // GPUPath (adjust if different)
+                            || "checkbox_gpu_path_mode".equals(key)          // GPUPath (actual key)
+                            || "checkbox_gpupath".equals(key)                // GPUPath (legacy key, keep)
                             || "pref_video_upscale_enable".equals(key)       // Upscaling enable
                             || "pref_video_upscale_mode".equals(key)         // Upscaling mode
                             || "pref_video_upscale_preset".equals(key)       // Upscaling preset
@@ -254,35 +255,47 @@ public class StreamSettings extends AppCompatActivity {
             // Do not force "frame_pacing" from the UI layer.
             // Frame pacing must remain user-controlled and be applied by the streaming session.
 
-            // --- Hide/disable Vsync + FastVsync when frame_pacing == "balanced" ---
+            // --- Vsync is a GlUpscale feature: show only when GPUPath OR Upscaling are enabled ---
+            // Additionally, keep them hidden when frame_pacing == "balanced" (Balanced already handles sync).
             final String framePacingValue = sp.getString("frame_pacing", "latency");
             final boolean balancedSelected = "balanced".equals(framePacingValue);
+
+            // GlUpscale active if either GPUPath is enabled or Upscaling (FSR-like) is enabled
+            final boolean glUpscaleActive =
+                    gpuPathStored || sp.getBoolean("pref_video_upscale_enable", false);
+
+            // Vsync: only meaningful when GlUpscale is active, and never with Balanced
+            final boolean allowVsyncToggle = glUpscaleActive && !balancedSelected;
+
+            // FastVsync: independent from GlUpscale, hide/disable ONLY when Balanced is selected
+            final boolean allowFastVsyncToggle = !balancedSelected;
+
 
             final Preference vsyncPref = findPreference("checkbox_Vsync");
             final Preference fastVsyncPref = findPreference("checkbox_fastVsync");
 
             if (vsyncPref != null) {
-                if (balancedSelected) {
-                    hidePreferenceBestEffort(vsyncPref);
-                } else {
+                if (allowVsyncToggle) {
                     try { vsyncPref.setVisible(true); } catch (Throwable ignored) {}
+                } else {
+                    hidePreferenceBestEffort(vsyncPref);
                 }
-                vsyncPref.setEnabled(!balancedSelected);
+                vsyncPref.setEnabled(allowVsyncToggle);
             }
 
             if (fastVsyncPref != null) {
-                if (balancedSelected) {
-                    hidePreferenceBestEffort(fastVsyncPref);
-                } else {
+                if (allowFastVsyncToggle) {
                     try { fastVsyncPref.setVisible(true); } catch (Throwable ignored) {}
+                } else {
+                    hidePreferenceBestEffort(fastVsyncPref);
                 }
-                fastVsyncPref.setEnabled(!balancedSelected);
+                fastVsyncPref.setEnabled(allowFastVsyncToggle);
             }
 
-            // Safety: ensure stored values can't remain enabled while Balanced is active
-            if (balancedSelected) {
-                SharedPreferences.Editor e = null;
+            SharedPreferences.Editor e = null;
 
+            // Safety: Vsync must not remain enabled when not applicable
+            if (!allowVsyncToggle) {
                 if (sp.getBoolean("checkbox_Vsync", false)) {
                     if (e == null) e = sp.edit();
                     e.putBoolean("checkbox_Vsync", false);
@@ -290,7 +303,10 @@ public class StreamSettings extends AppCompatActivity {
                         ((CheckBoxPreference) vsyncPref).setChecked(false);
                     }
                 }
+            }
 
+            // Safety: FastVsync must be disabled only when Balanced is selected
+            if (!allowFastVsyncToggle) {
                 if (sp.getBoolean("checkbox_fastVsync", false)) {
                     if (e == null) e = sp.edit();
                     e.putBoolean("checkbox_fastVsync", false);
@@ -298,10 +314,10 @@ public class StreamSettings extends AppCompatActivity {
                         ((CheckBoxPreference) fastVsyncPref).setChecked(false);
                     }
                 }
+            }
 
-                if (e != null) {
-                    e.apply();
-                }
+            if (e != null) {
+                e.apply();
             }
 
             // LFR preference
