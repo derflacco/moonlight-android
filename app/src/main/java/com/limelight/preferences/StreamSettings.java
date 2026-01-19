@@ -181,12 +181,19 @@ public class StreamSettings extends AppCompatActivity {
                             || "frame_pacing".equals(key)                            // Legacy pacing list
                             || "seekbar_adaptx_mode".equals(key)                     // Legacy AdaptX sub-mode
                             || "seekbar_frame_pacing_profile".equals(key)            // Unified pacing profile slider
-                            || "checkbox_enable_perf_overlay_lite".equals(key)          // PerfOverlay Lite
-                            || "checkbox_enable_perf_overlay_lite_dialog".equals(key)   // Lite quick options
-                            || "checkbox_enable_perf_overlay_lite_advanced".equals(key) // Lite Mode +
-                            || "checkbox_enable_perf_overlay_lite_oledshift".equals(key)// OLED shift
-                            || "checkbox_enable_perf_overlay_mini".equals(key)          // PerfOverlay Mini
-                            || (key != null && key.contains("async"))                      // Async decode prefs
+                            // Async decode UI dependencies
+                            || "checkbox_async_decode".equals(key)
+                            || "checkbox_async_prefer_lower_delays".equals(key)
+
+                            // Decoder output dequeue timeout UI dependencies
+                            || "checkbox_custom_decoder_output_timeout_us".equals(key)
+                            || "seekbar_decoder_output_timeout_us".equals(key)
+
+                            // PerfOverlay Lite dependencies
+                            || "checkbox_enable_perf_overlay_lite".equals(key)
+                            || "checkbox_enable_perf_overlay_lite_oledshift".equals(key)
+                            || "checkbox_enable_perf_overlay_lite_dialog".equals(key)
+                            || "checkbox_enable_perf_overlay_lite_advanced".equals(key)
                     ) {
                         // Re-evaluate UI locks and dependent visibility
                         updateLocks();
@@ -305,6 +312,22 @@ public class StreamSettings extends AppCompatActivity {
                 fsrPreset.setEnabled(showPreset);
             }
 
+            // --- Decoder output dequeue timeout slider: show only when customization is enabled ---
+            final boolean customDecoderOutTimeoutOn =
+                    sp.getBoolean("checkbox_custom_decoder_output_timeout_us", false);
+
+            final Preference decoderOutTimeoutSlider =
+                    findPreference("seekbar_decoder_output_timeout_us");
+
+            if (decoderOutTimeoutSlider != null) {
+                if (customDecoderOutTimeoutOn) {
+                    try { decoderOutTimeoutSlider.setVisible(true); } catch (Throwable ignored) {}
+                } else {
+                    hidePreferenceBestEffort(decoderOutTimeoutSlider);
+                }
+                decoderOutTimeoutSlider.setEnabled(customDecoderOutTimeoutOn);
+            }
+
             // Enforce mutual exclusion (disable FSR only if locked by HDR)
             if (lockFsrEn) {
                 if (fsrEn instanceof CheckBoxPreference) {
@@ -400,6 +423,18 @@ public class StreamSettings extends AppCompatActivity {
                         ((CheckBoxPreference) asyncPreferLowerDelays).setChecked(false);
                     }
                 }
+            }
+            // --- Decoder output dequeue timeout visibility: only when customization is enabled ---
+            final boolean dequeueCustomEnabled = sp.getBoolean("runtimeOutputDequeueTimeoutCustomEnabled", false);
+
+            final Preference decoderOutputDequeueTimeout = findPreference("seekbar_decoder_output_dequeue_timeout_us");
+            if (decoderOutputDequeueTimeout != null) {
+                try {
+                    decoderOutputDequeueTimeout.setVisible(dequeueCustomEnabled);
+                } catch (Throwable ignored) {
+                    // Older Preference libs: keep at least disabled
+                }
+                decoderOutputDequeueTimeout.setEnabled(dequeueCustomEnabled);
             }
         }
 
