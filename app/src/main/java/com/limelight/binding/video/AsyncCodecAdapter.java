@@ -244,8 +244,8 @@ public final class AsyncCodecAdapter {
         if (codec == null) return;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
 
-        // Already attached to this codec instance
-        if (callbackInstalled && attachedCodec == codec) {
+        // Already attached to this codec instance and callback thread is alive
+        if (callbackInstalled && attachedCodec == codec && callbackThread != null && callbackThread.isAlive()) {
             return;
         }
 
@@ -272,98 +272,108 @@ public final class AsyncCodecAdapter {
 
         final Handler cb = new Handler(callbackThread.getLooper());
 
-        codec.setCallback(new MediaCodec.Callback() {
+        try {
+            codec.setCallback(new MediaCodec.Callback() {
 
-            @Override
-            public void onInputBufferAvailable(MediaCodec mc, int index) {
-                try {
-                    // Never block the MediaCodec callback thread.
-                    if (!inputQueue.offer(index)) {
-                        inputQueue.poll();
-                        inputQueue.offer(index);
-                    }
-                } catch (Throwable ignored) { }
-            }
-
-            @Override
-            public void onOutputBufferAvailable(MediaCodec mc, int index, MediaCodec.BufferInfo info) {
-                final MediaCodec.BufferInfo copy = obtainInfo();
-                copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
-
-                boolean stored = false;
-                try {
-                    final long readyNs = System.nanoTime();
-                    synchronized (outInfo) {
-                        // Defensive: recycle previous BufferInfo if the same index is reused.
-                        final MediaCodec.BufferInfo old = outInfo.get(index);
-                        if (old != null && old != copy) {
-                            recycleInfo(old);
-                        }
-
-                        outInfo.put(index, copy);
-                        outReadyNs.put(index, readyNs);
-                        stored = true;
-                    }
-
-                    // Prefer-lower-delays: keep only latest buffer for minimal latency.
-                    if (preferLowerDelays) {
-                        Integer oldIdx;
-                        while ((oldIdx = outputQueue.poll()) != null) {
-                            enqueueNoRenderReleaseOrReleaseNow(mc, oldIdx, release);
-                        }
-                        if (!outputQueue.offer(index)) {
-                            enqueueNoRenderReleaseOrReleaseNow(mc, index, release);
-                        }
-                        return;
-                    }
-
-                    // Managed profiles: bounded queue with drop-oldest policy.
-                    if (!outputQueue.offer(index)) {
-                        final Integer oldIdx = outputQueue.poll();
-                        if (oldIdx != null) {
-                            enqueueNoRenderReleaseOrReleaseNow(mc, oldIdx, release);
-                        }
-                        if (!outputQueue.offer(index)) {
-                            enqueueNoRenderReleaseOrReleaseNow(mc, index, release);
-                        }
-                    }
-                } catch (Throwable t) {
-                    // Make sure we don't leak output buffers or BufferInfo objects.
+                @Override
+                public void onInputBufferAvailable(MediaCodec mc, int index) {
                     try {
-                        if (stored) {
-                            enqueueNoRenderReleaseOrReleaseNow(mc, index, release);
-                        } else {
-                            recycleInfo(copy);
-                            try {
-                                if (release != null) {
-                                    release.releaseNoRender(mc, index);
-                                } else {
-                                    mc.releaseOutputBuffer(index, false);
-                                }
-                            } catch (Throwable ignored) { }
+                        // Never block the MediaCodec callback thread.
+                        if (!inputQueue.offer(index)) {
+                            inputQueue.poll();
+                            inputQueue.offer(index);
                         }
                     } catch (Throwable ignored) { }
                 }
-            }
 
-            @Override
-            public void onOutputFormatChanged(MediaCodec mc, MediaFormat format) {
-                try {
-                    if (callbacks != null) {
-                        callbacks.onOutputFormatChanged(mc, format);
-                    }
-                } catch (Throwable ignored) { }
-            }
+                @Override
+                public void onOutputBufferAvailable(MediaCodec mc, int index, MediaCodec.BufferInfo info) {
+                    final MediaCodec.BufferInfo copy = obtainInfo();
+                    copy.set(info.offset, info.size, info.presentationTimeUs, info.flags);
 
-            @Override
-            public void onError(MediaCodec mc, MediaCodec.CodecException e) {
-                try {
-                    if (callbacks != null) {
-                        callbacks.onCodecError(mc, e);
+                    boolean stored = false;
+                    try {
+                        final long readyNs = System.nanoTime();
+                        synchronized (outInfo) {
+                            // Defensive: recycle previous BufferInfo if the same index is reused.
+                            final MediaCodec.BufferInfo old = outInfo.get(index);
+                            if (old != null && old != copy) {
+                                recycleInfo(old);
+                            }
+
+                            outInfo.put(index, copy);
+                            outReadyNs.put(index, readyNs);
+                            stored = true;
+                        }
+
+                        // Prefer-lower-delays: keep only latest buffer for minimal latency.
+                        if (preferLowerDelays) {
+                            Integer oldIdx;
+                            while ((oldIdx = outputQueue.poll()) != null) {
+                                enqueueNoRenderReleaseOrReleaseNow(mc, oldIdx, release);
+                            }
+                            if (!outputQueue.offer(index)) {
+                                enqueueNoRenderReleaseOrReleaseNow(mc, index, release);
+                            }
+                            return;
+                        }
+
+                        // Managed profiles: bounded queue with drop-oldest policy.
+                        if (!outputQueue.offer(index)) {
+                            final Integer oldIdx = outputQueue.poll();
+                            if (oldIdx != null) {
+                                enqueueNoRenderReleaseOrReleaseNow(mc, oldIdx, release);
+                            }
+                            if (!outputQueue.offer(index)) {
+                                enqueueNoRenderReleaseOrReleaseNow(mc, index, release);
+                            }
+                        }
+                    } catch (Throwable t) {
+                        // Make sure we don't leak output buffers or BufferInfo objects.
+                        try {
+                            if (stored) {
+                                enqueueNoRenderReleaseOrReleaseNow(mc, index, release);
+                            } else {
+                                recycleInfo(copy);
+                                try {
+                                    if (release != null) {
+                                        release.releaseNoRender(mc, index);
+                                    } else {
+                                        mc.releaseOutputBuffer(index, false);
+                                    }
+                                } catch (Throwable ignored) { }
+                            }
+                        } catch (Throwable ignored) { }
                     }
-                } catch (Throwable ignored) { }
-            }
-        }, cb);
+                }
+
+                @Override
+                public void onOutputFormatChanged(MediaCodec mc, MediaFormat format) {
+                    try {
+                        if (callbacks != null) {
+                            callbacks.onOutputFormatChanged(mc, format);
+                        }
+                    } catch (Throwable ignored) { }
+                }
+
+                @Override
+                public void onError(MediaCodec mc, MediaCodec.CodecException e) {
+                    try {
+                        if (callbacks != null) {
+                            callbacks.onCodecError(mc, e);
+                        }
+                    } catch (Throwable ignored) { }
+                }
+            }, cb);
+        } catch (Throwable t) {
+            // Failed to install callback: shut down thread to avoid leaks.
+            try { callbackThread.quitSafely(); } catch (Throwable ignored) { }
+            callbackThread = null;
+            attachedCodec = null;
+            callbackInstalled = false;
+            return;
+        }
+
 
         attachedCodec = codec;
         callbackInstalled = true;
