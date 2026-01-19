@@ -180,12 +180,16 @@ public class StreamSettings extends AppCompatActivity {
                             || "frame_pacing".equals(key)                            // Legacy pacing list
                             || "seekbar_adaptx_mode".equals(key)                     // Legacy AdaptX sub-mode
                             || "seekbar_frame_pacing_profile".equals(key)            // Unified pacing profile slider
+                            || "checkbox_enable_perf_overlay_lite".equals(key)          // PerfOverlay Lite
+                            || "checkbox_enable_perf_overlay_lite_dialog".equals(key)   // Lite quick options
+                            || "checkbox_enable_perf_overlay_lite_advanced".equals(key) // Lite Mode +
+                            || "checkbox_enable_perf_overlay_lite_oledshift".equals(key)// OLED shift
+                            || "checkbox_enable_perf_overlay_mini".equals(key)          // PerfOverlay Mini
                     ) {
                         // Re-evaluate UI locks and dependent visibility
                         updateLocks();
                     }
                 };
-
         private void updateLocks() {
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
@@ -279,6 +283,50 @@ public class StreamSettings extends AppCompatActivity {
                 } else {
                     if (sp.getBoolean("pref_video_upscale_enable", false)) {
                         sp.edit().putBoolean("pref_video_upscale_enable", false).apply();
+                    }
+                }
+            }
+            // --- PerfOverlay Lite dependent options visibility ---
+            final boolean perfOverlayLiteOn = sp.getBoolean("checkbox_enable_perf_overlay_lite", false);
+
+// Lite Mode + (Lite Advanced)
+            final Preference perfOverlayLiteAdvanced = findPreference("checkbox_enable_perf_overlay_lite_advanced");
+            if (perfOverlayLiteAdvanced != null) {
+                try { perfOverlayLiteAdvanced.setVisible(perfOverlayLiteOn); } catch (Throwable ignored) {}
+                perfOverlayLiteAdvanced.setEnabled(perfOverlayLiteOn);
+
+                if (!perfOverlayLiteOn && sp.getBoolean("checkbox_enable_perf_overlay_lite_advanced", false)) {
+                    sp.edit().putBoolean("checkbox_enable_perf_overlay_lite_advanced", false).apply();
+                    if (perfOverlayLiteAdvanced instanceof CheckBoxPreference) {
+                        ((CheckBoxPreference) perfOverlayLiteAdvanced).setChecked(false);
+                    }
+                }
+            }
+
+// Lite mode quick options (dialog)
+            final Preference perfOverlayLiteDialog = findPreference("checkbox_enable_perf_overlay_lite_dialog");
+            if (perfOverlayLiteDialog != null) {
+                try { perfOverlayLiteDialog.setVisible(perfOverlayLiteOn); } catch (Throwable ignored) {}
+                perfOverlayLiteDialog.setEnabled(perfOverlayLiteOn);
+
+                if (!perfOverlayLiteOn && sp.getBoolean("checkbox_enable_perf_overlay_lite_dialog", false)) {
+                    sp.edit().putBoolean("checkbox_enable_perf_overlay_lite_dialog", false).apply();
+                    if (perfOverlayLiteDialog instanceof CheckBoxPreference) {
+                        ((CheckBoxPreference) perfOverlayLiteDialog).setChecked(false);
+                    }
+                }
+            }
+
+// OLED burn-in protection (pixel shift)
+            final Preference perfOverlayLiteOledShift = findPreference("checkbox_enable_perf_overlay_lite_oledshift");
+            if (perfOverlayLiteOledShift != null) {
+                try { perfOverlayLiteOledShift.setVisible(perfOverlayLiteOn); } catch (Throwable ignored) {}
+                perfOverlayLiteOledShift.setEnabled(perfOverlayLiteOn);
+
+                if (!perfOverlayLiteOn && sp.getBoolean("checkbox_enable_perf_overlay_lite_oledshift", false)) {
+                    sp.edit().putBoolean("checkbox_enable_perf_overlay_lite_oledshift", false).apply();
+                    if (perfOverlayLiteOledShift instanceof CheckBoxPreference) {
+                        ((CheckBoxPreference) perfOverlayLiteOledShift).setChecked(false);
                     }
                 }
             }
