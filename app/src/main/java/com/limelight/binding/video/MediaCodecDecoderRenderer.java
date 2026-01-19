@@ -129,6 +129,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final boolean ENABLE_ASYNC_DECODING = true;
     private static final String KEY_ASYNC_DECODE_ENABLED = "checkbox_async_decode";
     private static final long ASYNC_DECODE_POLL_INTERVAL_NS = 500_000_000L; // 500 ms
+    // Async drop-policy (latest-only) toggle.
+    private static final String KEY_ASYNC_PREFER_LOWER_DELAYS = "checkbox_async_prefer_lower_delays";
 
     // Current codec mode (must not change while codec is executing).
     private boolean useAsyncCodec = ENABLE_ASYNC_DECODING &&
@@ -141,8 +143,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final AsyncCodecAdapter asyncCodec = new AsyncCodecAdapter();
 
     private boolean computeAsyncPreferLowerDelaysFromCurrentPrefs(int effectivePacing) {
-        final PreferenceConfiguration p = prefs;
-        return (p != null) && p.immediateFrameDelivery;
+        // Default heuristic (NOT tied to immediateFrameDelivery):
+        // - Latency-oriented profiles benefit from "latest-only" output behavior.
+        // - Smoothness-oriented profiles should keep the bounded queue behavior.
+        final boolean def;
+        switch (effectivePacing) {
+            case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
+            case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
+            case PreferenceConfiguration.FRAME_PACING_WARP:
+            case PreferenceConfiguration.FRAME_PACING_WARP2:
+                def = true;
+                break;
+            default:
+                def = false;
+                break;
+        }
+
+        return readBooleanOverlayFirst(KEY_ASYNC_PREFER_LOWER_DELAYS, def);
     }
 // ==== End async decoding ====
 
@@ -275,6 +292,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         runtimeOutputDequeueTimeoutCustomEnabled = customEnabled;
         runtimeOutputDequeueTimeoutUs = dequeueUs;
+        // Live-update async drop-policy toggle (safe at runtime).
+        if (useAsyncCodec) {
+            updateAsyncPreferLowerDelaysFromCurrentPrefs(getEffectivePacingForThreadPriorities());
+        }
 
         // Keep the runtime snapshot in sync for code paths that read from PreferenceConfiguration.
         // Drain timeout is fixed to 0 (UI removed).
@@ -2214,7 +2235,7 @@ try {
         if (prefs != null) {
             prefs.framePacing = newPacing;
         }
-        // Keep async callback drop-policy in sync with the active pacing mode (and immediate delivery).
+        // Keep async callback drop-policy in sync with the active pacing mode + user setting.
         updateAsyncPreferLowerDelaysFromCurrentPrefs(newPacing);
 
         // Leaving Balanced: release queued buffers immediately and stop Choreographer.
@@ -2362,7 +2383,7 @@ try {
         }
 
         final int effective = selected;
-        // Update async drop-policy even when pacing doesn't change (e.g., immediate-frame toggle).
+        // Update async drop-policy even when pacing doesn't change (e.g., async toggle change).
         updateAsyncPreferLowerDelaysFromCurrentPrefs(effective);
 
         if (effective == appliedFramePacing) {
@@ -3394,7 +3415,7 @@ try {
         }
     };
 
-    // Keep async callback drop-policy in sync with pacing/immediate mode.
+    // Keep async callback drop-policy in sync with pacing + its own setting.
     private void updateAsyncPreferLowerDelaysFromCurrentPrefs(int effectivePacing) {
         asyncCodec.setPreferLowerDelays(computeAsyncPreferLowerDelaysFromCurrentPrefs(effectivePacing));
     }
