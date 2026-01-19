@@ -1180,12 +1180,14 @@ public class PreferenceConfiguration {
             }
         }
 
-// Forza GPU path quando FSR è disabilitato o in modalità "none"
-// Nota: gpuPathMode non è più una preferenza utente, ma uno stato derivato.
-        if (!config.videoUpscaleEnable ) {
-            config.gpuPathMode = true;
-        } else {
-            config.gpuPathMode = false;
+        // GPU Path Mode (forces FSR None and GPU_RAW pacing)
+        try {
+            config.gpuPathMode = prefs.getBoolean(CHECKBOX_GPU_PATH_MODE, false);
+        } catch (Throwable ignored) { config.gpuPathMode = false; }
+        if (config.gpuPathMode) {
+            config.videoUpscaleEnable = false;
+            config.videoUpscaleMode = "none";
+
         }
 
         config.enableVsync = getBooleanPrefOverlayFirst(context, PREF_VSYNC, false);

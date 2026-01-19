@@ -189,8 +189,8 @@ public class StreamSettings extends AppCompatActivity {
         private void updateLocks() {
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
 
-            // GPU Path è SEMPRE attivo di default, non leggere più dall'UI
-            boolean gpuPathStored = true; // Forzato sempre true
+            // Persisted GPU Path state
+            boolean gpuPathStored = sp.getBoolean("checkbox_gpu_path_mode", false);
 
             // Aggregate HDR state
             boolean hdrOn =
@@ -289,10 +289,6 @@ public class StreamSettings extends AppCompatActivity {
             super.onResume();
             SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(requireContext());
             sp.registerOnSharedPreferenceChangeListener(lockWatcher);
-            // hideGpuPathToggle
-            hideGpuPathToggle();
-            // Force GPU Path enabled
-            forceGpuPathEnabled(sp);
             updateLocks();
         }
 
@@ -956,8 +952,6 @@ public class StreamSettings extends AppCompatActivity {
         @Override
         public void onCreatePreferences(Bundle bundle, String s) {
             initializePreferences();
-            // hideGpuPathToggle
-            hideGpuPathToggle();
         }
 
         public void initializePreferences() {
@@ -1755,25 +1749,8 @@ public class StreamSettings extends AppCompatActivity {
             }
             return file1;
         }
-        private void hideGpuPathToggle() {
-            Preference gpuPathPref = findPreference("checkbox_gpu_path_mode");
-            if (gpuPathPref != null) {
-                // Nascondi completamente dalla UI
-                gpuPathPref.setVisible(false);
-                gpuPathPref.setEnabled(false);
 
-                // Se è una CheckBoxPreference, forza a checked
-                if (gpuPathPref instanceof CheckBoxPreference) {
-                    ((CheckBoxPreference) gpuPathPref).setChecked(true);
-                }
-            }
-        }
-        private void forceGpuPathEnabled(SharedPreferences sp) {
-            // Forza GPU Path abilitato nelle SharedPreferences per retrocompatibilità
-            if (!sp.getBoolean("checkbox_gpu_path_mode", true)) {
-                sp.edit().putBoolean("checkbox_gpu_path_mode", true).apply();
-            }
         }
     }
-}
+
 
