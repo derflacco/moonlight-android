@@ -880,10 +880,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
+        // Enable async callbacks before configure (required by MediaCodec async mode contract)
+        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
+
         videoDecoder.configure(format, __codecSurface, null, 0);
 
-        // Enable async callbacks after configure (before start)
-        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
 
         // Start GL upscaler loop if present
         if (glUpscaler != null) {
@@ -1690,7 +1691,7 @@ try {
 
                                         final long thisDequeueTimeNs = (useAsyncCodec && asyncCodec.getLastOutputReadyNs() != 0L)
                                                 ? asyncCodec.getLastOutputReadyNs()
-                                                : nowNsLocal;
+                                                : System.nanoTime();
 
                                         try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
                                         catch (Throwable ignored) { }
@@ -1751,7 +1752,7 @@ try {
 
                                         final long thisDequeueTimeNs = (useAsyncCodec && asyncCodec.getLastOutputReadyNs() != 0L)
                                                 ? asyncCodec.getLastOutputReadyNs()
-                                                : nowNsLocal;
+                                                : System.nanoTime();
 
                                         try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
                                         catch (Throwable ignored) { }
