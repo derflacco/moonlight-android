@@ -208,6 +208,9 @@ public final class PerfOverlayComposer {
                 sb.append("  R:").append((int) fps.renderedFps);
                 sb.append("  ").append(hdrActive ? "HDR" : "SDR");
                 sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
+                if (prefsSnapshot.gpuPathMode) {
+                    sb.append('G');
+                }
             }
 
             // Stereo 3D renderer info if active
