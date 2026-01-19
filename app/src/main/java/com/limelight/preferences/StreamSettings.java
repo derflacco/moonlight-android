@@ -1925,15 +1925,28 @@ public class StreamSettings extends AppCompatActivity {
 
         @Override
         public void onDisplayPreferenceDialog(@NonNull Preference preference) {
+            // Custom grouped dialog (non-selectable headers) for frame pacing
+            if ("frame_pacing".equals(preference.getKey())) {
+                DialogFragment dialogFragment =
+                        FramePacingGroupedDialogFragment.newInstance(preference.getKey());
+                dialogFragment.setTargetFragment(this, 0);
+                dialogFragment.show(getFragmentManager(), "frame_pacing_grouped_dialog");
+                return;
+            }
+
             if (preference instanceof ConfirmDeleteOscPreference) {
-                DialogFragment dialogFragment = ConfirmDeleteOscPreference.DialogFragmentCompat.newInstance(preference.getKey());
+                DialogFragment dialogFragment =
+                        ConfirmDeleteOscPreference.DialogFragmentCompat.newInstance(preference.getKey());
                 dialogFragment.setTargetFragment(this, 0);
                 dialogFragment.show(getFragmentManager(), null);
             } else if (preference instanceof ConfirmDeleteKeyboardPreference) {
-                DialogFragment dialogFragment = ConfirmDeleteKeyboardPreference.DialogFragmentCompat.newInstance(preference.getKey());
+                DialogFragment dialogFragment =
+                        ConfirmDeleteKeyboardPreference.DialogFragmentCompat.newInstance(preference.getKey());
                 dialogFragment.setTargetFragment(this, 0);
                 dialogFragment.show(getFragmentManager(), null);
-            } else super.onDisplayPreferenceDialog(preference);
+            } else {
+                super.onDisplayPreferenceDialog(preference);
+            }
         }
 
         private File getJsonContent(Context context,File file){

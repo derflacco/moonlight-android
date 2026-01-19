@@ -362,6 +362,10 @@
     <string name="pacing_balanced_alt">Balanced with FPS limit</string>
     <string name="pacing_smoothness">Prefer smoothest video (may significantly increase latency)</string>
     <string name="pacing_gpu_raw">Gpu Raw</string>
+    <string name="pacing_group_latency">Latency</string>
+    <string name="pacing_group_vsync">Vsync</string>
+    <string name="pacing_group_quality">Quality</string>
+    <string name="pacing_group_other">Other</string>
     <string name="gpu_path_mode_title">Fast Gl Path</string>
     <string name="gpu_path_mode_summary">Enable a minimal fast Gl Path. Forces FSR off. Disable to use FSR; </string>
     <string name="Vsync_title">V-Sync</string>
