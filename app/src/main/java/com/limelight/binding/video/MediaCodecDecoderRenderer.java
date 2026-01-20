@@ -1921,10 +1921,18 @@ try {
 
     private boolean fetchNextInputBuffer() {
         final long startNs = System.nanoTime();
-        boolean codecRecovered;
 
         // Check stopping first to avoid false "Hung" exceptions during shutdown
         if (stopping) {
+            return false;
+        }
+
+        final MediaCodec codec = videoDecoder;
+        if (codec == null) {
+            inputTryAgainStreak = 0;
+            inputDequeueHangStartMs = 0L;
+            nextInputBufferIndex = -1;
+            nextInputBuffer = null;
             return false;
         }
 
@@ -1948,10 +1956,11 @@ try {
 
         final int dequeueTimeoutUs = getInputDequeueTimeoutUs();
         IllegalStateException pendingException = null;
+        boolean noBufferThisCall = false;
 
         try {
             // If we don't have an input buffer index yet, fetch one now
-            if (nextInputBuffer == null && nextInputBufferIndex < 0 && !stopping) {
+            if (nextInputBuffer == null && nextInputBufferIndex < 0) {
                 final long t0 = System.nanoTime();
                 nextInputBufferIndex = nextInputIndex(dequeueTimeoutUs);
                 final long elapsedUs = (System.nanoTime() - t0) / 1_000L;
@@ -1962,7 +1971,7 @@ try {
                         inputNonBlockingBackoff();
                         // Reset to -1 so next call will retry, and avoid hung detection.
                         nextInputBufferIndex = -1;
-                        return false;
+                        noBufferThisCall = true;
                     } else {
                         // Blocking path: allow a single quick retry if budget remains
                         final int remainingUs = Math.max(0, dequeueTimeoutUs - (int) elapsedUs);
@@ -1975,15 +1984,14 @@ try {
             }
 
             // Get the backing ByteBuffer for the input buffer index
-            if (nextInputBufferIndex >= 0) {
+            if (!noBufferThisCall && nextInputBufferIndex >= 0) {
                 // Reset tracking on success
                 inputTryAgainStreak = 0;
                 inputDequeueHangStartMs = 0L;
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                    nextInputBuffer = codec.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
-                        // Fix B: preserve the real index in logs
                         final int badIndex = nextInputBufferIndex;
 
                         // Reset state before throwing
@@ -2008,9 +2016,9 @@ try {
             inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
             nextInputBuffer = null;
-        } finally {
-            codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
+
+        final boolean codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
 
         // If codec recovery is required, always return false to ensure the caller will request an IDR frame.
         if (codecRecovered) {
@@ -2024,6 +2032,11 @@ try {
         // Handle decoder exception (after recovery check)
         if (pendingException != null) {
             handleDecoderException(pendingException);
+            return false;
+        }
+
+        // Non-blocking miss: not an error.
+        if (noBufferThisCall) {
             return false;
         }
 
@@ -2046,7 +2059,6 @@ try {
 
             // Reset for next iteration
             nextInputBufferIndex = -1;
-
             return false;
         }
 
@@ -2058,7 +2070,6 @@ try {
 
         return nextInputBuffer != null;
     }
-
 
     @Override
     public void start() {
@@ -3423,20 +3434,36 @@ try {
 
     // Return next input index (async => from queue; sync => dequeueInputBuffer)
     private int nextInputIndex(int timeoutUs) {
-        if (!useAsyncCodec || videoDecoder == null) {
-            return videoDecoder.dequeueInputBuffer(timeoutUs);
+        final MediaCodec codec = videoDecoder;
+        if (codec == null) {
+            return MediaCodec.INFO_TRY_AGAIN_LATER;
         }
+
+        if (!useAsyncCodec) {
+            return codec.dequeueInputBuffer(timeoutUs);
+        }
+
         return asyncCodec.dequeueInputIndex(timeoutUs);
     }
 
+
     // Return next output index and fill outInfo (async => from queue; sync => dequeueOutputBuffer)
     private int nextOutputIndex(android.media.MediaCodec.BufferInfo outInfo, int timeoutUs) {
-        if (!useAsyncCodec || videoDecoder == null) {
+        final MediaCodec codec = videoDecoder;
+
+        if (codec == null) {
             asyncCodec.resetLastOutputReadyNs();
-            return videoDecoder.dequeueOutputBuffer(outInfo, timeoutUs);
+            return MediaCodec.INFO_TRY_AGAIN_LATER;
         }
-        return asyncCodec.dequeueOutputIndex(videoDecoder, outInfo, timeoutUs, asyncOutputRelease);
+
+        if (!useAsyncCodec) {
+            asyncCodec.resetLastOutputReadyNs();
+            return codec.dequeueOutputBuffer(outInfo, timeoutUs);
+        }
+
+        return asyncCodec.dequeueOutputIndex(codec, outInfo, timeoutUs, asyncOutputRelease);
     }
+
 
     private void attachAsyncCodecIfNeeded() {
         if (!useAsyncCodec || videoDecoder == null) return;
@@ -3545,25 +3572,36 @@ try {
     // Returns false only when codec recovery (or a hard decoder exception) requires the caller to request an IDR.
     private boolean prefetchNextInputBuffer() {
         if (stopping) {
-            return false;
+            // Best-effort: do not propagate errors during shutdown.
+            return true;
         }
 
+        // Validate invariant: buffer implies valid index.
         if (nextInputBuffer != null) {
+            if (nextInputBufferIndex >= 0) {
+                return true;
+            }
+            nextInputBuffer = null;
+            nextInputBufferIndex = -1;
+        }
+
+        final MediaCodec codec = videoDecoder;
+        if (codec == null) {
+            nextInputBuffer = null;
+            nextInputBufferIndex = -1;
             return true;
         }
 
         IllegalStateException pendingException = null;
+
         try {
             // Best-effort: never block here.
             if (nextInputBufferIndex < 0) {
                 nextInputBufferIndex = nextInputIndex(0); // 0us = non-blocking
 
                 if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    // Explicit reset to avoid confusion between "no buffer yet" and "MediaCodec error"
-                    nextInputBufferIndex = -1;
-                    // Avoid busy spin when no buffer is available yet.
-                    inputNonBlockingBackoff();
                     // Not an error: leave state as-is and let fetch() retry when needed.
+                    nextInputBufferIndex = -1;
                     return true;
                 }
             }
@@ -3574,10 +3612,9 @@ try {
                 inputDequeueHangStartMs = 0L;
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                    nextInputBuffer = codec.getInputBuffer(nextInputBufferIndex);
                     if (nextInputBuffer == null) {
                         final int badIndex = nextInputBufferIndex;
-
                         nextInputBufferIndex = -1;
                         nextInputBuffer = null;
                         throw new IllegalStateException("getInputBuffer() returned null for index " + badIndex);
@@ -3590,14 +3627,12 @@ try {
             }
         } catch (IllegalStateException e) {
             pendingException = e;
-            // Do not start hung tracking here; treat as hard decoder exception
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
             nextInputBufferIndex = -1;
             nextInputBuffer = null;
         }
 
-        // Always evaluate recovery before returning.
         if (doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD)) {
             inputTryAgainStreak = 0;
             inputDequeueHangStartMs = 0L;
@@ -3612,7 +3647,6 @@ try {
         }
 
         // Best-effort: it's OK if no buffer is available right now.
-        // The real fetchNextInputBuffer() will try again when the buffer is actually needed.
         return true;
     }
 
