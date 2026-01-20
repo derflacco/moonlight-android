@@ -49,10 +49,14 @@
 # MPAndroidChart
 -keep class com.github.mikephil.charting.** { *; }
 -dontwarn com.github.mikephil.charting.**
--keep class com.limelight.binding.input.InputSender
+# Flacco edits
+-keep class com.limelight.binding.input.InputSender { *; }
+-keep class com.limelight.binding.video.AsyncCodecAdapter { *; }
+-keep class com.limelight.binding.video.GlUpscalerBridge { *; }
+-keep class com.limelight.binding.video.PerfOverlayComposer { *; }
+-keep class com.limelight.binding.video.NanoPacer { *; }
+-keep class com.limelight.binding.video.DecodeLatencyTracker { *; }
 # Keep CpuAffinity (public wrappers called via reflection in places)
--keep class com.limelight.utils.CpuAffinity { *; }
-# --- Moonlight: keep thread/affinity helpers & RX boost (used via reflection/JNI) ---
 -keep class com.limelight.utils.CpuAffinity { *; }
 #
 -keep class com.limelight.perf.CpuWarmUp { *; }
