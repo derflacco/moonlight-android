@@ -134,6 +134,13 @@ public final class CpuWarmUp {
 
         final int n = WORKERS;
         final int arch = getArchitecture();
+        try {
+            Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
+            java.lang.reflect.Method m = cls.getMethod("describeTiers");
+            Object r = m.invoke(null);
+            logI("CpuAffinity tiers: " + String.valueOf(r));
+        } catch (Throwable ignored) {}
+
         logI("start(): mode=" + modeName(AFFINITY_MODE) + " spawn=" + n + " arch=" + arch + "-tier");
 
         for (int i = 0; i < n; i++) {
@@ -246,33 +253,121 @@ public final class CpuWarmUp {
 
         int arch = ARCH_2_TIER; // Conservative default
 
+        boolean decided = false;
+
+        // 1) Try CpuAffinity (non-fatal if it throws)
         try {
-            // Try to detect via CpuAffinity helper if available
             Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
 
-            // Method 1: Check for Prime core count method
+            // Method: getPrimeCoreCount() (if present)
             try {
                 java.lang.reflect.Method m = cls.getMethod("getPrimeCoreCount");
-                Object result = m.invoke(null);
-                if (result instanceof Integer && (Integer)result > 0) {
-                    arch = ARCH_3_TIER;
+                try {
+                    Object result = m.invoke(null);
+                    if (result instanceof Integer) {
+                        arch = (((Integer) result) > 0) ? ARCH_3_TIER : ARCH_2_TIER;
+                        decided = true;
+                        logI("Architecture detection (CpuAffinity.getPrimeCoreCount): " + arch + "-tier");
+                    }
+                } catch (Throwable invokeErr) {
+                    // Do NOT fail detection globally. We'll fall back below.
+                    logI("Architecture detection: getPrimeCoreCount threw (" +
+                            invokeErr.getClass().getSimpleName() + "), falling back");
                 }
-            } catch (NoSuchMethodException e) {
-                // Method 2: Try to pin to Prime cores to see if it works
-                if (tryCallCpuAffinity("pinCurrentThreadToPrimeCoresIf", true)) {
-                    arch = ARCH_3_TIER;
-                }
+            } catch (NoSuchMethodException ignored) {
+                // No method -> fall back below
             }
-
-            logI("Architecture detection: " + arch + "-tier");
         } catch (Throwable t) {
-            // Fallback: Assume 2-tier for safety
+            // Class not found or class init failure -> fall back below
+            logI("Architecture detection: CpuAffinity unavailable (" +
+                    t.getClass().getSimpleName() + "), falling back");
+        }
+
+        // 2) Fallback: infer tiers from cpufreq policy max frequencies (best-effort)
+        if (!decided) {
+            int inferred = detectArchitectureFromCpufreq();
+            if (inferred == ARCH_3_TIER || inferred == ARCH_2_TIER) {
+                arch = inferred;
+                decided = true;
+                logI("Architecture detection (cpufreq): " + arch + "-tier");
+            }
+        }
+
+        if (!decided) {
             arch = ARCH_2_TIER;
             logI("Architecture detection failed, assuming 2-tier");
         }
 
         detectedArchitecture = arch;
         return arch;
+    }
+    private static int detectArchitectureFromCpufreq() {
+        try {
+            java.io.File dir = new java.io.File("/sys/devices/system/cpu/cpufreq");
+            java.io.File[] files = dir.listFiles();
+            if (files == null || files.length == 0) return -1;
+
+            java.util.ArrayList<Integer> freqs = new java.util.ArrayList<>(8);
+
+            for (java.io.File f : files) {
+                if (f == null) continue;
+                String name = f.getName();
+                if (name == null || !name.startsWith("policy")) continue;
+
+                // Prefer cpuinfo_max_freq, fallback to scaling_max_freq (kHz)
+                Integer mhz = readFirstInt(new java.io.File(f, "cpuinfo_max_freq").getAbsolutePath());
+                if (mhz == null) mhz = readFirstInt(new java.io.File(f, "scaling_max_freq").getAbsolutePath());
+                if (mhz != null && mhz > 0) freqs.add(mhz);
+            }
+
+            if (freqs.size() < 2) return -1;
+
+            java.util.Collections.sort(freqs);
+
+            // Count "distinct" bins with tolerance (kHz). We only need to know if >= 3 bins exist.
+            int bins = 0;
+            int last = -1;
+
+            for (int i = 0; i < freqs.size(); i++) {
+                int v = freqs.get(i);
+                if (last < 0) {
+                    bins = 1;
+                    last = v;
+                    continue;
+                }
+
+                // Tolerance: 2% or 20 MHz (20_000 kHz) minimum
+                int tol = Math.max(20_000, (int) (last * 0.02f));
+                if (Math.abs(v - last) > tol) {
+                    bins++;
+                    last = v;
+                    if (bins >= 3) return ARCH_3_TIER;
+                }
+            }
+
+            // If we got exactly 2 bins, treat as 2-tier; 1 bin -> unknown
+            return (bins >= 2) ? ARCH_2_TIER : -1;
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private static Integer readFirstInt(String path) {
+        java.io.BufferedReader br = null;
+        try {
+            br = new java.io.BufferedReader(new java.io.FileReader(path));
+            String s = br.readLine();
+            if (s == null) return null;
+            s = s.trim();
+            if (s.isEmpty()) return null;
+            return Integer.parseInt(s);
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (br != null) {
+                try { br.close(); } catch (Throwable ignored) {}
+            }
+        }
     }
 
     // ---------------- Affinity helpers ----------------
@@ -305,16 +400,57 @@ public final class CpuWarmUp {
 
     /** Choose bucket based on architecture tier count. */
     private static int chooseBucketForWorker(int id, int arch) {
-        if (AFFINITY_MODE == AFFINITY_SPREAD) {
-            if (arch == ARCH_3_TIER) {
-                return id % 3; // 3-tier: prime(0), big(1), little(2)
-            } else {
-                return id % 2; // 2-tier: big(0), little(1)
-            }
+        if (AFFINITY_MODE == AFFINITY_BIG_ONLY) {
+            // For both 2-tier and 3-tier, "big only" maps to BIG bucket.
+            // 3-tier bucket mapping is (prime=0, big=1, little=2), so BIG is 1.
+            return (arch == ARCH_3_TIER) ? 1 : 0;
         }
-        if (AFFINITY_MODE == AFFINITY_BIG_ONLY) return 0;
-        return 0; // NONE -> treat as "any" (we won't pin)
+
+        if (AFFINITY_MODE != AFFINITY_SPREAD) {
+            // Default: behave like BIG_ONLY to be safe.
+            return (arch == ARCH_3_TIER) ? 1 : 0;
+        }
+
+        // ---- SPREAD: count-aware caps to avoid oversubscription of PRIME/BIG ----
+        if (arch == ARCH_3_TIER) {
+            int primeCores  = getPrimeCoreCountBestEffort();
+            int bigCores    = getBigCoreCountBestEffort();
+            int littleCores = getLittleCoreCountBestEffort();
+
+            // Conservative fallbacks if counts are unavailable
+            if (primeCores <= 0) primeCores = 1;
+            if (bigCores <= 0)   bigCores = 2;
+            if (littleCores <= 0) littleCores = Math.max(1, WORKERS - (primeCores + bigCores));
+
+            // Budget workers by real core counts, but always keep at least 1 LITTLE worker.
+            int primeWorkers = Math.min(primeCores, Math.max(0, WORKERS - 2));
+            int remaining = WORKERS - primeWorkers;
+
+            int bigWorkers = Math.min(bigCores, Math.max(0, remaining - 1));
+            int littleWorkers = WORKERS - primeWorkers - bigWorkers;
+            if (littleWorkers <= 0) {
+                // Force at least 1 little
+                littleWorkers = 1;
+                if (bigWorkers > 0) bigWorkers--;
+                else if (primeWorkers > 0) primeWorkers--;
+            }
+
+            // Assign sequentially: [prime][big][little]
+            if (id < primeWorkers) return 0;                 // prime
+            if (id < primeWorkers + bigWorkers) return 1;    // big
+            return 2;                                        // little
+        } else {
+            // 2-tier (e.g., MTK G99): cap BIG workers to actual big cores; rest LITTLE
+            int bigCores = getBigCoreCountBestEffort();
+            if (bigCores <= 0) bigCores = 2; // safe default
+
+            int bigWorkers = Math.min(bigCores, Math.max(1, WORKERS - 1)); // keep at least 1 little
+            if (id < bigWorkers) return 0; // big
+            return 1;                      // little
+        }
     }
+
+
 
     private static int priorityForBucket(int b, int arch) {
         if (arch == ARCH_3_TIER) {
@@ -332,8 +468,7 @@ public final class CpuWarmUp {
         }
         return PRIO_BIG;
     }
-
-    /** Try to pin current thread according to bucket and architecture. */
+     /** Try to pin current thread according to bucket and architecture. */
     private static void pinWorkerToBucket(int bucket, int arch) {
         if (AFFINITY_MODE == AFFINITY_NONE) return;
 
@@ -379,6 +514,36 @@ public final class CpuWarmUp {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    private static int getBigCoreCountBestEffort() {
+        try {
+            Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
+            java.lang.reflect.Method m = cls.getMethod("getBigCoreCount");
+            Object r = m.invoke(null);
+            if (r instanceof Integer) return Math.max(0, (Integer) r);
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+    private static int getPrimeCoreCountBestEffort() {
+        try {
+            Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
+            java.lang.reflect.Method m = cls.getMethod("getPrimeCoreCount");
+            Object r = m.invoke(null);
+            if (r instanceof Integer) return Math.max(0, (Integer) r);
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+    private static int getLittleCoreCountBestEffort() {
+        try {
+            Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
+            java.lang.reflect.Method m = cls.getMethod("getLittleCoreCount");
+            Object r = m.invoke(null);
+            if (r instanceof Integer) return Math.max(0, (Integer) r);
+        } catch (Throwable ignored) {}
+        return 0;
     }
 
     // ---------------- Thermal sampling & policy ----------------

@@ -655,10 +655,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         else {
             LimeLog.info("No AV1 decoder found");
         }
-        // Initialize CpuWarmUp
-        cpuWarmUp = new CpuWarmUp();
-        LimeLog.info("CpuWarmUp initialized; enabled setting: " +
-                (prefs != null ? prefs.cpuWarmUpEnable : "prefs null"));
+
         // Set attributes that are queried in getCapabilities(). This must be done here
         // because getCapabilities() may be called before setup() in current versions of the common
         // library. The limitation of this is that we don't know whether we're using HEVC or AVC.
@@ -2075,9 +2072,13 @@ try {
     public void start() {
 
 
-        // Start CPU warm-up if enabled (independent of preferBigCores)
-        if (prefs != null && prefs.cpuWarmUpEnable && cpuWarmUp != null && !cpuWarmUpStarted) {
+        // Start CPU warm-up if enabled (lazy init; avoids overhead/log spam when disabled)
+        if (prefs != null && prefs.cpuWarmUpEnable && !cpuWarmUpStarted) {
             try {
+                if (cpuWarmUp == null) {
+                    cpuWarmUp = new CpuWarmUp();
+                    LimeLog.info("CpuWarmUp initialized (enabled)");
+                }
                 cpuWarmUp.start(activity, null, false);
                 cpuWarmUpStarted = true;
                 LimeLog.info("CpuWarmUp started");
@@ -2085,6 +2086,7 @@ try {
                 LimeLog.warning("CpuWarmUp start failed: " + t);
             }
         }
+
 
         // Ensure initial frame pacing reflects settings (overlay-first, UI fallback)
         initFramePacingFromSettings();
