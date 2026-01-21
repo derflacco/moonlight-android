@@ -53,9 +53,13 @@ public final class DecodeLatencyTracker {
             stats.decoderSamples++;
         }
 
-        // Keep old end-to-end latency behavior when render-time is not used
+        // Keep end-to-end latency behavior when render-time is not used.
+        // presentationTimeUs is derived from enqueueTimeMs (uptime-based) * 1000.
+        // Use endNs (monotonic) to avoid an extra uptimeMillis() call and keep one clock domain.
         if (!useFrameRenderTime) {
-            final long e2eMs = SystemClock.uptimeMillis() - (presentationTimeUs / 1000L);
+            final long startNs = presentationTimeUs * 1000L; // us -> ns
+            final long e2eNs = endNs - startNs;
+            final long e2eMs = e2eNs / 1_000_000L;
             if (e2eMs >= 0 && e2eMs < 1000) {
                 stats.endToEndLatencyMs += e2eMs;
                 stats.totalTimeMs += e2eMs;

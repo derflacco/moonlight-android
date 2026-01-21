@@ -635,32 +635,42 @@ public class MediaCodecHelper {
 //                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
-                    // --- PRESET: MTK Low-Latency (safe & balanced, no duplicates) ---
+                    // --- PRESET: MTK Low-Latency (tiered) ---
+                    // tryNumber 0: stable baseline
+                    // tryNumber 1: reduced buffering (lower e2e)
+                    // tryNumber 2: ultra-low-latency (only if enableUltraLowLatency)
+                    // tryNumber 3: fallback/last attempt
 
-                    // Boost/DVFS: moderate profile
+                    // Core low-latency path
                     safeSet(videoFormat, "vdec-lowlatency", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);
+                    safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0); // app controls pacing
+
+                    // DVFS/boost (moderate and safe)
                     safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);
 
-                    // Pipeline / code path
-                    safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);    // Enable low-latency path
-                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 0);   // ULL off for stability
-                    safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);        // Prevent clock downscaling
-                    safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 1); // Light prebuffering
+                    // Ultra-low-latency: only on the more aggressive tries (and only if user enabled it)
+                    final boolean ull = ultraLowLatency && (tryNumber >= 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", ull ? 1 : 0);
 
-                    // Queue / timeouts (moderate)
-                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 4);
-                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 4);
-                    safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 3);
-                    safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 3);
+                    // Reduce internal buffering to lower queueing latency (best-effort)
+                    final int preloadFrames = (tryNumber >= 1) ? 0 : 1;
+                    safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", preloadFrames);
 
-                    // Pacing: controlled by the app
-                    safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);
+                    final int qDepth = (tryNumber >= 2) ? 1 : ((tryNumber >= 1) ? 2 : 3);
+                    safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", qDepth);
+                    safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", qDepth);
 
-                     // Standard Android hints
-                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
+                    final int fetchTimeoutMs = (tryNumber >= 1) ? 2 : 4;
+                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", fetchTimeoutMs);
+                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", fetchTimeoutMs);
+
+                    // Standard Android hints
+                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
                     safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
                 }
                 setNewOption = true;
