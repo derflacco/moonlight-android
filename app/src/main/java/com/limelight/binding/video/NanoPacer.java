@@ -77,27 +77,41 @@ public final class NanoPacer {
 
     // Evaluate pacing state (call every decoded frame)
     public void updatePacingMode(boolean fastVsyncEnabled, int streamTargetFps, int refreshRate) {
+        updatePacingMode(fastVsyncEnabled, streamTargetFps, (float) refreshRate);
+    }
+
+    // Evaluate pacing state (call every decoded frame). Pass Display.getRefreshRate() when available.
+    public void updatePacingMode(boolean fastVsyncEnabled, int streamTargetFps, float refreshRateHz) {
         synchronized (lock) {
             if (!fastVsyncEnabled) {
                 reset();
                 return;
             }
 
-            // Determine target rate (same logic as your getCheckedRate())
-            final int rate;
-            if (streamTargetFps <= 0 || streamTargetFps > 1000) {
-                rate = refreshRate;
-            } else {
-                rate = (streamTargetFps < refreshRate) ? streamTargetFps : refreshRate;
-            }
-
-            if (rate <= 0) {
+            final float rr = refreshRateHz;
+            if (!(rr > 1f && rr < 1000f)) {
                 reset();
                 return;
             }
 
+            // Determine target rate (same logic as getCheckedRate()).
+            final float targetHz;
+            if (streamTargetFps <= 0 || streamTargetFps > 1000) {
+                targetHz = rr;
+            } else {
+                targetHz = Math.min((float) streamTargetFps, rr);
+            }
+
+            if (!(targetHz > 1f)) {
+                reset();
+                return;
+            }
+
+            final int rateForLog = (int) (targetHz + 0.5f);
+
             final long nowNs = System.nanoTime();
-            final long targetIntervalNs = 1_000_000_000L / rate;
+            // Floor to preserve legacy behavior for integer rates (e.g. 60 -> 16,666,666ns).
+            final long targetIntervalNs = (long) (1_000_000_000d / (double) targetHz);
 
             // If rate changes while active, resync immediately
             if (oneToOne && intervalNs != targetIntervalNs) {
@@ -154,7 +168,7 @@ public final class NanoPacer {
                 lastPtsUs = Long.MIN_VALUE;
                 slipNs = 0L;
 
-                LimeLog.info("NanoPacer: 1:1 pacing enabled (" + rate + " fps)");
+                LimeLog.info("NanoPacer: 1:1 pacing enabled (" + rateForLog + " fps)");
             } else if (oneToOne && unstableCounter >= PACE_STABILITY_THRESHOLD + 2) {
                 oneToOne = false;
                 unstableCounter = 0;

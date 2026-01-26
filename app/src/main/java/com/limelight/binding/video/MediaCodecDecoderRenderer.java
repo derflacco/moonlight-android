@@ -374,6 +374,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastTimestampUs;
     private int lastFrameNumber;
     private int refreshRate;
+    private float refreshRateHz;
     private PreferenceConfiguration prefs;
 
     // ---- Runtime frame pacing refresh (overlay-first, UI fallback) ----
@@ -1091,8 +1092,43 @@ try {
         this.coldCfg.initialHeight = coldCfg.invertResolution ? width : height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
+        this.refreshRateHz = queryDisplayRefreshRateHz();
+        if (this.refreshRateHz <= 1f) {
+            this.refreshRateHz = (float) redrawRate;
+        }
+        if (this.refreshRateHz <= 1f) {
+            this.refreshRateHz = 60f;
+        }
         initAsyncDecodingFromSettings();
         return initializeDecoder(false);
+    }
+
+    private float queryDisplayRefreshRateHz() {
+        try {
+            if (activity != null) {
+                final android.view.Display d = activity.getDisplay();
+                if (d != null) {
+                    final float rr = d.getRefreshRate();
+                    if (rr > 1f && rr < 1000f) {
+                        return rr;
+                    }
+                }
+            }
+        } catch (Throwable ignored) { }
+
+        try {
+            if (activity != null && activity.getWindowManager() != null) {
+                final android.view.Display d = activity.getWindowManager().getDefaultDisplay();
+                if (d != null) {
+                    final float rr = d.getRefreshRate();
+                    if (rr > 1f && rr < 1000f) {
+                        return rr;
+                    }
+                }
+            }
+        } catch (Throwable ignored) { }
+
+        return 0f;
     }
     private GlUpscalerBridge glUpscaler;
 
@@ -1116,7 +1152,7 @@ try {
 
             // This is the final thread to quiesce, so let's perform the codec recovery now.
             if (codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL) {
-            // Input and output buffers are invalidated by stop() and reset().
+                // Input and output buffers are invalidated by stop() and reset().
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
 
@@ -1398,7 +1434,7 @@ try {
                         : (streamTargetFps > 0 ? (float) streamTargetFps : 60f);
 
         final float displayHz =
-                (refreshRate > 0) ? (float) refreshRate : 60f;
+                (refreshRateHz > 1f) ? refreshRateHz : ((refreshRate > 0) ? (float) refreshRate : 60f);
 
         // Recompute ratio when inputs change.
         if (Math.abs(streamFps - lastPacingStreamFps) > 0.01f ||
@@ -1774,10 +1810,12 @@ try {
                                 final boolean useNanoPacer = (prefs != null && prefs.fastVsync);
 
                                 if (useNanoPacer) {
+                                    final float rrHz =
+                                            (refreshRateHz > 1f) ? refreshRateHz : ((refreshRate > 0) ? (float) refreshRate : 60f);
                                     nanoPacer.updatePacingMode(
                                             true,
                                             MediaCodecDecoderRenderer.this.streamTargetFps,
-                                            refreshRate
+                                            rrHz
                                     );
 
                                     // Cooperative nano-pacer: drain while waiting to avoid output backpressure
@@ -3658,7 +3696,7 @@ try {
 
         final float wantedFps =
                 (p != null && p.fps > 0) ? (float) p.fps :
-                        (refreshRate > 0f ? refreshRate : 60f);
+                        ((refreshRateHz > 1f) ? refreshRateHz : ((refreshRate > 0) ? (float) refreshRate : 60f));
 
         final boolean immediate = (p != null && p.immediateFrameDelivery);
 
