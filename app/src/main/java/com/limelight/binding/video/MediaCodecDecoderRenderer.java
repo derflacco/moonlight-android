@@ -883,6 +883,32 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         videoDecoder.configure(format, __codecSurface, null, 0);
 
+        // Apply frame-rate hint also to the decoder output surface (important when using GL upscaler input surface).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && __codecSurface != null && __codecSurface != renderTarget) {
+            try {
+                final float desiredFps =
+                        (prefs != null && prefs.fps > 0)
+                                ? prefs.fps
+                                : (streamTargetFps > 0 ? (float) streamTargetFps : 60f);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    __codecSurface.setFrameRate(
+                            desiredFps,
+                            Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                            Surface.CHANGE_FRAME_RATE_ALWAYS
+                    );
+                } else {
+                    __codecSurface.setFrameRate(
+                            desiredFps,
+                            Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                    );
+                }
+
+                LimeLog.info("Applied decoder Surface frame-rate hint: " + desiredFps + " fps");
+            } catch (Throwable t) {
+                LimeLog.warning("Decoder Surface.setFrameRate() failed: " + t);
+            }
+        }
 
         // Start GL upscaler loop if present
         if (glUpscaler != null) {
