@@ -1022,12 +1022,33 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
 
     public void start() {
+        // Never spawn a second renderer thread: EGLContext cannot be current on two threads.
+        final Thread existing = renderThread;
+        if (existing != null && existing.isAlive()) {
+            // Best-effort wait a bit in case stop() is still unwinding.
+            if (Thread.currentThread() != existing) {
+                try { existing.join(120L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
+            if (existing.isAlive()) {
+                LimeLog.warning("FSR: start() skipped because render thread is still alive");
+                return;
+            } else {
+                // Thread is gone: clear stale refs
+                renderThread = null;
+                renderHandler = null;
+                renderTid = 0;
+                useChoreoVsync = false;
+            }
+        }
+
         if (!isGlReady()) {
             synchronized (this) {
                 initEglAndGl();
             }
         }
-        if (!isGlReady() || running.getAndSet(true)) return;
+        if (!isGlReady()) return;
+
+        if (running.getAndSet(true)) return;
 
         final boolean wantVsync = (prefs != null && prefs.enableVsync);
 
@@ -1046,7 +1067,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             renderThread = ht;
             ht.start();
 
-            renderHandler = new Handler(ht.getLooper());
             renderHandler = new Handler(ht.getLooper());
             renderHandler.post(() -> {
                 renderTid = Process.myTid();
@@ -1212,8 +1232,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         destroyGl();
         destroyEgl();
     }
-
-
 
     @Override
     public void onFrameAvailable(SurfaceTexture st) {
