@@ -77,10 +77,16 @@ public final class NanoPacer {
 
     // Evaluate pacing state (call every decoded frame)
     public void updatePacingMode(boolean fastVsyncEnabled, int streamTargetFps, int refreshRate) {
-        updatePacingMode(fastVsyncEnabled, streamTargetFps, (float) refreshRate);
+        float rr = (float) refreshRate;
+
+        // Compensate common truncation cases (e.g., 119 from 119.88, 59 from 59.94).
+        if (refreshRate == 119) rr = 120f;
+        else if (refreshRate == 59) rr = 60f;
+
+        updatePacingMode(fastVsyncEnabled, streamTargetFps, rr);
     }
 
-    // Evaluate pacing state (call every decoded frame). Pass Display.getRefreshRate() when available.
+
     public void updatePacingMode(boolean fastVsyncEnabled, int streamTargetFps, float refreshRateHz) {
         synchronized (lock) {
             if (!fastVsyncEnabled) {
@@ -88,19 +94,24 @@ public final class NanoPacer {
                 return;
             }
 
-            final float rr = refreshRateHz;
+            float rr = refreshRateHz;
             if (!(rr > 1f && rr < 1000f)) {
                 reset();
                 return;
             }
 
-            // Determine target rate (same logic as getCheckedRate()).
-            final float targetHz;
+            rr = snapRefreshRateHz(rr);
+
+            final float streamHz;
             if (streamTargetFps <= 0 || streamTargetFps > 1000) {
-                targetHz = rr;
+                streamHz = rr;
             } else {
-                targetHz = Math.min((float) streamTargetFps, rr);
+                streamHz = (float) streamTargetFps;
             }
+
+            // If stream target is extremely close to display rate, prefer stream target to avoid deterministic drift/drop.
+            final float EPS_HZ = 0.25f;
+            final float targetHz = (Math.abs(rr - streamHz) <= EPS_HZ) ? streamHz : Math.min(streamHz, rr);
 
             if (!(targetHz > 1f)) {
                 reset();
@@ -113,10 +124,19 @@ public final class NanoPacer {
             // Floor to preserve legacy behavior for integer rates (e.g. 60 -> 16,666,666ns).
             final long targetIntervalNs = (long) (1_000_000_000d / (double) targetHz);
 
+            // 60 Hz behavior unchanged; tighter gating at >= 90 Hz to avoid false 1:1 enters.
+            final boolean highHz = targetHz >= 90f;
+            final int stabilityThreshold = highHz ? 8 : PACE_STABILITY_THRESHOLD;
+            final int disableThreshold = highHz ? (stabilityThreshold + 4) : (PACE_STABILITY_THRESHOLD + 2);
+            final float tolerancePercent = highHz ? 0.10f : TOLERANCE_PERCENT;
+
             // If rate changes while active, resync immediately
             if (oneToOne && intervalNs != targetIntervalNs) {
                 intervalNs = targetIntervalNs;
                 nextDeadlineNs = nowNs + targetIntervalNs;
+
+                // Optional but useful for diagnosing mismatches:
+                LimeLog.info("NanoPacer: pacing retarget (" + rateForLog + " fps, rr=" + rr + ", stream=" + streamTargetFps + ")");
             }
 
             // Update every ~half frame
@@ -144,19 +164,19 @@ public final class NanoPacer {
             // EMA: ema += alpha * (x - ema)
             emaIntervalNs += (long) (EMA_ALPHA * (intervalSampleNs - emaIntervalNs));
 
-            final long toleranceNs = (long) (targetIntervalNs * TOLERANCE_PERCENT);
+            final long toleranceNs = (long) (targetIntervalNs * tolerancePercent);
             final boolean matching = Math.abs(emaIntervalNs - targetIntervalNs) <= toleranceNs;
 
             if (matching) {
-                if (stableCounter < PACE_STABILITY_THRESHOLD) stableCounter++;
+                if (stableCounter < stabilityThreshold) stableCounter++;
                 unstableCounter = 0;
             } else {
-                if (unstableCounter < PACE_STABILITY_THRESHOLD + 2) unstableCounter++;
+                if (unstableCounter < disableThreshold) unstableCounter++;
                 stableCounter = 0;
             }
 
             // State transitions
-            if (!oneToOne && stableCounter >= PACE_STABILITY_THRESHOLD) {
+            if (!oneToOne && stableCounter >= stabilityThreshold) {
                 oneToOne = true;
                 stableCounter = 0;
                 intervalNs = targetIntervalNs;
@@ -168,8 +188,8 @@ public final class NanoPacer {
                 lastPtsUs = Long.MIN_VALUE;
                 slipNs = 0L;
 
-                LimeLog.info("NanoPacer: 1:1 pacing enabled (" + rateForLog + " fps)");
-            } else if (oneToOne && unstableCounter >= PACE_STABILITY_THRESHOLD + 2) {
+                LimeLog.info("NanoPacer: 1:1 pacing enabled (" + rateForLog + " fps, rr=" + rr + ", stream=" + streamTargetFps + ")");
+            } else if (oneToOne && unstableCounter >= disableThreshold) {
                 oneToOne = false;
                 unstableCounter = 0;
                 intervalNs = 0L;
@@ -184,6 +204,7 @@ public final class NanoPacer {
             }
         }
     }
+
 
     // Cooperative nano-pacing: keep draining while waiting to avoid decoder output backpressure.
     // Returns how many extra outputs were drained (and dropped) while waiting.
@@ -302,4 +323,19 @@ public final class NanoPacer {
             return targetNs;
         }
     }
+    private static float snapRefreshRateHz(float rr) {
+        // Snap common fractional rates (NTSC-like) and near-integers to reduce long-term mismatch.
+        // Keep conservative to avoid mis-snapping VRR-like values.
+        final float SNAP_EPS = 0.20f;
+
+        final float[] common = new float[] { 24f, 30f, 48f, 50f, 60f, 72f, 90f, 100f, 120f, 144f, 165f, 240f };
+        for (float c : common) {
+            if (Math.abs(rr - c) <= SNAP_EPS) return c;
+
+            final float ntsc = c * (1000f / 1001f); // 59.94, 119.88, ...
+            if (Math.abs(rr - ntsc) <= SNAP_EPS) return c;
+        }
+        return rr;
+    }
+
 }
