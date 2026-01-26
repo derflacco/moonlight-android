@@ -59,129 +59,9 @@
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
 
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_ultra_low_latency"
-            android:summary="@string/summary_checkbox_ultra_low_latency"
-            android:title="@string/title_checkbox_ultra_low_latency"
-            app:iconSpaceReserved="false" />
-
-        <CheckBoxPreference
-            android:key="checkbox_immediate_frame_delivery"
-            android:title="@string/immediate_frame_delivery_title"
-            android:summary="@string/immediate_frame_delivery_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
-        <CheckBoxPreference
-            android:key="checkbox_async_decode"
-            android:title="Async decode"
-            android:summary="Enable MediaCodec async callback mode. Changes apply after decoder restart."
-            android:defaultValue="true"
-            app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:key="checkbox_async_prefer_lower_delays"
-            android:defaultValue="false"
-            android:title="@string/pref_async_prefer_lower_delays_title"
-            android:summary="@string/pref_async_prefer_lower_delays_summary"
-            android:dependency="checkbox_async_decode" />
-
-        <CheckBoxPreference
-            android:key="checkbox_custom_decoder_output_timeout_us"
-            android:title="@string/decoder_output_dequeue_timeout_custom_title"
-            android:summary="@string/decoder_output_dequeue_timeout_custom_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
-        <com.limelight.preferences.SeekBarPreference
-            android:defaultValue="50000"
-            android:key="seekbar_decoder_output_timeout_us"
-            android:dependency="checkbox_custom_decoder_output_timeout_us"
-            android:max="50000"
-            android:title="@string/decoder_output_dequeue_timeout_title"
-            android:summary="@string/decoder_output_dequeue_timeout_summary"
-            android:dialogMessage="@string/decoder_output_dequeue_timeout_dialog"
-            android:text="@string/unit_microseconds"
-            app:iconSpaceReserved="false"
-            seekbar:min="0"
-            seekbar:step="250"
-            seekbar:keyStep="250" />
-
-        <CheckBoxPreference
-            android:key="checkbox_gpu_path_mode"
-            android:title="@string/gpu_path_mode_title"
-            android:summary="@string/gpu_path_mode_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
         <!--Vsync -->
-        <CheckBoxPreference
-            android:key="checkbox_Vsync"
-            android:title="@string/Vsync_title"
-            android:summary="@string/Vsync_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
         <!--fastVsync -->
-        <CheckBoxPreference
-            android:key="checkbox_fastVsync"
-            android:title="@string/fastVsync_title"
-            android:summary="@string/fastVsync_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
-        <ListPreference
-            android:defaultValue=""
-            android:entries="@array/resolution_names"
-            android:entryValues="@array/resolution_values"
-            android:key="list_resolution_suggested"
-            android:title="@string/pref_suggested_resolution_title"
-            android:summary="@string/pref_suggested_resolution_summary"
-            app:iconSpaceReserved="false" />
-
         <!-- Video Upscaling (FSR-like) -->
-        <CheckBoxPreference
-            android:key="pref_video_upscale_enable"
-            android:title="@string/pref_video_upscale_enable_title"
-            android:summary="@string/pref_video_upscale_enable_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-        <com.limelight.preferences.SeekBarPreference
-            android:key="pref_video_upscale_preset"
-            android:title="@string/pref_video_upscale_preset_title"
-            android:summary="@string/pref_video_upscale_preset_summary"
-            android:dependency="pref_video_upscale_enable"
-            android:defaultValue="1"
-            android:max="2"
-            app:iconSpaceReserved="false"
-            seekbar:divisor="1"
-            seekbar:keyStep="1"
-            seekbar:min="0"
-            seekbar:step="1"
-            android:text="" />
-
-        <ListPreference
-            android:key="pref_video_upscale_mode"
-            android:title="@string/pref_video_upscale_mode_title"
-            android:entries="@array/pref_video_upscale_mode_entries"
-            android:entryValues="@array/pref_video_upscale_mode_values"
-            android:defaultValue="rcas"
-            android:dependency="pref_video_upscale_enable"
-            app:iconSpaceReserved="false" />
-
-        <com.limelight.preferences.SeekBarPreference
-            android:key="pref_video_upscale_sharpness"
-            android:title="@string/pref_video_upscale_sharpness_title"
-            android:summary="@string/pref_video_upscale_sharpness_summary"
-            android:dependency="pref_video_upscale_enable"
-            android:defaultValue="35"
-            android:max="100"
-            app:iconSpaceReserved="false"
-            seekbar:divisor="1"
-            seekbar:keyStep="1"
-            seekbar:min="0"
-            seekbar:step="1"
-            android:text="%" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_use_virtual_display"
@@ -323,7 +203,154 @@
             android:title="@string/title_fullexdisplay_mode"
             app:iconSpaceReserved="false" />
 
-</PreferenceCategory>
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="category_artemide_tweaks"
+        android:title="Artemide Tweaks"
+        app:initialExpandedChildrenCount="3"
+        app:iconSpaceReserved="false">
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_ultra_low_latency"
+            android:summary="@string/summary_checkbox_ultra_low_latency"
+            android:title="@string/title_checkbox_ultra_low_latency"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="checkbox_async_decode"
+            android:title="Async decode"
+            android:summary="Enable MediaCodec async callback mode. Changes apply after decoder restart."
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="checkbox_async_prefer_lower_delays"
+            android:defaultValue="false"
+            android:title="@string/pref_async_prefer_lower_delays_title"
+            android:summary="@string/pref_async_prefer_lower_delays_summary"
+            android:dependency="checkbox_async_decode"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="checkbox_immediate_frame_delivery"
+            android:title="@string/immediate_frame_delivery_title"
+            android:summary="@string/immediate_frame_delivery_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="checkbox_custom_decoder_output_timeout_us"
+            android:title="@string/decoder_output_dequeue_timeout_custom_title"
+            android:summary="@string/decoder_output_dequeue_timeout_custom_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="50000"
+            android:key="seekbar_decoder_output_timeout_us"
+            android:dependency="checkbox_custom_decoder_output_timeout_us"
+            android:max="50000"
+            android:title="@string/decoder_output_dequeue_timeout_title"
+            android:summary="@string/decoder_output_dequeue_timeout_summary"
+            android:dialogMessage="@string/decoder_output_dequeue_timeout_dialog"
+            android:text="@string/unit_microseconds"
+            app:iconSpaceReserved="false"
+            seekbar:min="0"
+            seekbar:step="250"
+            seekbar:keyStep="250" />
+
+        <CheckBoxPreference
+            android:key="checkbox_gpu_path_mode"
+            android:title="@string/gpu_path_mode_title"
+            android:summary="@string/gpu_path_mode_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="checkbox_Vsync"
+            android:title="@string/Vsync_title"
+            android:summary="@string/Vsync_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="checkbox_fastVsync"
+            android:title="@string/fastVsync_title"
+            android:summary="@string/fastVsync_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="pref_video_upscale_enable"
+            android:title="@string/pref_video_upscale_enable_title"
+            android:summary="@string/pref_video_upscale_enable_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <com.limelight.preferences.SeekBarPreference
+            android:key="pref_video_upscale_preset"
+            android:title="@string/pref_video_upscale_preset_title"
+            android:summary="@string/pref_video_upscale_preset_summary"
+            android:dependency="pref_video_upscale_enable"
+            android:defaultValue="1"
+            android:max="2"
+            app:iconSpaceReserved="false"
+            seekbar:divisor="1"
+            seekbar:keyStep="1"
+            seekbar:min="0"
+            seekbar:step="1"
+            android:text="" />
+
+        <ListPreference
+            android:key="pref_video_upscale_mode"
+            android:title="@string/pref_video_upscale_mode_title"
+            android:entries="@array/pref_video_upscale_mode_entries"
+            android:entryValues="@array/pref_video_upscale_mode_values"
+            android:defaultValue="rcas"
+            android:dependency="pref_video_upscale_enable"
+            app:iconSpaceReserved="false" />
+
+        <com.limelight.preferences.SeekBarPreference
+            android:key="pref_video_upscale_sharpness"
+            android:title="@string/pref_video_upscale_sharpness_title"
+            android:summary="@string/pref_video_upscale_sharpness_summary"
+            android:dependency="pref_video_upscale_enable"
+            android:defaultValue="35"
+            android:max="100"
+            app:iconSpaceReserved="false"
+            seekbar:divisor="1"
+            seekbar:keyStep="1"
+            seekbar:min="0"
+            seekbar:step="1"
+            android:text="%" />
+
+        <ListPreference
+            android:defaultValue=""
+            android:entries="@array/resolution_names"
+            android:entryValues="@array/resolution_values"
+            android:key="list_resolution_suggested"
+            android:title="@string/pref_suggested_resolution_title"
+            android:summary="@string/pref_suggested_resolution_summary"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:key="pref_cpu_warmup_enable"
+            android:title="@string/pref_cpu_warmup_enable_title"
+            android:summary="@string/pref_cpu_warmup_enable_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="checkbox_snappy_input"
+            android:title="@string/title_checkbox_snappy_input"
+            android:summary="@string/summary_checkbox_snappy_input"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
 
     <PreferenceCategory
         android:title="@string/category_audio_settings"
@@ -466,13 +493,7 @@
             app:iconSpaceReserved="false" />
 
 
-<CheckBoxPreference
-    android:defaultValue="true"
-    android:key="checkbox_snappy_input"
-    android:title="@string/title_checkbox_snappy_input"
-    android:summary="@string/summary_checkbox_snappy_input"
-    app:iconSpaceReserved="false" />
-</PreferenceCategory>
+    </PreferenceCategory>
 
     <PreferenceCategory
         android:key="category_input_settings"
@@ -1014,13 +1035,13 @@
             android:summary="@string/summary_checkbox_enable_perf_overlay_lite"
             android:title="@string/title_checkbox_enable_perf_overlay_lite"
             app:iconSpaceReserved="false" />
-			<CheckBoxPreference
-    android:defaultValue="true"
-    android:dependency="checkbox_enable_perf_overlay_lite"
-    android:key="checkbox_enable_perf_overlay_lite_oledshift"
-    android:title="@string/title_checkbox_enable_perf_overlay_lite_oledshift"
-    android:summary="@string/summary_checkbox_enable_perf_overlay_lite_oledshift"
-    app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="checkbox_enable_perf_overlay_lite"
+            android:key="checkbox_enable_perf_overlay_lite_oledshift"
+            android:title="@string/title_checkbox_enable_perf_overlay_lite_oledshift"
+            android:summary="@string/summary_checkbox_enable_perf_overlay_lite_oledshift"
+            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:dependency="checkbox_enable_perf_overlay_lite"
@@ -1028,13 +1049,13 @@
             android:summary="@string/summary_checkbox_enable_perf_overlay_lite_dialog"
             android:title="@string/title_checkbox_enable_perf_overlay_lite_dialog"
             app:iconSpaceReserved="false" />
-			<CheckBoxPreference
-    android:defaultValue="false"
-    android:dependency="checkbox_enable_perf_overlay_lite"
-    android:key="checkbox_enable_perf_overlay_lite_advanced"
-    android:title="@string/title_checkbox_enable_perf_overlay_lite_advanced"
-    android:summary="@string/summary_checkbox_enable_perf_overlay_lite_advanced"
-    app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:dependency="checkbox_enable_perf_overlay_lite"
+            android:key="checkbox_enable_perf_overlay_lite_advanced"
+            android:title="@string/title_checkbox_enable_perf_overlay_lite_advanced"
+            android:summary="@string/summary_checkbox_enable_perf_overlay_lite_advanced"
+            app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
             android:defaultValue="false"
@@ -1109,13 +1130,6 @@
             android:summary="@string/summary_prevent_packet_loss"
             android:title="@string/title_prevent_packet_loss"
             app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:key="pref_cpu_warmup_enable"
-            android:title="@string/pref_cpu_warmup_enable_title"
-            android:summary="@string/pref_cpu_warmup_enable_summary"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
     </PreferenceCategory>
 
     <PreferenceCategory
