@@ -57,7 +57,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private int lastProgram = -1;
     private int lastTexture = -1;
-    private EGLContext attachedEglContext = EGL14.EGL_NO_CONTEXT;
+    private long eglContextHandle = 0L;
+    private long eglWindowSurfaceHandle = 0L;
+    private long attachedEglContextHandle = 0L;
+
 
     // ===== FSR Telemetry (lightweight) =====
     private static final class FsrTelemetry {
@@ -994,7 +997,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
 
             decoderSurfaceTex = new SurfaceTexture(oesTexId);
-            attachedEglContext = EGL14.eglGetCurrentContext();
+            attachedEglContextHandle = safeEglContextHandle(EGL14.eglGetCurrentContext());
 
             try {
                 decoderSurfaceTex.setDefaultBufferSize(srcW, srcH);
@@ -1198,7 +1201,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 decoderSurfaceTex.setOnFrameAvailableListener(null);
                 decoderSurfaceTex.release();
                 decoderSurfaceTex = null;
-                attachedEglContext = EGL14.EGL_NO_CONTEXT;
+                attachedEglContextHandle = 0L;
             }
             if (decoderInputSurface != null) {
                 decoderInputSurface.release();
@@ -1241,7 +1244,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
             }
         } finally {
-            // Avoid stale Linux TID reuse after thread exit.
+            // Explicitly release EGL binding on this thread to avoid EGL_BAD_ACCESS on next session.
+            try { releaseEglCurrent(); } catch (Throwable ignored) {}
             renderTid = 0;
         }
     }
@@ -1256,10 +1260,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 // Ensure EGL context + surface are current (fail-fast)
 // If eglMakeCurrent fails, do NOT issue any GL calls (prevents SurfaceTexture 0x502 loops).
+        final long __curCtxH = safeEglContextHandle(EGL14.eglGetCurrentContext());
+        final long __curDrawH = safeEglSurfaceHandle(EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW));
+        final long __curReadH = safeEglSurfaceHandle(EGL14.eglGetCurrentSurface(EGL14.EGL_READ));
+
         final boolean needMakeCurrent =
-                (EGL14.eglGetCurrentContext() != eglContext) ||
-                        (EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != eglWindowSurface) ||
-                        (EGL14.eglGetCurrentSurface(EGL14.EGL_READ) != eglWindowSurface);
+                (__curCtxH == 0L || __curCtxH != eglContextHandle) ||
+                        (__curDrawH != eglWindowSurfaceHandle) ||
+                        (__curReadH != eglWindowSurfaceHandle);
 
         if (needMakeCurrent) {
             if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext)) {
@@ -2324,6 +2332,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext))
                     throw new RuntimeException("eglMakeCurrent failed");
+                // Cache native handles (eglGetCurrent* wrappers are not reference-stable across calls)
+                eglContextHandle = safeEglContextHandle(eglContext);
+                eglWindowSurfaceHandle = safeEglSurfaceHandle(eglWindowSurface);
 
                 // Force non-blocking swap after (re)binding current surfaces.
                 swapIntervalZeroApplied = false;
@@ -2596,7 +2607,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             eglDisplay = EGL14.EGL_NO_DISPLAY;
             eglContext = EGL14.EGL_NO_CONTEXT;
             eglWindowSurface = EGL14.EGL_NO_SURFACE;
-            attachedEglContext = EGL14.EGL_NO_CONTEXT;
+            eglContextHandle = 0L;
+            eglWindowSurfaceHandle = 0L;
+            attachedEglContextHandle = 0L;
             swapIntervalZeroApplied = false;
         }
     }
@@ -3537,16 +3550,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean ensureSurfaceTextureAttached() {
         if (decoderSurfaceTex == null || oesTexId == 0) return false;
 
-        final EGLContext cur = EGL14.eglGetCurrentContext();
-        if (cur == null || cur == EGL14.EGL_NO_CONTEXT) return false;
+        final long curH = safeEglContextHandle(EGL14.eglGetCurrentContext());
+        if (curH == 0L) return false;
 
-        if (attachedEglContext == cur) return true;
+        if (attachedEglContextHandle == curH) return true;
 
         try { decoderSurfaceTex.detachFromGLContext(); } catch (Throwable ignored) { }
 
         try {
             decoderSurfaceTex.attachToGLContext(oesTexId);
-            attachedEglContext = cur;
+            attachedEglContextHandle = curH;
 
             // Cached bindings are not valid across contexts
             lastTexture = -1;
@@ -3557,13 +3570,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return true;
         } catch (Throwable t) {
             // Force a clean retry on the next frame
-            attachedEglContext = EGL14.EGL_NO_CONTEXT;
+            attachedEglContextHandle = 0L;
             LimeLog.warning("FSR: SurfaceTexture attachToGLContext failed: " + t);
             markGlErrorDirty();
             return false;
         }
     }
-
 
 
     private void clearGlErrors() {
@@ -3673,15 +3685,48 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         return 2;
     }
 
+    private static long safeEglContextHandle(EGLContext ctx) {
+        if (ctx == null) return 0L;
+        try {
+            return ctx.getNativeHandle();
+        } catch (Throwable ignored) {
+            try {
+                return (long) ctx.getHandle();
+            } catch (Throwable ignored2) {
+                return 0L;
+            }
+        }
+    }
+
+    private static long safeEglSurfaceHandle(EGLSurface s) {
+        if (s == null) return 0L;
+        try {
+            return s.getNativeHandle();
+        } catch (Throwable ignored) {
+            try {
+                return (long) s.getHandle();
+            } catch (Throwable ignored2) {
+                return 0L;
+            }
+        }
+    }
+
 
     private boolean ensureEglCurrent() {
         if (!isGlReady()) return false;
 
-        final EGLContext curCtx = EGL14.eglGetCurrentContext();
-        final EGLSurface curDraw = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW);
-        final EGLSurface curRead = EGL14.eglGetCurrentSurface(EGL14.EGL_READ);
+        if (eglContextHandle == 0L) {
+            eglContextHandle = safeEglContextHandle(eglContext);
+        }
+        if (eglWindowSurfaceHandle == 0L) {
+            eglWindowSurfaceHandle = safeEglSurfaceHandle(eglWindowSurface);
+        }
 
-        if (curCtx == eglContext && curDraw == eglWindowSurface && curRead == eglWindowSurface) {
+        final long curCtxH = safeEglContextHandle(EGL14.eglGetCurrentContext());
+        final long curDrawH = safeEglSurfaceHandle(EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW));
+        final long curReadH = safeEglSurfaceHandle(EGL14.eglGetCurrentSurface(EGL14.EGL_READ));
+
+        if (curCtxH == eglContextHandle && curDrawH == eglWindowSurfaceHandle && curReadH == eglWindowSurfaceHandle) {
             return true;
         }
 
@@ -3698,16 +3743,23 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         return true;
     }
 
+
     private void releaseEglCurrent() {
         if (eglDisplay == null || eglDisplay == EGL14.EGL_NO_DISPLAY) return;
 
         try {
-            if (EGL14.eglGetCurrentContext() == eglContext) {
+            if (eglContextHandle == 0L) {
+                eglContextHandle = safeEglContextHandle(eglContext);
+            }
+
+            final long curCtxH = safeEglContextHandle(EGL14.eglGetCurrentContext());
+            if (curCtxH != 0L && curCtxH == eglContextHandle) {
                 EGL14.eglMakeCurrent(
                         eglDisplay,
                         EGL14.EGL_NO_SURFACE,
                         EGL14.EGL_NO_SURFACE,
                         EGL14.EGL_NO_CONTEXT);
+                try { EGL14.eglReleaseThread(); } catch (Throwable ignored) {}
             }
         } catch (Throwable ignored) {}
     }
