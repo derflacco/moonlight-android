@@ -1858,7 +1858,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             } else if (preset == 1 && progEasuBalanced2D != 0) {
                 easuProg = progEasuBalanced2D;
                 easuTexMatLoc = easuBal2D_uTexMat;
-            } else if (progEasuPerf2D != 0) {
+            } else if (progEasuPerf2D != 0) { // <-- PERF default, NON Mali-only
                 easuProg = progEasuPerf2D;
                 easuTexMatLoc = easuPerf2D_uTexMat;
             } else {
@@ -1873,7 +1873,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             } else if (preset == 1 && progEasuBalanced != 0) {
                 easuProg = progEasuBalanced;
                 easuTexMatLoc = easuBal_uTexMat;
-            } else if (progEasuPerf != 0) {
+            } else if (progEasuPerf != 0) { // <-- PERF default, NON Mali-only
                 easuProg = progEasuPerf;
                 easuTexMatLoc = easuPerf_uTexMat;
             } else {
@@ -3223,33 +3223,50 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final String FS_EASU_PERF =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
-                    "precision highp float;\n" +
+                    "precision mediump float;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
                     "uniform vec2 uInvSrcSize;\n" +
                     "uniform mat4 uTexMatrix;\n" +
-                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "\n" +
+                    "mediump float luma(mediump vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }\n" +
+                    "\n" +
                     "void main(){\n" +
-                    "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
-                    "  vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
-                    "  vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
-                    "  vec3 c  = texture(uTex, uv).rgb;\n" +
-                    "  vec3 rx = texture(uTex, uv + stepX).rgb;\n" +
-                    "  vec3 lx = texture(uTex, uv - stepX).rgb;\n" +
-                    "  vec3 ty = texture(uTex, uv + stepY).rgb;\n" +
-                    "  vec3 by = texture(uTex, uv - stepY).rgb;\n" +
-                    "  float gx = luma(rx) - luma(lx);\n" +
-                    "  float gy = luma(ty) - luma(by);\n" +
-                    "  float edge = clamp((abs(gx)+abs(gy))*1.5, 0.0, 1.0);\n" +
-                    "  vec3 base = c;\n" +
-                    "  vec3 alongX = 0.5*(rx+lx);\n" +
-                    "  vec3 alongY = 0.5*(ty+by);\n" +
-                    "  float wx = smoothstep(0.1, 0.6, abs(gx));\n" +
-                    "  float wy = smoothstep(0.1, 0.6, abs(gy));\n" +
-                    "  vec3 guided = mix(alongY, alongX, wx/(wx+wy+1e-5));\n" +
-                    "  vec3 up = mix(base, guided, 0.18*edge);\n" +
-                    "  fragColor = vec4(clamp(up, 0.0, 1.0), 1.0);\n" +
+                    // Matrix-safe UV and texel steps
+                    "  highp vec2 uv    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  highp vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  highp vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
+                    "\n" +
+                    // Base: relies on HW bilinear when sampler is LINEAR (setOesFilter(false))
+                    "  mediump vec3 c  = texture(uTex, uv).rgb;\n" +
+                    "  mediump vec3 l  = texture(uTex, uv - stepX).rgb;\n" +
+                    "  mediump vec3 r  = texture(uTex, uv + stepX).rgb;\n" +
+                    "  mediump vec3 t  = texture(uTex, uv + stepY).rgb;\n" +
+                    "  mediump vec3 b  = texture(uTex, uv - stepY).rgb;\n" +
+                    "\n" +
+                    // Luma-only unsharp (prevents “neon” color shifts)
+                    "  mediump float lc = luma(c);\n" +
+                    "  mediump float ll = luma(l);\n" +
+                    "  mediump float lr = luma(r);\n" +
+                    "  mediump float lt = luma(t);\n" +
+                    "  mediump float lb = luma(b);\n" +
+                    "  mediump float low = 0.25 * (ll + lr + lt + lb);\n" +
+                    "  mediump float diff = lc - low;\n" +
+                    "\n" +
+                    // Strength knob (0.08..0.18). Start conservative.
+                    "  mediump float k = 0.12;\n" +
+                    "  mediump float l2 = lc + diff * k;\n" +
+                    "\n" +
+                    // Luma limiter to avoid halos/overshoot
+                    "  mediump float mn = min(lc, min(min(ll, lr), min(lt, lb)));\n" +
+                    "  mediump float mx = max(lc, max(max(ll, lr), max(lt, lb)));\n" +
+                    "  l2 = clamp(l2, mn, mx);\n" +
+                    "\n" +
+                    // Re-apply luma correction without changing chroma too much
+                    "  mediump float s = (lc > 1e-4) ? (l2 / lc) : 1.0;\n" +
+                    "  mediump vec3 outRgb = clamp(c * s, 0.0, 1.0);\n" +
+                    "  fragColor = vec4(outRgb, 1.0);\n" +
                     "}\n";
 
     // RCAS shader with optimized OES path using precomputed varyings
