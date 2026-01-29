@@ -34,7 +34,11 @@ public final class AsyncCodecAdapter {
     private static final int RELEASE_Q_CAP = 32;
 
     // Cap how many releaseOutputBuffer(false) we do per render-loop tick to avoid bursts.
-    private static final int RELEASE_DRAIN_CAP = 8;
+    // Use a dynamic cap + time budget to reduce callback-thread binder calls on 120Hz/backlog.
+    private static final int RELEASE_DRAIN_CAP_BASE = 8;
+    private static final int RELEASE_DRAIN_CAP_MAX  = 24;
+    private static final long RELEASE_DRAIN_BUDGET_NS = 700_000L; // 0.7ms
+
 
     private final ArrayBlockingQueue<Integer> inputQueue =
             new ArrayBlockingQueue<>(INPUT_Q_CAP);
@@ -186,9 +190,18 @@ public final class AsyncCodecAdapter {
             return;
         }
 
+        final long startNs = System.nanoTime();
+
+        // Dynamic cap: drain more when backlog is large, but never exceed MAX.
+        int cap = RELEASE_DRAIN_CAP_BASE;
+        try {
+            final int q = releaseQueue.size();
+            if (q > cap) cap = Math.min(RELEASE_DRAIN_CAP_MAX, q);
+        } catch (Throwable ignored) { }
+
         int n = 0;
         Integer idx;
-        while (n < RELEASE_DRAIN_CAP && (idx = releaseQueue.poll()) != null) {
+        while (n < cap && (idx = releaseQueue.poll()) != null) {
             try {
                 if (release != null) {
                     release.releaseNoRender(codec, idx);
@@ -197,6 +210,11 @@ public final class AsyncCodecAdapter {
                 }
             } catch (Throwable ignored) { }
             n++;
+
+            // Hard budget to avoid spending too long in binder calls in a single tick.
+            if ((System.nanoTime() - startNs) >= RELEASE_DRAIN_BUDGET_NS) {
+                break;
+            }
         }
     }
 
