@@ -792,7 +792,7 @@
     <string name="immediate_frame_delivery_title">Immediate Frame Delivery</string>
     <string name="immediate_frame_delivery_summary">Skip decoder wait for lower latency (may increase power consumption)</string>
     <!-- Async Prefer Lower Delays -->
-    <string name="pref_async_prefer_lower_delays_title">Async: Prefer lower delays</string>
+    <string name="pref_async_prefer_lower_delays_title">Async: LFR</string>
     <string name="pref_async_prefer_lower_delays_summary">Drop queued output frames and keep only the latest one to minimize latency (may increase frame drops under load).</string>
     <!-- Decoder dequeue and drain  -->
     <string name="decoder_output_dequeue_timeout_custom_title">Customize decoder output dequeue timeout</string>
