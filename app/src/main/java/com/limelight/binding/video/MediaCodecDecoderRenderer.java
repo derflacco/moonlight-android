@@ -1221,7 +1221,15 @@ try {
                         // Async \ Sync
                         useAsyncCodec = requestedUseAsyncCodec;
 
+                        // IMPORTANT (MTK/HDR): stop()/reset() can silently drop async callbacks.
+                        // Force a detach so configureAndStartDecoder() will reinstall setCallback().
+                        try { detachAsyncCodec(); } catch (Throwable ignored) {}
+
                         videoDecoder.stop();
+
+                        // Ensure fresh async callback install before configure/start
+                        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
+
                         configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalArgumentException e) {
@@ -1246,7 +1254,15 @@ try {
                     try {
                         // Async \ Sync
                         useAsyncCodec = requestedUseAsyncCodec;
+                        // IMPORTANT (HDR): reset() can silently drop async callbacks.
+                        // Force a detach so configureAndStartDecoder() will reinstall setCallback().
+                        try { detachAsyncCodec(); } catch (Throwable ignored) {}
+
                         videoDecoder.reset();
+
+                        // Ensure fresh async callback install before configure/start
+                        try { attachAsyncCodecIfNeeded(); } catch (Throwable ignored) {}
+
                         configureAndStartDecoder(coldCfg.configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                     } catch (IllegalArgumentException e) {
@@ -3443,44 +3459,63 @@ try {
     };
 
     private final AsyncCodecAdapter.Callbacks asyncCallbacks = new AsyncCodecAdapter.Callbacks() {
-        @Override
-        public void onOutputFormatChanged(MediaCodec codec, MediaFormat format) {
+    @Override
+    public void onOutputFormatChanged(MediaCodec codec, MediaFormat format) {
+        try {
+            // In async callback, prefer the provided 'format' (more stable than codec.getOutputFormat()).
+            final MediaFormat outFmt;
+            if (format != null) {
+                outFmt = format;
+            } else {
+                // Fallback only if needed
+                outFmt = (codec != null) ? codec.getOutputFormat() : null;
+            }
+            if (outFmt == null) {
+                LimeLog.warning("Output format changed (async) but format is null");
+                return;
+            }
+
+            coldCfg.outputFormat = outFmt;
+            LimeLog.info("Output format changed (async): " + coldCfg.outputFormat);
+
+            boolean isHdr = false;
             try {
-                coldCfg.outputFormat = codec.getOutputFormat();
-                LimeLog.info("Output format changed (async): " + coldCfg.outputFormat);
+                int std = -1, tr = -1;
+                try { std = outFmt.getInteger("color-standard"); } catch (Throwable ignored) {}
+                try { tr  = outFmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
 
-                // HDR detection (same logic as existing sync path)
-                try {
-                    MediaFormat __fmt = coldCfg.outputFormat;
-                    int __std = -1, __tr = -1, __rng = -1;
-                    try { __std = __fmt.getInteger("color-standard"); } catch (Throwable ignored) {}
-                    try { __tr  = __fmt.getInteger("color-transfer"); } catch (Throwable ignored) {}
-                    try { __rng = __fmt.getInteger("color-range"); } catch (Throwable ignored) {}
+                // BT.2020 + (PQ or HLG) => HDR
+                isHdr = (std == MediaFormat.COLOR_STANDARD_BT2020) &&
+                        (tr == MediaFormat.COLOR_TRANSFER_ST2084 ||
+                                tr == MediaFormat.COLOR_TRANSFER_HLG);
+            } catch (Throwable ignored) {}
 
-                    boolean __isHdr =
-                            (__std == MediaFormat.COLOR_STANDARD_BT2020) &&
-                                    (__tr == MediaFormat.COLOR_TRANSFER_ST2084 ||
-                                            __tr == MediaFormat.COLOR_TRANSFER_HLG);
+            if (hdrActive != isHdr) {
+                hdrActive = isHdr;
+                try { Game.updateHdrWindowMode(isHdr); } catch (Throwable ignored) {}
+            }
 
-                    hdrActive = __isHdr;
-                    try { Game.updateHdrWindowMode(__isHdr); } catch (Throwable ignored) {}
+            // Best-effort: read hdr-static-info without mutating the original buffer's position
+            try {
+                java.nio.ByteBuffer hdr = null;
+                try { hdr = outFmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
 
-                    // (Optional) hdr-static-info extraction remains local if you later forward it to GL.
-                    try {
-                        java.nio.ByteBuffer __hdr = null;
-                        try { __hdr = __fmt.getByteBuffer("hdr-static-info"); } catch (Throwable ignored) {}
-                        if (__hdr != null) {
-                            __hdr.position(__hdr.position()); // no-op, keep best-effort
-                        }
-                    } catch (Throwable ignored) { }
+                if (hdr != null && hdr.remaining() > 0) {
+                    final java.nio.ByteBuffer dup = hdr.duplicate();
+                    final byte[] hdrArr = new byte[dup.remaining()];
+                    dup.get(hdrArr);
 
-                } catch (Throwable ignored) { }
+                    // If you have a place to forward this to GL/upscaler, do it here.
+                    // (Keeping it best-effort to avoid destabilizing async callback path.)
+                }
+            } catch (Throwable ignored) {}
 
-                LimeLog.info("New output format: " + coldCfg.outputFormat);
-            } catch (Throwable ignored) { }
+        } catch (Throwable t) {
+            LimeLog.warning("onOutputFormatChanged(async) failed: " + t);
         }
+    }
 
-        @Override
+    @Override
         public void onCodecError(MediaCodec codec, MediaCodec.CodecException e) {
             try {
                 LimeLog.warning("[Video] MediaCodec async error: " + e);
