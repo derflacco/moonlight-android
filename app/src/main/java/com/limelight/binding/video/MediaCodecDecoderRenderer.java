@@ -391,15 +391,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile boolean runtimeOutputDequeueTimeoutCustomEnabled = false;
     private volatile int runtimeOutputDequeueTimeoutUs = 50000;
 
-    // Adaptive output dequeue tuning (µs)
-    private static final int MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US = 500;
-    private static final int MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US = 3000;
-    private static final int MAX_SMOOTH_ADAPTIVE_STEP_US = 250;
+    // Output dequeue timeouts (µs) for managed pacing modes
+    private static final int OUT_DEQUEUE_TIMEOUT_BALANCED_US = 3000;
+    private static final int OUT_DEQUEUE_TIMEOUT_MAX_SMOOTH_US =5000;
+    private static final int OUT_DEQUEUE_TIMEOUT_CAP_FPS_US = 4000;
 
-    // Starts small; auto-tunes at runtime (adaptive modes)
-    private volatile int maxSmoothAdaptiveDequeueTimeoutUs = 500;
-    private volatile int balancedAdaptiveDequeueTimeoutUs = 500;
-    private volatile int capFpsAdaptiveDequeueTimeoutUs = 500;
 
 
     // Balanced pacing queue: bounded + allocation-free per-frame (no LinkedBlockingQueue Node allocations).
@@ -1665,15 +1661,6 @@ try {
                             ? prefs.framePacing
                             : PreferenceConfiguration.FRAME_PACING_BALANCED;
 
-                    final boolean isBalanced =
-                            (pacingMode == PreferenceConfiguration.FRAME_PACING_BALANCED);
-                    final boolean isMaxSmooth =
-                            (pacingMode == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS);
-                    final boolean isCapFps =
-                            (pacingMode == PreferenceConfiguration.FRAME_PACING_CAP_FPS);
-
-                    final boolean isAdaptiveMode = isBalanced || isMaxSmooth || isCapFps;
-
                     final boolean customTimeoutEnabled = runtimeOutputDequeueTimeoutCustomEnabled;
                     final int uiTimeoutUs = runtimeOutputDequeueTimeoutUs;
 
@@ -1682,45 +1669,35 @@ try {
                     if (prefs != null && prefs.immediateFrameDelivery) {
                         // UI wins globally: force PURE dequeue (0 µs)
                         firstOutTimeoutUs = 0;
-                    } else if (isAdaptiveMode) {
-                        // Adaptive modes: MAX_SMOOTHNESS / BALANCED / CAP_FPS
-                        // If customization is enabled, UI value acts as a cap (0 => pure non-blocking).
-                        final int uiCapUsRaw = customTimeoutEnabled ? uiTimeoutUs : MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US;
-
-                        if (uiCapUsRaw <= 0) {
-                            firstOutTimeoutUs = 0;
-                        } else {
-                            final int capUs = Math.max(
-                                    MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                    Math.min(MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US, uiCapUsRaw));
-
-                            final int adaptiveUs = isMaxSmooth
-                                    ? maxSmoothAdaptiveDequeueTimeoutUs
-                                    : (isBalanced ? balancedAdaptiveDequeueTimeoutUs : capFpsAdaptiveDequeueTimeoutUs);
-
-                            final int curUs = Math.max(
-                                    MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                    Math.min(capUs, adaptiveUs));
-
-                            firstOutTimeoutUs = curUs;
-                        }
-                    } else if (!customTimeoutEnabled) {
-                        // Built-in policy when customization is OFF.
+                    } else if (customTimeoutEnabled) {
+                        // Custom enabled: honor UI directly (0 allowed)
+                        firstOutTimeoutUs = Math.max(0, uiTimeoutUs);
+                    } else {
+                        // Fixed timeouts for managed pacing modes (no auto-tuning).
                         switch (pacingMode) {
+                            case PreferenceConfiguration.FRAME_PACING_BALANCED:
+                                firstOutTimeoutUs = OUT_DEQUEUE_TIMEOUT_BALANCED_US;
+                                break;
+                            case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+                                firstOutTimeoutUs = OUT_DEQUEUE_TIMEOUT_MAX_SMOOTH_US;
+                                break;
+                            case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+                                firstOutTimeoutUs = OUT_DEQUEUE_TIMEOUT_CAP_FPS_US;
+                                break;
+
                             case PreferenceConfiguration.FRAME_PACING_GPU_RAW:
                             case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
                             case PreferenceConfiguration.FRAME_PACING_WARP:
                             case PreferenceConfiguration.FRAME_PACING_WARP2:
                                 firstOutTimeoutUs = 500;
                                 break;
+
                             default:
-                                // Preserve legacy default behavior for other modes
-                                firstOutTimeoutUs = 50000;
+                                // Sync can block longer without building an external backlog.
+                                // Async: long waits let the async output queue build up and can look like "latency creep".
+                                firstOutTimeoutUs = useAsyncCodec ? OUT_DEQUEUE_TIMEOUT_MAX_SMOOTH_US : 5000;
                                 break;
                         }
-                    } else {
-                        // Custom enabled: honor UI directly (0 allowed)
-                        firstOutTimeoutUs = Math.max(0, uiTimeoutUs);
                     }
 
                     // Throttle cleanup to avoid performance spikes
@@ -1741,110 +1718,21 @@ try {
 
                             numFramesOut++;
 
-                        // Track dequeue time for the newest output buffer (latest-only)
+                            // Track dequeue time for the newest output buffer (latest-only)
                             final long nowNsLocal = System.nanoTime();
                             long lastDequeueTimeNs = (useAsyncCodec && asyncCodec.getLastOutputReadyNs() != 0L)
                                     ? asyncCodec.getLastOutputReadyNs()
                                     : nowNsLocal;
 
-                        // Measure decode latency for the first dequeued buffer too
+                            // Measure decode latency for the first dequeued buffer too
                             try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, lastDequeueTimeNs, USE_FRAME_RENDER_TIME); }
                             catch (Throwable ignored) { }
 
-                            if (!isBalanced) {
-                                if (isMaxSmooth || isCapFps) {
+                            if (pacingMode != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                                // IMPORTANT: avoid "chase newest" draining here.
+                                // Dropping multiple output frames in a single tick looks like periodic big stutters on the client.
 
-                                    // AdaptX Smooth-style: short first dequeue already done (firstOutTimeoutUs),
-                                    // then chase newest with non-blocking follow-ups and a soft cap.
-                                    int drained = 1; // includes the already dequeued buffer
-                                    boolean drainedMultiple = false;
 
-                                    final int drainSoftCap = (firstOutTimeoutUs <= 500) ? 4 : 3;
-
-                                    while (drained < drainSoftCap &&
-                                            (outIndex = nextOutputIndex(info, 0)) >= 0) {
-
-                                        final long thisDequeueTimeNs = (useAsyncCodec && asyncCodec.getLastOutputReadyNs() != 0L)
-                                                ? asyncCodec.getLastOutputReadyNs()
-                                                : System.nanoTime();
-
-                                        try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
-                                        catch (Throwable ignored) { }
-
-                                        numFramesOut++;
-                                        lastIndex = outIndex;
-                                        presentationTimeUs = info.presentationTimeUs;
-                                        lastFlags = info.flags;
-
-                                        // Measure decode latency for this dequeued buffer
-                                        try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, thisDequeueTimeNs, USE_FRAME_RENDER_TIME); }
-                                        catch (Throwable ignored) { }
-
-                                        lastDequeueTimeNs = thisDequeueTimeNs;
-
-                                        drained++;
-                                        drainedMultiple = true;
-                                    }
-
-                                    // Adaptive timeout tuning (MAX_SMOOTHNESS / CAP_FPS), respecting UI cap when customization is enabled.
-                                    final int uiCapUsRaw = runtimeOutputDequeueTimeoutCustomEnabled
-                                            ? runtimeOutputDequeueTimeoutUs
-                                            : MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US;
-
-                                    if (uiCapUsRaw > 0 && prefs != null && !prefs.immediateFrameDelivery) {
-                                        final int capUs = Math.max(
-                                                MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                                Math.min(MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US, uiCapUsRaw));
-
-                                        final boolean hitSoftCap = (drained >= drainSoftCap);
-
-                                        int adaptiveUs = isMaxSmooth ? maxSmoothAdaptiveDequeueTimeoutUs : capFpsAdaptiveDequeueTimeoutUs;
-
-                                        if (hitSoftCap || drainedMultiple) {
-                                            adaptiveUs = Math.max(
-                                                    MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                                    Math.min(capUs, adaptiveUs - MAX_SMOOTH_ADAPTIVE_STEP_US));
-                                        } else {
-                                            adaptiveUs = Math.max(
-                                                    MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                                    Math.min(capUs, adaptiveUs + MAX_SMOOTH_ADAPTIVE_STEP_US));
-                                        }
-
-                                        if (isMaxSmooth) {
-                                            maxSmoothAdaptiveDequeueTimeoutUs = adaptiveUs;
-                                        } else {
-                                            capFpsAdaptiveDequeueTimeoutUs = adaptiveUs;
-                                        }
-                                    }
-
-                                } else {
-                                    // Existing behavior for other pacing modes
-                                    // to avoid large bursts of releaseOutputBuffer() binder calls.
-                                    int drained = 1;
-                                    final int drainSoftCap = 6;
-                                    while (drained < drainSoftCap &&
-                                            (outIndex = nextOutputIndex(info, 0)) >= 0) {
-
-                                        final long thisDequeueTimeNs = (useAsyncCodec && asyncCodec.getLastOutputReadyNs() != 0L)
-                                                ? asyncCodec.getLastOutputReadyNs()
-                                                : System.nanoTime();
-
-                                        try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
-                                        catch (Throwable ignored) { }
-
-                                        numFramesOut++;
-                                        lastIndex = outIndex;
-                                        presentationTimeUs = info.presentationTimeUs;
-                                        lastFlags = info.flags;
-
-                                        // Measure decode latency per-buffer at dequeue time (more stable samples)
-                                        try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, thisDequeueTimeNs, USE_FRAME_RENDER_TIME); }
-                                        catch (Throwable ignored) { }
-
-                                        lastDequeueTimeNs = thisDequeueTimeNs;
-                                        drained++;
-                                    }
-                                }
 
                                 final boolean eos =
                                         (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
@@ -1885,71 +1773,20 @@ try {
                                     continue;
                                 }
                             } else {
-                                // Balanced: latest-only + adaptive tuning, then enqueue for Choreographer (bounded queue)
-                                int drained = 1;
-                                boolean drainedMultiple = false;
-
-                                final int drainSoftCap = (firstOutTimeoutUs <= 500) ? 4 : 3;
-
-                                while (drained < drainSoftCap &&
-                                        (outIndex = nextOutputIndex(info, 0)) >= 0) {
-
-                                    final long thisDequeueTimeNs = (useAsyncCodec && asyncCodec.getLastOutputReadyNs() != 0L)
-                                            ? asyncCodec.getLastOutputReadyNs()
-                                            : nowNsLocal;
-
-                                    try { releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex); }
-                                    catch (Throwable ignored) { }
-
-                                    numFramesOut++;
-                                    lastIndex = outIndex;
-                                    presentationTimeUs = info.presentationTimeUs;
-                                    lastFlags = info.flags;
-
-                                    try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, thisDequeueTimeNs, USE_FRAME_RENDER_TIME); }
-                                    catch (Throwable ignored) { }
-
-                                    lastDequeueTimeNs = thisDequeueTimeNs;
-
-                                    drained++;
-                                    drainedMultiple = true;
-                                }
-
-                                final int uiCapUsRaw = runtimeOutputDequeueTimeoutCustomEnabled
-                                        ? runtimeOutputDequeueTimeoutUs
-                                        : MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US;
-
-                                if (uiCapUsRaw > 0 && prefs != null && !prefs.immediateFrameDelivery) {
-                                    final int capUs = Math.max(
-                                            MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                            Math.min(MAX_SMOOTH_ADAPTIVE_MAX_TIMEOUT_US, uiCapUsRaw));
-
-                                    final boolean hitSoftCap = (drained >= drainSoftCap);
-
-                                    int adaptiveUs = balancedAdaptiveDequeueTimeoutUs;
-
-                                    if (hitSoftCap || drainedMultiple) {
-                                        adaptiveUs = Math.max(
-                                                MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                                Math.min(capUs, adaptiveUs - MAX_SMOOTH_ADAPTIVE_STEP_US));
-                                    } else {
-                                        adaptiveUs = Math.max(
-                                                MAX_SMOOTH_ADAPTIVE_MIN_TIMEOUT_US,
-                                                Math.min(capUs, adaptiveUs + MAX_SMOOTH_ADAPTIVE_STEP_US));
-                                    }
-
-                                    balancedAdaptiveDequeueTimeoutUs = adaptiveUs;
-                                }
+                                // Balanced: enqueue for Choreographer (bounded queue)
+                                // IMPORTANT: keep bounded-queue behavior for smooth output; do NOT force "latest-only" draining here.
+                                boolean dropped = false;
 
                                 // Non-blocking trimming to avoid size()/take() races
-                                while (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
-                                    Integer old = outputBufferQueue.poll();
+                                while (outputBufferQueue.remainingCapacity() == 0) {
+                                    final Integer old = outputBufferQueue.poll();
                                     if (old == null) {
                                         break;
                                     }
-                                    try {
-                                        releaseOutputBufferNoRenderLocked(videoDecoder, old);
-                                    } catch (Throwable ignored) { }
+
+                                    dropped = true;
+                                    try { releaseOutputBufferNoRenderLocked(videoDecoder, old); }
+                                    catch (Throwable ignored) { }
                                 }
 
                                 if (!outputBufferQueue.offer(lastIndex)) {
