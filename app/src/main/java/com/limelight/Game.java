@@ -1764,12 +1764,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             final Surface s = getPresentSurfaceOrNull();
             if (s == null) return;
 
-            // Compute desired frame-rate hint
-            final float desiredFrameRate;
-            if (mayReduceRefreshRate() || desiredRefreshRate < prefConfig.fps) {
-                desiredFrameRate = prefConfig.fps;
-            } else {
-                desiredFrameRate = desiredRefreshRate;
+            // Compute desired frame-rate hint.
+            //
+            // For streaming we want the Surface pipeline (SF/HWC) to pace to the *stream FPS*,
+            // not to the current display refresh rate (e.g. 120Hz panel with a 60fps stream).
+            final float desiredFrameRate = prefConfig.fps;
+            if (desiredFrameRate <= 0f) {
+                return;
             }
 
             // Skip redundant updates (tolerance for float noise)
