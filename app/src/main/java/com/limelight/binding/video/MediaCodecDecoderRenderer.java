@@ -1881,9 +1881,7 @@ try {
 
                 if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                     if (dequeueTimeoutUs == 0) {
-                        // Non-blocking path: avoid busy spin
-                        inputNonBlockingBackoff();
-                        // Reset to -1 so next call will retry, and avoid hung detection.
+                        // Non-blocking miss: reset and return, backoff handled in prefetch
                         nextInputBufferIndex = -1;
                         noBufferThisCall = true;
                     } else {
@@ -1918,8 +1916,20 @@ try {
                     }
                     nextInputBuffer.clear();
                 } else {
-                    nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
-                    nextInputBuffer.clear();
+                    if (coldCfg.legacyInputBuffers == null) {
+                        nextInputBufferIndex = -1;
+                        nextInputBuffer = null;
+                        throw new IllegalStateException("legacyInputBuffers not initialized");
+                    } else {
+                        nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
+                        if (nextInputBuffer == null) {
+                            final int badIndex = nextInputBufferIndex;
+                            nextInputBufferIndex = -1;
+                            nextInputBuffer = null;
+                            throw new IllegalStateException("legacyInputBuffers[] returned null for index " + badIndex);
+                        }
+                        nextInputBuffer.clear();
+                    }
                 }
             }
         } catch (IllegalStateException e) {
@@ -3538,8 +3548,9 @@ try {
                 nextInputBufferIndex = nextInputIndex(0); // 0us = non-blocking
 
                 if (nextInputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    // Not an error: leave state as-is and let fetch() retry when needed.
+                    // Not an error: leave state reset and avoid busy-spin if caller loops.
                     nextInputBufferIndex = -1;
+                    inputNonBlockingBackoff();
                     return true;
                 }
             }
@@ -3559,8 +3570,20 @@ try {
                     }
                     nextInputBuffer.clear();
                 } else {
-                    nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
-                    nextInputBuffer.clear();
+                    // Guard: codec may have been (re)configured and legacy buffers not ready yet.
+                    if (coldCfg.legacyInputBuffers == null) {
+                        nextInputBufferIndex = -1;
+                        nextInputBuffer = null;
+                    } else {
+                        nextInputBuffer = coldCfg.legacyInputBuffers[nextInputBufferIndex];
+                        if (nextInputBuffer == null) {
+                            final int badIndex = nextInputBufferIndex;
+                            nextInputBufferIndex = -1;
+                            nextInputBuffer = null;
+                            throw new IllegalStateException("legacyInputBuffers[] returned null for index " + badIndex);
+                        }
+                        nextInputBuffer.clear();
+                    }
                 }
             }
         } catch (IllegalStateException e) {
@@ -3587,6 +3610,7 @@ try {
         // Best-effort: it's OK if no buffer is available right now.
         return true;
     }
+
 
     // Derive input dequeue timeout from the *effective* policy, not from pacing-profile flags.
     private int getInputDequeueTimeoutUs() {
