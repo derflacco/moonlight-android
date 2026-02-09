@@ -800,7 +800,69 @@
     <string name="decoder_output_dequeue_timeout_title">Decoder output dequeue timeout</string>
     <string name="decoder_output_dequeue_timeout_summary">MediaCodec output dequeue timeout (µs) when customization is enabled and Immediate frame delivery is OFF.</string>
     <string name="decoder_output_dequeue_timeout_dialog">Sets MediaCodec output dequeue timeout in microseconds. Lower can reduce latency but increases CPU usage.</string>
-
     <string name="unit_microseconds">µs</string>
+
+    <!-- Cpu WarmUp  -->
+    <string name="pref_cpu_warmup_category">CPU WarmUp</string>
+
+    <string name="pref_cpu_warmup_boost_title">Boost profile</string>
+    <string name="pref_cpu_warmup_boost_summary">Profile: %s</string>
+
+    <string name="pref_cpu_warmup_override_perf_hint_title">Override ADPF gate</string>
+    <string name="pref_cpu_warmup_override_perf_hint_summary">Run warm-up even when ADPF/PerfHint is active</string>
+
+    <string name="pref_cpu_warmup_bursts_title">Enable bursts</string>
+    <string name="pref_cpu_warmup_bursts_summary">Short periodic bursts to push DVFS</string>
+
+    <string name="pref_cpu_warmup_spin_us_title">Spin time (µs)</string>
+    <string name="pref_cpu_warmup_spin_us_summary">0 = preset (100..10000)</string>
+
+    <string name="pref_cpu_warmup_sleep_ms_title">Sleep time (ms)</string>
+    <string name="pref_cpu_warmup_sleep_ms_summary">0 = preset (0..250)</string>
+
+    <string name="pref_cpu_warmup_burst_period_ms_title">Burst period (ms)</string>
+    <string name="pref_cpu_warmup_burst_period_ms_summary">0 = preset (0..10000)</string>
+
+    <string name="pref_cpu_warmup_burst_spin_ms_title">Burst duration (ms)</string>
+    <string name="pref_cpu_warmup_burst_spin_ms_summary">0 = preset (0..50)</string>
+    <string-array name="pref_cpu_warmup_boost_entries">
+        <item>Off</item>
+        <item>Lite</item>
+        <item>Medium</item>
+        <item>Aggressive</item>
+    </string-array>
+
+    <string-array name="pref_cpu_warmup_boost_values">
+        <item>off</item>
+        <item>lite</item>
+        <item>medium</item>
+        <item>aggressive</item>
+
+    </string-array>
+    <string name="pref_cpu_warmup_workers_title">Warm-up threads</string>
+    <string name="pref_cpu_warmup_workers_summary">0 = auto (all available cores). Values are clamped to CPU cores.</string>
+
+    <string name="pref_cpu_warmup_core_set_title">Core set</string>
+    <string name="pref_cpu_warmup_core_set_summary">Choose which CPU tiers are used (supports combinations).</string>
+
+    <string-array name="pref_cpu_warmup_core_set_entries">
+        <item>All (Prime + Big + Little)</item>
+        <item>Big only</item>
+        <item>Prime only</item>
+        <item>Little only</item>
+        <item>Big + Prime</item>
+        <item>Big + Little</item>
+        <item>Prime + Little</item>
+    </string-array>
+
+    <string-array name="pref_cpu_warmup_core_set_values">
+        <item>all</item>
+        <item>big</item>
+        <item>prime</item>
+        <item>little</item>
+        <item>big_prime</item>
+        <item>big_little</item>
+        <item>prime_little</item>
+    </string-array>
 
 </resources>
