@@ -587,9 +587,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int easuQ2D_uTex = -1, easuQ2D_uInvSrcSize = -1, easuQ2D_uTexMat = -1;
 
 
-    private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1;
-    private int rcasFast_uTex = -1, rcasFast_uInvDst = -1, rcasFast_uSharp = -1;
-    private int progRcasOes = 0, rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uTexMat = -1;
+    private int rcas_uTex = -1, rcas_uInvDst = -1, rcas_uSharp = -1, rcas_uLuma = -1;
+    private int rcasFast_uTex = -1, rcasFast_uInvDst = -1, rcasFast_uSharp = -1, rcasFast_uLuma = -1;
+    private int progRcasOes = 0, rcasOes_uTex = -1, rcasOes_uInvDst = -1, rcasOes_uSharp = -1, rcasOes_uTexMat = -1, rcasOes_uLuma = -1;
+    private int progRcasOesHdr = 0, rcasOesHdr_uTex = -1, rcasOesHdr_uInvDst = -1, rcasOesHdr_uSharp = -1, rcasOesHdr_uTexMat = -1, rcasOesHdr_uLuma = -1;
 
     // Quad buffers (no VAO)
     private int vboPos = 0, vboUv = 0;
@@ -1506,16 +1507,46 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // === FSR path selection + telemetry ===
         final float nearThr = 0.05f;
 
-        // HDR without GPU path: avoid FSR/RCAS in an SDR pipeline (server-side tonemap recommended).
+        // HDR-friendly path: keep it lightweight and color-stable.
+        // - Upscaling: rely on bilinear sampling (OES blit to the window surface).
+        // - Optional sharpening: hue-preserving luma-only RCAS on OES (no OES->RGBA8 staging).
         if (hdrActive) {
-            if (!hdrNoGpuPathWarned) {
-                hdrNoGpuPathWarned = true;
-                LimeLog.warning("FSR: HDR active without GPU path; forcing BYPASS"
-                        + (hdrDirectPresent ? " directPresent=1" : "")
-                        + " (server-side tonemap recommended)");
+            final boolean allowSharpen = upscaleEnabled && !modeNone;
+            final int preset = (prefs != null ? prefs.videoUpscalePreset : 0);
+
+            float effSharp = 0f;
+            if (allowSharpen) {
+                effSharp = mapUiSharpToInternalRcas(sharpUser, preset, nearNative);
+                // Conservative for HDR (reduce halos on highlights).
+                effSharp *= 0.75f;
             }
 
-            drawOesToScreen();
+            boolean ok = false;
+            if (allowSharpen && effSharp > 0.001f) {
+                ok = drawHdrRcasOesLumaSafe(fbW, fbH, effSharp);
+            }
+
+            if (fsrEnabled) {
+                __fsr.srcW = srcW;
+                __fsr.srcH = srcH;
+                __fsr.dstW = fbW;
+                __fsr.dstH = fbH;
+                __fsr.sharp = effSharp;
+                __fsr.mode = (ok ? "HDR_RCAS_LUMA" : "HDR_BILINEAR");
+                __fsr.sampling = (ok ? "RCAS_OES_HDR_LUMA" : "bypass");
+                __fsr.notes = ok ? "hdr=1 | luma-only" : ("hdr=1 | reason=" + (allowSharpen ? "rcas_unavailable" : "disabled_or_mode_none"));
+                __fsr.frames++;
+                pollFsrGpuTimers();
+                if ((__fsr.frames % 240L) == 0L) {
+                    LimeLog.info(__fsr.periodicLine());
+                }
+                maybeUpdateFsrOverlay();
+            }
+
+            if (!ok) {
+                drawOesToScreen();
+            }
+
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
             }
@@ -1668,6 +1699,52 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
 
+    private boolean drawHdrRcasOesLumaSafe(int dstW, int dstH, float sharp) {
+        if (!hasEverUpdatedTex) return false;
+        if (progRcasOesHdr == 0) return false;
+
+        checkRcasOesHealthOnce(dstW, dstH);
+        if (!rcasOesHealthy) return false;
+
+        final float s = clamp01(sharp);
+        if (s <= 0.001f) return false;
+
+        bindFramebufferCached(0);
+        ensureViewport(dstW, dstH);
+
+        UseProgram(progRcasOesHdr);
+        bindQuad(progRcasOesHdr);
+
+        GLES20.glUniform2f(
+                rcasOesHdr_uInvDst,
+                1.0f / (float) Math.max(1, dstW),
+                1.0f / (float) Math.max(1, dstH)
+        );
+        GLES20.glUniform1f(rcasOesHdr_uSharp, s);
+        GLES20.glUniformMatrix4fv(rcasOesHdr_uTexMat, 1, false, texMatrix, 0);
+        setRcasLumaUniform(rcasOesHdr_uLuma, true);
+
+        activeTexture0();
+        if (lastTexture != oesTexId) {
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+            lastTexture = oesTexId;
+        }
+        // Always linear in HDR (upscaling/downscaling + preserve gradients)
+        setOesFilter(false);
+
+        if (__fsr.enabled) {
+            __fsr.ticRcas();
+            rcasGpuTimer.begin();
+        }
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        if (__fsr.enabled) {
+            rcasGpuTimer.end();
+            __fsr.tocRcas();
+        }
+        return true;
+    }
+
+
 
     private boolean drawRcasOnlySafe(int dstW, int dstH, float sharp) {
         if (hasEverUpdatedTex) {
@@ -1675,6 +1752,51 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
         final float s = clamp01(sharp);
+
+        // HDR: never stage OES -> RGBA8 2D (banding/color shifts). Use OES luma-only RCAS or fall back to blit.
+        if (hdrActive) {
+            if (s <= 0.001f) return false;
+            if (hasEverUpdatedTex) {
+                checkRcasOesHealthOnce(dstW, dstH);
+            }
+            if (progRcasOesHdr != 0 && rcasOesHealthy) {
+                if (__fsr.enabled) { __fsr.sampling = "RCAS_OES_HDR_LUMA"; }
+                bindFramebufferCached(0);
+                ensureViewport(dstW, dstH);
+
+                UseProgram(progRcasOesHdr);
+                bindQuad(progRcasOesHdr);
+
+                GLES20.glUniform2f(
+                        rcasOesHdr_uInvDst,
+                        1.0f / (float) Math.max(1, dstW),
+                        1.0f / (float) Math.max(1, dstH)
+                );
+                GLES20.glUniform1f(rcasOesHdr_uSharp, s);
+                GLES20.glUniformMatrix4fv(rcasOesHdr_uTexMat, 1, false, texMatrix, 0);
+                setRcasLumaUniform(rcasOesHdr_uLuma, true);
+
+                activeTexture0();
+                if (lastTexture != oesTexId) {
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+                    lastTexture = oesTexId;
+                }
+                setOesFilter(false);
+
+                if (__fsr.enabled) {
+                    __fsr.ticRcas();
+                    rcasGpuTimer.begin();
+                }
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+                if (__fsr.enabled) {
+                    rcasGpuTimer.end();
+                    __fsr.tocRcas();
+                }
+                return true;
+            }
+            return false;
+        }
+
 
         // Prefer direct OES sharpening when program is available
         if (progRcasOes != 0 && rcasOesHealthy) {
@@ -1705,6 +1827,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
                 lastRcasOesTexMatSerial = texMatrixSerial;
             }
+
+            setRcasLumaUniform(rcasOes_uLuma, false);
 
             activeTexture0();
             if (lastTexture != oesTexId) {
@@ -1813,6 +1937,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 lastRcasSharp = s;
             }
         }
+
+        setRcasLumaUniform(useFast ? rcasFast_uLuma : rcas_uLuma, false);
 
         if (__fsr.enabled) {
             __fsr.ticRcas();
@@ -1977,6 +2103,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 lastRcasSharp = s;
             }
         }
+
+        setRcasLumaUniform(useFast ? rcasFast_uLuma : rcas_uLuma, false);
 
         if (__fsr.enabled) {
             __fsr.ticRcas();
@@ -2367,6 +2495,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glUniform1i(rcasOes_uTex, 0);
         }
 
+        if (progRcasOesHdr != 0 && rcasOesHdr_uTex >= 0) {
+            GLES20.glUseProgram(progRcasOesHdr);
+            GLES20.glUniform1i(rcasOesHdr_uTex, 0);
+        }
+
         // Force next draw to rebind program via UseProgram()
         lastProgram = -1;
     }
@@ -2514,6 +2647,19 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 rcasOes_uInvDst = GLES20.glGetUniformLocation(progRcasOes, "uInvDstSize");
                 rcasOes_uSharp  = GLES20.glGetUniformLocation(progRcasOes, "uSharp");
                 rcasOes_uTexMat = GLES20.glGetUniformLocation(progRcasOes, "uTexMatrix");
+                rcasOes_uLuma   = GLES20.glGetUniformLocation(progRcasOes, "uLumaCoeffs");
+
+                // HDR-safe hue-preserving RCAS (luma-only), OES path
+                try {
+                    progRcasOesHdr = linkProgram(vsRcasOes, "#define USE_OES\n#define RCAS_OES_VS\n#define RCAS_LUMA_ONLY\n" + FS_RCAS);
+                    rcasOesHdr_uTex    = GLES20.glGetUniformLocation(progRcasOesHdr, "uTexOES");
+                    rcasOesHdr_uInvDst = GLES20.glGetUniformLocation(progRcasOesHdr, "uInvDstSize");
+                    rcasOesHdr_uSharp  = GLES20.glGetUniformLocation(progRcasOesHdr, "uSharp");
+                    rcasOesHdr_uTexMat = GLES20.glGetUniformLocation(progRcasOesHdr, "uTexMatrix");
+                    rcasOesHdr_uLuma   = GLES20.glGetUniformLocation(progRcasOesHdr, "uLumaCoeffs");
+                } catch (Throwable t2) {
+                    progRcasOesHdr = 0;
+                }
             } catch (Throwable t) {
                 progRcasOes = 0; // keep fallback 2D path
             } finally {
@@ -2568,10 +2714,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             rcas_uTex     = GLES20.glGetUniformLocation(progRcas, "uUpscaled");
             rcas_uInvDst  = GLES20.glGetUniformLocation(progRcas, "uInvDstSize");
             rcas_uSharp   = GLES20.glGetUniformLocation(progRcas, "uSharp");
+            rcas_uLuma    = GLES20.glGetUniformLocation(progRcas, "uLumaCoeffs");
             if (progRcasFast != 0) {
                 rcasFast_uTex    = GLES20.glGetUniformLocation(progRcasFast, "uUpscaled");
                 rcasFast_uInvDst = GLES20.glGetUniformLocation(progRcasFast, "uInvDstSize");
                 rcasFast_uSharp  = GLES20.glGetUniformLocation(progRcasFast, "uSharp");
+                rcasFast_uLuma   = GLES20.glGetUniformLocation(progRcasFast, "uLumaCoeffs");
             }
 
             // Bind sampler uniforms once (program uniforms persist across draws).
@@ -2633,6 +2781,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (progRcas != 0) { GLES20.glDeleteProgram(progRcas); progRcas = 0; }
                 if (progRcasFast != 0) { GLES20.glDeleteProgram(progRcasFast); progRcasFast = 0; }
                 if (progRcasOes != 0) { GLES20.glDeleteProgram(progRcasOes); progRcasOes = 0; }
+                if (progRcasOesHdr != 0) { GLES20.glDeleteProgram(progRcasOesHdr); progRcasOesHdr = 0; }
             } else {
                 // Best-effort fallback: drop references even if we cannot bind EGL here.
                 // IDs are only valid in the old context; keep state consistent for a clean re-init.
@@ -2651,6 +2800,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 progEasuQuality2D = 0;
                 progRcas = 0;
                 progRcasOes = 0;
+                progRcasOesHdr = 0;
 
                 srcFbo = 0;
                 srcRgbTex = 0;
@@ -2815,6 +2965,24 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private static float clamp01(float v) {
         return Math.min(1f, Math.max(0f, v));
+    }
+    // Luma coefficients (Y) for common primaries.
+    // SDR: Rec.709. HDR10: Rec.2020 (Y coefficients are still defined on RGB primaries).
+    private static final float LUMA_709_R = 0.2126f;
+    private static final float LUMA_709_G = 0.7152f;
+    private static final float LUMA_709_B = 0.0722f;
+
+    private static final float LUMA_2020_R = 0.2627f;
+    private static final float LUMA_2020_G = 0.6780f;
+    private static final float LUMA_2020_B = 0.0593f;
+
+    private void setRcasLumaUniform(int loc, boolean hdr) {
+        if (loc < 0) return;
+        if (hdr) {
+            GLES20.glUniform3f(loc, LUMA_2020_R, LUMA_2020_G, LUMA_2020_B);
+        } else {
+            GLES20.glUniform3f(loc, LUMA_709_R, LUMA_709_G, LUMA_709_B);
+        }
     }
     private static int toScaled100(float v) {
         return (int) (v * 100.0f + (v >= 0f ? 0.5f : -0.5f));
@@ -3268,7 +3436,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  mediump vec3 outRgb = clamp(c * s, 0.0, 1.0);\n" +
                     "  fragColor = vec4(outRgb, 1.0);\n" +
                     "}\n";
-
     // RCAS shader with optimized OES path using precomputed varyings
     private static final String FS_RCAS =
             "#version 300 es\n" +
@@ -3295,8 +3462,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "\n" +
                     "uniform vec2  uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
+                    "uniform vec3  uLumaCoeffs;\n" +
                     "\n" +
-                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "float luma(vec3 c){ return dot(c, uLumaCoeffs); }\n" +
                     "\n" +
                     "void main(){\n" +
                     "#ifdef USE_OES\n" +
@@ -3327,22 +3495,54 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  vec3 by = texture(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
                     "#endif\n" +
                     "\n" +
+                    "#ifdef RCAS_LUMA_ONLY\n" +
+                    "  // HDR-safe, hue-preserving sharpening: operate on luma only, then scale RGB to match.\n" +
+                    "  float lc  = luma(c);\n" +
+                    "  float lrx = luma(rx);\n" +
+                    "  float llx = luma(lx);\n" +
+                    "  float lty = luma(ty);\n" +
+                    "  float lby = luma(by);\n" +
+                    "\n" +
+                    "  float blur4  = 0.25*(lrx + llx + lty + lby);\n" +
+                    "  float detail = lc - blur4;\n" +
+                    "  float sgn    = sign(detail);\n" +
+                    "  detail = max(abs(detail) - (1.0/1023.0), 0.0) * sgn; // small deadzone (10-bit friendly)\n" +
+                    "\n" +
+                    "  float gx = lrx - llx;\n" +
+                    "  float gy = lty - lby;\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
+                    "\n" +
+                    "  // Keep this conservative to avoid halos on HDR highlights.\n" +
+                    "  float k = 1.6 * clamp(uSharp, 0.0, 1.0);\n" +
+                    "\n" +
+                    "  float outL = clamp(lc + detail * (k*edgeW), 0.0, 1.0);\n" +
+                    "\n" +
+                    "  float lo = min(min(min(llx,lrx),lty),lby);\n" +
+                    "  float hi = max(max(max(llx,lrx),lty),lby);\n" +
+                    "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
+                    "  outL = clamp(outL, lo - pad, hi + pad);\n" +
+                    "\n" +
+                    "  float scale = (lc > 1e-4) ? (outL / lc) : 1.0;\n" +
+                    "  vec3 outc = clamp(c * scale, 0.0, 1.0);\n" +
+                    "  fragColor = vec4(outc, 1.0);\n" +
+                    "#else\n" +
                     "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
                     "  vec3 detail = c - blur4;\n" +
                     "  vec3 sgn = sign(detail);\n" +
                     "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
-                    "  \n" +
+                    "\n" +
                     "  float gx = luma(rx) - luma(lx);\n" +
                     "  float gy = luma(ty) - luma(by);\n" +
                     "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
                     "  float k = 1.8 * clamp(uSharp, 0.0, 1.0);\n" +
-                    "  \n" +
+                    "\n" +
                     "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
                     "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
                     "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
                     "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
                     "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
                     "  fragColor = vec4(outc, 1.0);\n" +
+                    "#endif\n" +
                     "}\n";
     // Mali-friendly RCAS (FAST): 3-tap horizontal variant (center + left/right).
     // Used only on Mali and only for preset=Performance to reduce bandwidth/texture fetch cost.
@@ -3354,7 +3554,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform sampler2D uUpscaled;\n" +
                     "uniform vec2  uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
-                    "float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n" +
+                    "uniform vec3  uLumaCoeffs;\n" +
+                    "float luma(vec3 c){ return dot(c, uLumaCoeffs); }\n" +
                     "void main(){\n" +
                     "  vec2 texel = uInvDstSize;\n" +
                     "  vec2 uv0 = vUv;\n" +
@@ -3375,6 +3576,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
                     "  fragColor = vec4(outc, 1.0);\n" +
                     "}\n";
+
 
     // ===== FSR telemetry controls =====
     public void setFsrDebugEnabled(boolean enabled) { __fsr.enabled = enabled; }
@@ -3552,6 +3754,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glUniform2f(rcasOes_uInvDst, 1.0f / Math.max(1, dstW), 1.0f / Math.max(1, dstH));
             GLES20.glUniform1f(rcasOes_uSharp, mapUiSharpToInternal(0.2f, true));
             GLES20.glUniformMatrix4fv(rcasOes_uTexMat, 1, false, texMatrix, 0);
+            setRcasLumaUniform(rcasOes_uLuma, false);
 
             if (lastTexture != oesTexId) {
                 GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);

@@ -1486,6 +1486,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         inputCaptureProvider.onWindowFocusChanged(hasFocus);
     }
 
+    @Override
+    @TargetApi(Build.VERSION_CODES.O)
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+
+        try {
+            if (fsrSizer != null) {
+                if (isInPictureInPictureMode) {
+                    fsrSizer.stop();
+                } else {
+                    fsrSizer.start();
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
     private boolean isRefreshRateEqualMatch(float refreshRate) {
         return refreshRate >= prefConfig.fps &&
                 refreshRate <= prefConfig.fps + 3;
@@ -1901,6 +1917,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         super.onPause();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        try { if (fsrSizer != null) fsrSizer.start(); } catch (Throwable ignored) {}
     }
 
     @Override
