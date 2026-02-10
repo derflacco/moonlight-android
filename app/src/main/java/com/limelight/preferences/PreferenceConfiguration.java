@@ -1186,15 +1186,30 @@ public class PreferenceConfiguration {
             }
         }
 
-        // GPU Path Mode (forces FSR None and GPU_RAW pacing)
+// GPU Path Mode (forces FSR None and GPU_RAW pacing)
         try {
             config.gpuPathMode = prefs.getBoolean(CHECKBOX_GPU_PATH_MODE, false);
-        } catch (Throwable ignored) { config.gpuPathMode = false; }
+        } catch (Throwable ignored) {
+            config.gpuPathMode = false;
+        }
+
         if (config.gpuPathMode) {
-            config.videoUpscaleEnable = false;
+            // GPU Path must behave like "Upscaling ON + mode none" ONLY when HDR is OFF.
+            // When HDR is ON, force-disable the upscaler pipeline but keep mode pinned to "none".
             config.videoUpscaleMode = "none";
 
+            final boolean hdrEnabled = prefs.getBoolean(ENABLE_HDR_PREF_STRING, false);
+
+            if (hdrEnabled) {
+                // HDR ON: disable upscaling
+                config.videoUpscaleEnable = false;
+            } else {
+                // HDR OFF: behave like "Upscaling ON, mode none"
+                config.videoUpscaleEnable = true;
+            }
         }
+
+
 
         config.enableVsync = getBooleanPrefOverlayFirst(context, PREF_VSYNC, false);
         config.fastVsync = getBooleanPrefOverlayFirst(context, PREF_FASTVSYNC, false);
