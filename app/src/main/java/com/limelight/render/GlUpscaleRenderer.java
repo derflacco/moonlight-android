@@ -1449,11 +1449,21 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return;
         }
 
-        // Fullscreen draw overwrites all pixels; clearing is redundant
-        ensureViewport(fbW, fbH);// Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+        // Fullscreen draw overwrites all pixels; in fast-bypass modes discard old backbuffer instead of glClear()
+        ensureViewport(fbW, fbH);
 
         final boolean gpuPath = (prefs != null && prefs.gpuPathMode);
+        final boolean fastBypassStaticNow = computeFastBypassStatic(prefs);
+
+        if (gpuPath || fastBypassStaticNow) {
+            // We fully overwrite the default framebuffer; discard previous contents to avoid LOAD.
+            bindFramebufferCached(0);
+            invalidateDefaultFramebufferColor();
+        } else {
+            // Explicit clear helps tile-based GPUs avoid costly backbuffer LOADs.
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+        }
+
         if (gpuPath) {
             if (fsrEnabled) {
                 __fsr.mode = "BYPASS";
@@ -1488,13 +1498,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         // Ultra-thin path: when fastBypassNow is true, we always just blit OES -> screen.
         if (fastBypassNow && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
+            bindFramebufferCached(0);
             drawOesToScreen();
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
             }
             return;
         }
-
 
         // Decide target size for *policy/telemetry*: prefer display hint if provided
         final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
@@ -1569,6 +1579,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                         + " hint=" + dstTargetW + "x" + dstTargetH;
                 if (fsrEnabled) maybeUpdateFsrOverlay();
             }
+            bindFramebufferCached(0);
             drawOesToScreen();
 
         } else if (modeEasuRcas
@@ -2624,7 +2635,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             } catch (Throwable ignored) { hasVao = false; }
             // Shaders
             progVs   = compileShader(GLES20.GL_VERTEX_SHADER, VS);
-            progBlit = linkProgram(progVs, FS_OES_BLIT);
+
+            // BLIT is the hot path for FSR mode NONE: pre-apply SurfaceTexture matrix in VS (cheaper than per-fragment).
+            final int vsBlit = compileShader(GLES20.GL_VERTEX_SHADER, VS_BLIT_TEXMAT);
+            try {
+                progBlit = linkProgram(vsBlit, FS_OES_BLIT);
+            } finally {
+                try { GLES20.glDeleteShader(vsBlit); } catch (Throwable ignored) {}
+            }
+
             progOesTo2D = linkProgram(progVs, FS_OES_TO_2D);
 
             // EASU programs: keep original OES versions as fallback.
@@ -3123,6 +3142,18 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "out vec2 vUv;\n" +
                     "void main(){ vUv=aUv; gl_Position=vec4(aPos,0.0,1.0);}";
 
+
+    // Specialized VS for BLIT: apply SurfaceTexture matrix in vertex stage (reduces per-fragment ALU)
+    private static final String VS_BLIT_TEXMAT =
+            "#version 300 es\n" +
+                    "precision highp float;\n" +
+                    "layout(location=0) in vec2 aPos;\n" +
+                    "layout(location=1) in vec2 aUv;\n" +
+                    "uniform mat4 uTexMatrix;\n" +
+                    "out vec2 vUv;\n" +
+                    "void main(){ vUv=(uTexMatrix*vec4(aUv,0.0,1.0)).xy; gl_Position=vec4(aPos,0.0,1.0);}";
+
+
     // Specialized VS for RCAS_OES: precompute uv0/stepX/stepY in vertex to reduce per-fragment ALU
     private static final String VS_RCAS_OES =
             "#version 300 es\n" +
@@ -3147,18 +3178,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final String FS_OES_BLIT =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
-                    "precision highp float;\n" +
+                    "precision mediump float;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
-                    "uniform mat4 uTexMatrix;\n" +
-                    "uniform int uDoGamma; // 0 = no gamma, 1 = gamma 2.2 out\n" +
-                    "void main(){\n" +
-                    "  vec2 uv=(uTexMatrix*vec4(vUv,0.0,1.0)).xy;\n" +
-                    "  vec3 c = texture(uTex, uv).rgb;\n" +
-                    "  if (uDoGamma==1) c = pow(clamp(c,0.0,1.0), vec3(1.0/2.2));\n" +
-                    "  fragColor = vec4(c, 1.0);\n" +
-                    "}";
+                    "void main(){ fragColor = vec4(texture(uTex, vUv).rgb, 1.0); }";
 
     private static final String FS_OES_TO_2D =
             "#version 300 es\n" +
@@ -3885,7 +3909,16 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
     }
 
+    // Hint the driver that we fully overwrite the default framebuffer (avoid backbuffer LOADs vs glClear()).
+    private void invalidateDefaultFramebufferColor() {
+        try {
+            tmpIntArray[0] = GLES30.GL_COLOR;
+            GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, tmpIntArray, 0);
+        } catch (Throwable ignored) { }
+    }
+
     private void bindTex2DCached(int texId) {
+
         // This cache is defined for texture unit 0 only.
         activeTexture0();
         if (lastTex2D != texId) {
