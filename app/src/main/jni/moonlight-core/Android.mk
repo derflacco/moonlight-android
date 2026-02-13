@@ -60,6 +60,8 @@ LOCAL_LDFLAGS += -Wl,--exclude-libs,ALL
 
 LOCAL_BRANCH_PROTECTION := standard
 
+LOCAL_CFLAGS   := $(filter-out -O%,$(LOCAL_CFLAGS)) -O3
+LOCAL_CPPFLAGS := $(filter-out -O%,$(LOCAL_CPPFLAGS)) -O3
 include $(BUILD_SHARED_LIBRARY)
 
 $(call import-module,android/cpufeatures)
