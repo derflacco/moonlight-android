@@ -71,10 +71,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         private double easuCpuAvgNs = 0.0;
         private double rcasCpuAvgNs = 0.0;
 
+        private double blitCpuAvgNs = 0.0;
         // GPU-side timing via timer queries (GL_EXT_disjoint_timer_query)
         private double easuGpuAvgNs = 0.0;
         private double rcasGpuAvgNs = 0.0;
 
+        private double blitGpuAvgNs = 0.0;
         int disjointEvents = 0;
 
         String mode = "BYPASS";
@@ -90,7 +92,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             return (avg == 0.0) ? sample : (a * sample + (1.0 - a) * avg);
         }
 
-        private long tEasu = 0L, tRcas = 0L;
+        private long tBlit = 0L, tEasu = 0L, tRcas = 0L;
+
+        void ticBlit() { tBlit = now(); }
+        void tocBlit() { blitCpuAvgNs = ewma(blitCpuAvgNs, now() - tBlit); }
 
         void ticEasu() { tEasu = now(); }
         void tocEasu() { easuCpuAvgNs = ewma(easuCpuAvgNs, now() - tEasu); }
@@ -100,22 +105,40 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         void pushGpuEasu(long gpuNs) { easuGpuAvgNs = ewma(easuGpuAvgNs, gpuNs); }
         void pushGpuRcas(long gpuNs) { rcasGpuAvgNs = ewma(rcasGpuAvgNs, gpuNs); }
+        void pushGpuBlit(long gpuNs) { blitGpuAvgNs = ewma(blitGpuAvgNs, gpuNs); }
 
         private double easuBestNs() { return (easuGpuAvgNs > 0.0) ? easuGpuAvgNs : easuCpuAvgNs; }
         private double rcasBestNs() { return (rcasGpuAvgNs > 0.0) ? rcasGpuAvgNs : rcasCpuAvgNs; }
+        private double blitBestNs() { return (blitGpuAvgNs > 0.0) ? blitGpuAvgNs : blitCpuAvgNs; }
 
         private String timingSrcTagForMode() {
+            final boolean includeBlit = (sampling != null && sampling.contains("OES->2D"));
             final boolean easuGpu = (easuGpuAvgNs > 0.0);
             final boolean rcasGpu = (rcasGpuAvgNs > 0.0);
+            final boolean blitGpu = includeBlit && (blitGpuAvgNs > 0.0);
 
             if ("EASU+RCAS".equals(mode)) {
-                if (easuGpu && rcasGpu) return "GPU";
-                if (!easuGpu && !rcasGpu) return "CPU";
-                return "MIX";
+                if (includeBlit) {
+                    if (easuGpu && rcasGpu && blitGpu) return "GPU";
+                    if (!easuGpu && !rcasGpu && !blitGpu) return "CPU";
+                    return "MIX";
+                } else {
+                    if (easuGpu && rcasGpu) return "GPU";
+                    if (!easuGpu && !rcasGpu) return "CPU";
+                    return "MIX";
+                }
             }
+
             if ("RCAS_ONLY".equals(mode)) {
-                return rcasGpu ? "GPU" : "CPU";
+                if (includeBlit) {
+                    if (rcasGpu && blitGpu) return "GPU";
+                    if (!rcasGpu && !blitGpu) return "CPU";
+                    return "MIX";
+                } else {
+                    return rcasGpu ? "GPU" : "CPU";
+                }
             }
+
             return "CPU";
         }
 
@@ -127,12 +150,21 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if ("EASU+RCAS".equals(mode)) {
                 final double easuMs  = easuBestNs() / 1e6;
                 final double rcasMs  = rcasBestNs() / 1e6;
-                final double totalMs = easuMs + rcasMs;
+                final boolean includeBlit = (sampling != null && sampling.contains("OES->2D"));
+                final double blitMs  = includeBlit ? (blitBestNs() / 1e6) : 0.0;
+                final double totalMs = blitMs + easuMs + rcasMs;
                 final String src = timingSrcTagForMode();
 
                 lineSb.append("FSR ").append(mode)
                         .append(" | sharp=");
                 appendFixed2(lineSb, sharp);
+
+                if (includeBlit) {
+                    lineSb.append(" | BLIT=");
+                    appendFixed2(lineSb, blitMs);
+                    lineSb.append("ms");
+                }
+
                 lineSb.append(" | EASU=");
                 appendFixed2(lineSb, easuMs);
                 lineSb.append("ms RCAS=");
@@ -146,14 +178,30 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             if ("RCAS_ONLY".equals(mode)) {
                 final double rcasMs = rcasBestNs() / 1e6;
+                final boolean includeBlit = (sampling != null && sampling.contains("OES->2D"));
+                final double blitMs = includeBlit ? (blitBestNs() / 1e6) : 0.0;
+                final double totalMs = blitMs + rcasMs;
                 final String src = timingSrcTagForMode();
 
                 lineSb.append("FSR ").append(mode)
                         .append(" | sharp=");
                 appendFixed2(lineSb, sharp);
+
+                if (includeBlit) {
+                    lineSb.append(" | BLIT=");
+                    appendFixed2(lineSb, blitMs);
+                    lineSb.append("ms");
+                }
+
                 lineSb.append(" | RCAS=");
                 appendFixed2(lineSb, rcasMs);
-                lineSb.append("ms (").append(src).append(')');
+                lineSb.append("ms");
+                if (includeBlit) {
+                    lineSb.append(" TOT=");
+                    appendFixed2(lineSb, totalMs);
+                    lineSb.append("ms");
+                }
+                lineSb.append(" (").append(src).append(')');
 
                 return lineSb.toString();
             }
@@ -166,6 +214,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             final double easuMs = easuBestNs() / 1e6;
             final double rcasMs = rcasBestNs() / 1e6;
+            final boolean includeBlit = (sampling != null && sampling.contains("OES->2D"));
+            final double blitMs = includeBlit ? (blitBestNs() / 1e6) : 0.0;
             final String src = timingSrcTagForMode();
 
             lineSb.append("FSR[").append(mode).append('/').append(src).append("] ")
@@ -175,8 +225,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     .append(" | sharp=");
             appendFixed2(lineSb, sharp);
 
-            lineSb.append(" | ").append(sampling)
-                    .append(" | EASU(avg)=");
+            lineSb.append(" | ").append(sampling);
+
+            if (includeBlit) {
+                lineSb.append(" | BLIT(avg)=");
+                appendFixed2(lineSb, blitMs);
+                lineSb.append("ms");
+            }
+
+            lineSb.append(" | EASU(avg)=");
             appendFixed2(lineSb, easuMs);
             lineSb.append("ms RCAS(avg)=");
             appendFixed2(lineSb, rcasMs);
@@ -226,8 +283,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         private static java.lang.reflect.Method sGetQueryObjectui64vEXT;
         private static java.lang.reflect.Method sGetQueryObjectui64vCore;
 
-        private static void loadExtIfNeeded() {
-            if (sExtLoaded) return;
+        private static void loadExtIfNeeded() {      if (sExtLoaded) return;
             sExtLoaded = true;
 
             try {
@@ -238,6 +294,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 sEndQueryEXT = c.getMethod("glEndQueryEXT", int.class);
                 sGetQueryObjectuivEXT = c.getMethod("glGetQueryObjectuivEXT", int.class, int.class, int[].class, int.class);
                 try {
+
                     sGetQueryObjectui64vEXT = c.getMethod("glGetQueryObjectui64vEXT", int.class, int.class, long[].class, int.class);
                 } catch (Throwable ignored) {
                     sGetQueryObjectui64vEXT = null;
@@ -538,6 +595,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private final FsrTelemetry __fsr = new FsrTelemetry();
     private final GpuTimeQueryRing easuGpuTimer = new GpuTimeQueryRing();
     private final GpuTimeQueryRing rcasGpuTimer = new GpuTimeQueryRing();
+    private final GpuTimeQueryRing blitGpuTimer = new GpuTimeQueryRing();
     private volatile String __fsrOverlay = "";
     private final Surface windowSurfaceInput;
     private final int srcW, srcH;
@@ -750,7 +808,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // State cache
     private int curVpW = -1, curVpH = -1;
     private boolean twoDNearest = false, oesNearest = false;
-    private int lastTex2DFilterTexId = -1; // per-texture filter cache for unit 0
+    private int lastTex2DFilterTexId = -1;  // per-texture filter cache slot 0 (unit 0)
+    private boolean twoDNearest2 = false;
+    private int lastTex2DFilterTexId2 = -1; // per-texture filter cache slot 1 (unit 0)
 
     // Quad bind cache (avoid rebinding attribs/VAO every draw)
     private boolean quadBound = false;
@@ -922,7 +982,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             __fsr.pushGpuRcas(rcasNs);
         }
 
-        if (easuGpuTimer.consumeDisjointTripped() || rcasGpuTimer.consumeDisjointTripped()) {
+        final long blitNs = blitGpuTimer.pollOne();
+        if (blitNs > 0L) {
+            __fsr.pushGpuBlit(blitNs);
+        }
+
+        if (easuGpuTimer.consumeDisjointTripped() || rcasGpuTimer.consumeDisjointTripped() || blitGpuTimer.consumeDisjointTripped()) {
             __fsr.disjointEvents++;
         }
     }
@@ -1863,7 +1928,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         setOesFilter((dstW > srcW || dstH > srcH) ? false : true);
 
+        if (__fsr.enabled) {
+            __fsr.ticBlit();
+            blitGpuTimer.begin();
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        if (__fsr.enabled) {
+            blitGpuTimer.end();
+            __fsr.tocBlit();
+        }
 
         // RCAS: upscaledTex -> screen
         bindFramebufferCached(0);
@@ -2158,7 +2231,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Delete only stage resources (avoid touching the upscaled FBO)
         if (srcRgbTex != 0) {
             if (lastTex2D == srcRgbTex) lastTex2D = -1;
-            if (lastTex2DFilterTexId == srcRgbTex) lastTex2DFilterTexId = -1;
+            invalidateTex2DFilterCache(srcRgbTex);
             tmpIntArray[0] = srcRgbTex;
             GLES20.glDeleteTextures(1, tmpIntArray, 0);
             srcRgbTex = 0;
@@ -2238,7 +2311,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
         setOesFilter(true); // NEAREST: 1:1 staging copy, cheaper and avoids unnecessary blur
 
+        if (__fsr.enabled) {
+            __fsr.ticBlit();
+            blitGpuTimer.begin();
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        if (__fsr.enabled) {
+            blitGpuTimer.end();
+            __fsr.tocBlit();
+        }
         return true;
     }
 
@@ -2319,7 +2400,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Stage resources (OES -> 2D)
         if (srcRgbTex != 0) {
             if (lastTex2D == srcRgbTex) lastTex2D = -1;
-            if (lastTex2DFilterTexId == srcRgbTex) lastTex2DFilterTexId = -1;
+            invalidateTex2DFilterCache(srcRgbTex);
             tmpIntArray[0] = srcRgbTex;
             GLES20.glDeleteTextures(1, tmpIntArray, 0);
             srcRgbTex = 0;
@@ -2336,7 +2417,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Upscale intermediate resources (EASU output)
         if (upscaledTex != 0) {
             if (lastTex2D == upscaledTex) lastTex2D = -1;
-            if (lastTex2DFilterTexId == upscaledTex) lastTex2DFilterTexId = -1;
+            invalidateTex2DFilterCache(upscaledTex);
             tmpIntArray[0] = upscaledTex;
             GLES20.glDeleteTextures(1, tmpIntArray, 0);
             upscaledTex = 0;
@@ -2738,6 +2819,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 // Delete GPU timer queries (if allocated)
                 easuGpuTimer.release();
                 rcasGpuTimer.release();
+                blitGpuTimer.release();
 
                 if (hasVao && vao != 0) {
                     try {
@@ -2924,13 +3006,42 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         try { GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1); } catch (Throwable ignored) {}
     }
 
+    private void invalidateTex2DFilterCache(int texId) {
+        if (texId <= 0) return;
+        invalidateTex2DFilterCache(texId);
+        if (lastTex2DFilterTexId2 == texId) lastTex2DFilterTexId2 = -1;
+    }
+
     private void setTex2DFilter(boolean toNearest) {
         // Filter state is per-texture object. Cache by currently bound GL_TEXTURE_2D on unit 0.
-        if (lastTex2D < 0) return;
-        if (lastTex2DFilterTexId == lastTex2D && twoDNearest == toNearest) return;
+        final int texId = lastTex2D;
+        if (texId <= 0) return;
 
-        lastTex2DFilterTexId = lastTex2D;
-        twoDNearest = toNearest;
+        boolean needApply = true;
+
+        if (texId == lastTex2DFilterTexId) {
+            needApply = (twoDNearest != toNearest);
+            twoDNearest = toNearest;
+        } else if (texId == lastTex2DFilterTexId2) {
+            needApply = (twoDNearest2 != toNearest);
+            twoDNearest2 = toNearest;
+
+            // Promote slot 1 -> slot 0 to avoid ping-pong when alternating two textures.
+            final int oldId0 = lastTex2DFilterTexId;
+            final boolean oldF0 = twoDNearest;
+            lastTex2DFilterTexId = lastTex2DFilterTexId2;
+            twoDNearest = twoDNearest2;
+            lastTex2DFilterTexId2 = oldId0;
+            twoDNearest2 = oldF0;
+        } else {
+            // Miss: evict slot 1, fill slot 0
+            lastTex2DFilterTexId2 = lastTex2DFilterTexId;
+            twoDNearest2 = twoDNearest;
+            lastTex2DFilterTexId = texId;
+            twoDNearest = toNearest;
+        }
+
+        if (!needApply) return;
 
         final int filter = toNearest ? GLES20.GL_NEAREST : GLES20.GL_LINEAR;
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, filter);
