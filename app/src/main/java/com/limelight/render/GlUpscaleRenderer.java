@@ -1550,7 +1550,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             // Safety: ensure we render to default framebuffer
             bindFramebufferCached(0);
 
-            drawOesToScreen();
+            drawOesToScreen(fbW, fbH, srcW, srcH);
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
             }
@@ -1569,7 +1569,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Ultra-thin path: when fastBypassNow is true, we always just blit OES -> screen.
         if (fastBypassNow && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
             bindFramebufferCached(0);
-            drawOesToScreen();
+            drawOesToScreen(fbW, fbH, srcW, srcH);
             if (swapAndContinue()) {
                 sizeChangedSinceLastSwap = false;
             }
@@ -1624,7 +1624,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!ok) {
-                drawOesToScreen();
+                drawOesToScreen(fbW, fbH, srcW, srcH);
             }
 
             if (swapAndContinue()) {
@@ -1650,8 +1650,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 if (fsrEnabled) maybeUpdateFsrOverlay();
             }
             bindFramebufferCached(0);
-            drawOesToScreen();
-
+            drawOesToScreen(fbW, fbH, srcW, srcH);
         } else if (modeEasuRcas
                 && (progEasuPerf2D != 0 || progEasuBalanced2D != 0 || progEasuQuality2D != 0 || progEasuPerf != 0 || progEasuBalanced != 0 || progEasuQuality != 0)
                 && !nearNative
@@ -1681,7 +1680,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!ok) {
-                drawOesToScreen();
+                drawOesToScreen(fbW, fbH, srcW, srcH);
             }
 
 
@@ -1718,7 +1717,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
 
             if (!ok) {
-                drawOesToScreen();
+                drawOesToScreen(fbW, fbH, srcW, srcH);
             }
         }
         if (swapAndContinue()) {
@@ -1760,7 +1759,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
 
     // ====== Draw operations ======
-    private void drawOesToScreen() {
+    private void drawOesToScreen(int dstW, int dstH, int srcW, int srcH) {
         UseProgram(progBlit);
         bindQuad(progBlit);
 
@@ -1774,7 +1773,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
             lastTexture = oesTexId;
         }
-        setOesFilter(false);
+        setOesFilter((dstW == srcW && dstH == srcH));
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     }
@@ -3259,11 +3258,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final String FS_OES_BLIT =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
-                    "precision mediump float;\n" +
+                    "precision highp float;\n" +
+                    "precision highp samplerExternalOES;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
-                    "void main(){ fragColor = vec4(texture(uTex, vUv).rgb, 1.0); }";
+                    "void main(){ fragColor = texture(uTex, vUv); }";
 
     private static final String FS_OES_TO_2D =
             "#version 300 es\n" +
@@ -3272,7 +3272,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
-                    "void main(){ fragColor = vec4(texture(uTex, vUv).rgb, 1.0); }";
+                    "void main(){ fragColor = texture(uTex, vUv); }";
 
     // EASU minimal pass (OES -> 2D FBO)
     private static final String FS_EASU_QUALITY =
@@ -3496,7 +3496,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final String FS_EASU_PERF =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
-                    "precision mediump float;\n" +
+                    "precision highp float;\n" +
+                    "precision highp samplerExternalOES;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
@@ -3653,7 +3654,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Used only on Mali and only for preset=Performance to reduce bandwidth/texture fetch cost.
     private static final String FS_RCAS_FAST =
             "#version 300 es\n" +
-                    "precision mediump float;\n" +
+                    "precision highp float;\n" +
+                    "precision highp samplerExternalOES;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform sampler2D uUpscaled;\n" +
