@@ -163,11 +163,7 @@ public final class PerfOverlayComposer {
             sb.append(context.getString(R.string.perf_overlay_lite_netdrops, liteLossPct));
 
             // Advanced Lite: end-to-end latency
-            if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
-                sb.append(" / ");
-                sb.append(context.getString(R.string.perf_overlay_lite_e2e, e2eTotalMs));
-                sb.append("  ");
-            }
+            sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
 
             // FPS
             sb.append("\t FPS：");
@@ -210,6 +206,25 @@ public final class PerfOverlayComposer {
                 sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
                 if (prefsSnapshot.gpuPathMode) {
                     sb.append('G');
+                }
+            }
+
+            // Server stats (host processing latency, from server) - keep at the end for readability
+            if (prefsSnapshot.showServerStats && lastTwo.framesWithHostProcessingLatency > 0) {
+                float avgHostMs = ((float) lastTwo.totalHostProcessingLatency / 10f) /
+                        (float) lastTwo.framesWithHostProcessingLatency;
+
+                // Base format
+                sb.append("  | SRV ");
+                sb.append(String.format("%.1f", avgHostMs)).append("ms");
+
+                // Add min/max only when Lite Advanced is enabled
+                if (prefsSnapshot.enablePerfOverlayLiteAdvanced) {
+                    float minHostMs = (float) lastTwo.minHostProcessingLatency / 10f;
+                    float maxHostMs = (float) lastTwo.maxHostProcessingLatency / 10f;
+                    sb.append(" (");
+                    sb.append(String.format("%.1f", minHostMs)).append("–");
+                    sb.append(String.format("%.1f", maxHostMs)).append("ms)");
                 }
             }
 

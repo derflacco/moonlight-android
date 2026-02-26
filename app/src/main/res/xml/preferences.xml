@@ -1134,6 +1134,7 @@
             android:title="@string/title_checkbox_enable_perf_overlay_lite_oledshift"
             android:summary="@string/summary_checkbox_enable_perf_overlay_lite_oledshift"
             app:iconSpaceReserved="false" />
+
         <CheckBoxPreference
             android:defaultValue="false"
             android:dependency="checkbox_enable_perf_overlay_lite"
@@ -1149,6 +1150,13 @@
             android:summary="@string/summary_checkbox_enable_perf_overlay_lite_advanced"
             app:iconSpaceReserved="false" />
 
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:dependency="checkbox_enable_perf_overlay"
+            android:key="checkbox_show_server_stats"
+            android:title="@string/title_checkbox_show_server_stats"
+            android:summary="@string/summary_checkbox_show_server_stats"
+            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:dependency="checkbox_enable_perf_overlay"
