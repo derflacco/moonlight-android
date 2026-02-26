@@ -77,7 +77,7 @@ public final class CpuWarmUp {
         public int baseSleepMillis = -1;
 
         // Burst knobs (0 means "use preset for selected mode")
-        public boolean burstsEnabled = true;
+        public boolean burstsEnabled = false;
         public int burstPeriodMs = 0;
         public int burstSpinMs   = 0;
         public int burstWorkersMode = BURST_WORKERS_ALL;
@@ -117,7 +117,7 @@ public final class CpuWarmUp {
             c.baseSpinMicros  = getPrefInt(p, KEY_SPIN_US, 0);
             c.baseSleepMillis = getPrefInt(p, KEY_SLEEP_MS, -1);
 
-            c.burstsEnabled   = getPrefBoolean(p, KEY_BURSTS, true);
+            c.burstsEnabled   = getPrefBoolean(p, KEY_BURSTS, false);
             c.burstPeriodMs   = getPrefInt(p, KEY_BURST_PERIOD_MS, 0);
             c.burstSpinMs     = getPrefInt(p, KEY_BURST_SPIN_MS, 0);
 
