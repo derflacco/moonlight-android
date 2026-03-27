@@ -356,13 +356,6 @@
                 android:entryValues="@array/pref_cpu_warmup_boost_values"
                 app:iconSpaceReserved="false" />
 
-            <CheckBoxPreference
-                android:key="pref_cpu_warmup_override_perf_hint"
-                android:title="@string/pref_cpu_warmup_override_perf_hint_title"
-                android:summary="@string/pref_cpu_warmup_override_perf_hint_summary"
-                android:defaultValue="false"
-                app:iconSpaceReserved="false" />
-
             <com.limelight.preferences.SeekBarPreference
                 android:key="pref_cpu_warmup_workers"
                 android:title="@string/pref_cpu_warmup_workers_title"
@@ -383,61 +376,6 @@
                 android:entries="@array/pref_cpu_warmup_core_set_entries"
                 android:entryValues="@array/pref_cpu_warmup_core_set_values"
                 app:iconSpaceReserved="false" />
-
-            <CheckBoxPreference
-                android:key="pref_cpu_warmup_bursts"
-                android:title="@string/pref_cpu_warmup_bursts_title"
-                android:summary="@string/pref_cpu_warmup_bursts_summary"
-                android:defaultValue="true"
-                app:iconSpaceReserved="false" />
-
-            <com.limelight.preferences.SeekBarPreference
-                android:key="pref_cpu_warmup_spin_us"
-                android:title="@string/pref_cpu_warmup_spin_us_title"
-                android:summary="@string/pref_cpu_warmup_spin_us_summary"
-                android:max="10000"
-                android:defaultValue="0"
-                app:iconSpaceReserved="false"
-                seekbar:min="0"
-                seekbar:step="100"
-                seekbar:keyStep="100"
-                seekbar:divisor="1" />
-
-            <com.limelight.preferences.SeekBarPreference
-                android:key="pref_cpu_warmup_sleep_ms"
-                android:title="@string/pref_cpu_warmup_sleep_ms_title"
-                android:summary="@string/pref_cpu_warmup_sleep_ms_summary"
-                android:max="250"
-                android:defaultValue="0"
-                app:iconSpaceReserved="false"
-                seekbar:min="0"
-                seekbar:step="1"
-                seekbar:keyStep="1"
-                seekbar:divisor="1" />
-
-            <com.limelight.preferences.SeekBarPreference
-                android:key="pref_cpu_warmup_burst_period_ms"
-                android:title="@string/pref_cpu_warmup_burst_period_ms_title"
-                android:summary="@string/pref_cpu_warmup_burst_period_ms_summary"
-                android:max="10000"
-                android:defaultValue="0"
-                app:iconSpaceReserved="false"
-                seekbar:min="0"
-                seekbar:step="250"
-                seekbar:keyStep="250"
-                seekbar:divisor="1" />
-
-            <com.limelight.preferences.SeekBarPreference
-                android:key="pref_cpu_warmup_burst_spin_ms"
-                android:title="@string/pref_cpu_warmup_burst_spin_ms_title"
-                android:summary="@string/pref_cpu_warmup_burst_spin_ms_summary"
-                android:max="50"
-                android:defaultValue="0"
-                app:iconSpaceReserved="false"
-                seekbar:min="0"
-                seekbar:step="1"
-                seekbar:keyStep="1"
-                seekbar:divisor="1" />
 
         </PreferenceCategory>
 
