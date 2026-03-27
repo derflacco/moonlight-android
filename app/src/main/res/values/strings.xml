@@ -805,7 +805,7 @@
     <string name="unit_microseconds">µs</string>
 
     <!-- Cpu WarmUp  -->
-    <string name="pref_cpu_warmup_category">CPU WarmUp</string>
+    <string name="pref_cpu_warmup_category">CPU Boost</string>
 
     <string name="pref_cpu_warmup_boost_title">Boost profile</string>
     <string name="pref_cpu_warmup_boost_summary">Profile: %s</string>
@@ -841,7 +841,7 @@
         <item>aggressive</item>
 
     </string-array>
-    <string name="pref_cpu_warmup_workers_title">Warm-up threads</string>
+    <string name="pref_cpu_warmup_workers_title">Cpu Boost threads</string>
     <string name="pref_cpu_warmup_workers_summary">0 = auto (all available cores). Values are clamped to CPU cores.</string>
 
     <string name="pref_cpu_warmup_core_set_title">Core set</string>
