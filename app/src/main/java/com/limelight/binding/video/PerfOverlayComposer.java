@@ -162,6 +162,9 @@ public final class PerfOverlayComposer {
             }
             sb.append(context.getString(R.string.perf_overlay_lite_netdrops, liteLossPct));
 
+            // Advanced Lite: end-to-end latency
+            sb.append(' ').append(getLitePacingGlyph(prefsSnapshot, isFsrActive));
+
             // FPS
             sb.append("\t FPS：");
             sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
