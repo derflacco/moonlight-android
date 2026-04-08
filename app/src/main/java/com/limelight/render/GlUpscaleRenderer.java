@@ -854,7 +854,14 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final int FSR_REASON_EASU_DISABLED = 2;
     private static final int FSR_REASON_MODE_NOT_EASU_RCAS = 3;
 
+    private static final int SIMPLE_NOTE_GPU_PATH = 0;
+    private static final int SIMPLE_NOTE_HDR_OK = 1;
+    private static final int SIMPLE_NOTE_HDR_FALLBACK = 2;
+    private static final int SIMPLE_NOTE_BYPASS_MODE_NONE = 3;
+    private static final int SIMPLE_NOTE_BYPASS_DISABLED = 4;
+
     private final StringBuilder fsrNotesSb = new StringBuilder(96);
+    private final StringBuilder simpleFsrNotesSb = new StringBuilder(96);
     private long lastFsrNotesUpdateNs = 0L;
     private int lastFsrNotesKind = -1;
     private boolean lastFsrNotesOk = false;
@@ -863,6 +870,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean lastFsrNotesNearNative = false;
     private int lastFsrNotesThrX100 = Integer.MIN_VALUE;
     private int lastFsrNotesReasonId = -1;
+
+    private int lastSimpleFsrNoteKind = -1;
+    private boolean lastSimpleFsrAllowSharpen = false;
+    private int lastSimpleFsrWinW = -1;
+    private int lastSimpleFsrWinH = -1;
+    private int lastSimpleFsrHintW = -1;
+    private int lastSimpleFsrHintH = -1;
 
     private long lastFsrOverlayUpdateNs = 0L;
     private String lastFsrOverlayMode = "";
@@ -967,6 +981,55 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         appendFixed2Scaled100(fsrNotesSb, thrX100);
 
         __fsr.notes = fsrNotesSb.toString();
+    }
+
+    private void maybeUpdateSimpleFsrNote(int kind, boolean allowSharpen, int winW, int winH, int hintW, int hintH) {
+        final boolean same =
+                (lastSimpleFsrNoteKind == kind) &&
+                        (lastSimpleFsrAllowSharpen == allowSharpen) &&
+                        (lastSimpleFsrWinW == winW) &&
+                        (lastSimpleFsrWinH == winH) &&
+                        (lastSimpleFsrHintW == hintW) &&
+                        (lastSimpleFsrHintH == hintH);
+
+        if (same) {
+            return;
+        }
+
+        lastSimpleFsrNoteKind = kind;
+        lastSimpleFsrAllowSharpen = allowSharpen;
+        lastSimpleFsrWinW = winW;
+        lastSimpleFsrWinH = winH;
+        lastSimpleFsrHintW = hintW;
+        lastSimpleFsrHintH = hintH;
+
+        simpleFsrNotesSb.setLength(0);
+        switch (kind) {
+            case SIMPLE_NOTE_GPU_PATH:
+                simpleFsrNotesSb.append("reason=gpuPathMode");
+                break;
+            case SIMPLE_NOTE_HDR_OK:
+                simpleFsrNotesSb.append("hdr=1 | luma-only");
+                break;
+            case SIMPLE_NOTE_HDR_FALLBACK:
+                simpleFsrNotesSb.append("hdr=1 | reason=")
+                        .append(allowSharpen ? "rcas_unavailable" : "disabled_or_mode_none");
+                break;
+            case SIMPLE_NOTE_BYPASS_MODE_NONE:
+            case SIMPLE_NOTE_BYPASS_DISABLED:
+                simpleFsrNotesSb.append("reason=")
+                        .append(kind == SIMPLE_NOTE_BYPASS_MODE_NONE ? "bypass:mode_none" : "bypass:upscaleDisabled")
+                        .append(" | win=")
+                        .append(winW).append('x').append(winH)
+                        .append(" hint=")
+                        .append(hintW).append('x').append(hintH);
+                break;
+            default:
+                simpleFsrNotesSb.setLength(0);
+                break;
+        }
+
+        __fsr.notes = simpleFsrNotesSb.toString();
     }
 
     private void pollFsrGpuTimers() {
@@ -1469,7 +1532,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
 
 
-            final long nowNs = System.nanoTime();
+        final long nowNs = System.nanoTime();
 
 // Query size immediately on startup, after a forced redraw, or after swap failures.
 // Otherwise, back off when stable to reduce eglQuerySurface overhead.
@@ -1523,9 +1586,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         ensureViewport(fbW, fbH);
 
         final boolean gpuPath = (prefs != null && prefs.gpuPathMode);
-        final boolean fastBypassStaticNow = computeFastBypassStatic(prefs);
+        final boolean fastBypassNow = computeFastBypassStatic(prefs);
 
-        if (gpuPath || fastBypassStaticNow) {
+        if (gpuPath || fastBypassNow) {
             // We fully overwrite the default framebuffer; discard previous contents to avoid LOAD.
             bindFramebufferCached(0);
             invalidateDefaultFramebufferColor();
@@ -1543,8 +1606,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.dstH = fbH;
                 __fsr.sharp = 0f;
                 __fsr.sampling = "gpuPath";
-                __fsr.notes = "reason=gpuPathMode";
-                if (fsrEnabled) maybeUpdateFsrOverlay();
+                maybeUpdateSimpleFsrNote(SIMPLE_NOTE_GPU_PATH, false, 0, 0, 0, 0);
+                maybeUpdateFsrOverlay();
             }
 
             // Safety: ensure we render to default framebuffer
@@ -1564,7 +1627,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         final boolean modeRcasOnly = "rcas".equals(mode);
         final boolean modeEasuRcas = "easu_rcas".equals(mode);
         final float sharpUser = (prefs != null ? clamp01(prefs.videoUpscaleSharpness / 100f) : 0.35f);
-        final boolean fastBypassNow = computeFastBypassStatic(prefs);
 
         // Ultra-thin path: when fastBypassNow is true, we always just blit OES -> screen.
         if (fastBypassNow && didUpdateTex && !sizeChangedSinceLastSwap && oesTexId != 0) {
@@ -1579,13 +1641,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Decide target size for *policy/telemetry*: prefer display hint if provided
         final int dstTargetW = (hintOutW > 0 ? hintOutW : fbW);
         final int dstTargetH = (hintOutH > 0 ? hintOutH : fbH);
-        float scaleX = (float) dstTargetW / (float) srcW;
-        float scaleY = (float) dstTargetH / (float) srcH;
-        boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < 0.05f;
+        final float scaleX = (float) dstTargetW / (float) srcW;
+        final float scaleY = (float) dstTargetH / (float) srcH;
+        final float nearThr = 0.05f;
+        final boolean nearNative = Math.abs(Math.min(scaleX, scaleY) - 1.0f) < nearThr;
         final boolean canUpscaleNow = (fbW != srcW || fbH != srcH);
 
         // === FSR path selection + telemetry ===
-        final float nearThr = 0.05f;
 
         // HDR-friendly path: keep it lightweight and color-stable.
         // - Upscaling: rely on bilinear sampling (OES blit to the window surface).
@@ -1614,7 +1676,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.sharp = effSharp;
                 __fsr.mode = (ok ? "HDR_RCAS_LUMA" : "HDR_BILINEAR");
                 __fsr.sampling = (ok ? "RCAS_OES_HDR_LUMA" : "bypass");
-                __fsr.notes = ok ? "hdr=1 | luma-only" : ("hdr=1 | reason=" + (allowSharpen ? "rcas_unavailable" : "disabled_or_mode_none"));
+                maybeUpdateSimpleFsrNote(ok ? SIMPLE_NOTE_HDR_OK : SIMPLE_NOTE_HDR_FALLBACK, allowSharpen, 0, 0, 0, 0);
                 __fsr.frames++;
                 pollFsrGpuTimers();
                 if ((__fsr.frames % 240L) == 0L) {
@@ -1644,17 +1706,15 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.dstH = fbH;
                 __fsr.sharp = 0f;
                 __fsr.sampling = "bypass";
-                __fsr.notes = "reason=" + (modeNone ? "bypass:mode_none" : "bypass:upscaleDisabled")
-                        + " | win=" + fbW + "x" + fbH
-                        + " hint=" + dstTargetW + "x" + dstTargetH;
-                if (fsrEnabled) maybeUpdateFsrOverlay();
+                maybeUpdateSimpleFsrNote(modeNone ? SIMPLE_NOTE_BYPASS_MODE_NONE : SIMPLE_NOTE_BYPASS_DISABLED, false, fbW, fbH, dstTargetW, dstTargetH);
+                maybeUpdateFsrOverlay();
             }
             bindFramebufferCached(0);
             drawOesToScreen(fbW, fbH, srcW, srcH);
         } else if (modeEasuRcas
                 && (progEasuPerf2D != 0 || progEasuBalanced2D != 0 || progEasuQuality2D != 0 || progEasuPerf != 0 || progEasuBalanced != 0 || progEasuQuality != 0)
                 && !nearNative
-                && (fbW != srcW || fbH != srcH)) {
+                && canUpscaleNow) {
 
             final int preset = (prefs != null ? prefs.videoUpscalePreset : 1); // 0..2
             final float upRatio = Math.max(scaleX, scaleY);
@@ -1700,7 +1760,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.sharp = effSharp;
                 // __fsr.sampling is set by drawRcasOnlySafe(): RCAS_OES or OES->2D LINEAR + RCAS_2D
 
-                String reason;
                 int reasonId;
                 if (nearNative) reasonId = FSR_REASON_NEAR_NATIVE;
                 else if (srcW == fbW && srcH == fbH) reasonId = FSR_REASON_DST_EQ_SRC;
@@ -2486,7 +2545,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             }
         }
 
-                if (progEasuQuality != 0) {
+        if (progEasuQuality != 0) {
             GLES20.glUseProgram(progEasuQuality);
             if (easuQ_uTex >= 0) {
                 GLES20.glUniform1i(easuQ_uTex, 0);
@@ -2797,7 +2856,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 GLES20.glUniform1i(blit_uTex, 0);
             }
 
-        // Constant clear color: keep glClear() in render loop.
+            // Constant clear color: keep glClear() in render loop.
             GLES20.glClearColor(0f, 0f, 0f, 1f);
 
             primeStaticUniforms();
@@ -3930,7 +3989,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
     // Cheap check used per-frame (supports hot-reload) to allow the ultra-thin path.
-   // True when GPU direct path is forced or FSR is logically disabled.
+    // True when GPU direct path is forced or FSR is logically disabled.
     private static boolean computeFastBypassStatic(PreferenceConfiguration prefs) {
         if (prefs == null) return false;
         if (prefs.gpuPathMode) return true;
