@@ -658,6 +658,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     // Performance optimizations
     private final int[] tmpIntArray = new int[1]; // Reusable int array
+    private final int[] tmpViewportArray = new int[4];
+    private final int[] invalidateDefaultFbAttachments = new int[]{GLES30.GL_COLOR};
+    private final int[] invalidateColorAttachment = new int[]{GLES30.GL_COLOR_ATTACHMENT0};
 
     // ===== Performance state =====
     private int vao = 0;
@@ -685,12 +688,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
         new Thread(() -> {
             try {
+                final Thread threadToStop = renderThread;
                 stop();
 
-                final Thread t = renderThread;
-                if (t != null && t.isAlive()) {
+                if (threadToStop != null && threadToStop.isAlive()) {
                     try {
-                        t.join(STOP_JOIN_TIMEOUT_MS + STOP_JOIN_GRACE_MS);
+                        threadToStop.join(STOP_JOIN_TIMEOUT_MS + STOP_JOIN_GRACE_MS);
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
                     }
@@ -1091,6 +1094,10 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
      * @param directPresent  true only when GPU path (prefs.gpuPathMode) is enabled.
      */
     public void setHdrMode(boolean hdrActive, boolean directPresent) {
+        if (this.hdrActive == hdrActive && this.hdrDirectPresent == directPresent) {
+            return;
+        }
+
         this.hdrActive = hdrActive;
         this.hdrDirectPresent = directPresent;
 
@@ -1101,7 +1108,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // Ensure we render at least once with the new mode
         sizeChangedSinceLastSwap = true;
         synchronized (frameLock) {
-            frameLock.notify();
+            frameLock.notifyAll();
         }
     }
 
@@ -3877,7 +3884,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             prevTex2D = 0;
         }
 
-        int[] prevViewport = new int[4];
+        final int[] prevViewport = tmpViewportArray;
         try { GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevViewport, 0); } catch (Throwable ignored) { }
 
         int testFbo = 0, testTex = 0;
@@ -3941,8 +3948,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
             if (hasVao) {
                 try {
-                    int[] attachments = { GLES30.GL_COLOR_ATTACHMENT0 };
-                    GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, attachments, 0);
+                    GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, invalidateColorAttachment, 0);
                 } catch (Throwable ignored) {}
             }
 
@@ -4054,8 +4060,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // Hint the driver that we fully overwrite the default framebuffer (avoid backbuffer LOADs vs glClear()).
     private void invalidateDefaultFramebufferColor() {
         try {
-            tmpIntArray[0] = GLES30.GL_COLOR;
-            GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, tmpIntArray, 0);
+            GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, invalidateDefaultFbAttachments, 0);
         } catch (Throwable ignored) { }
     }
 
