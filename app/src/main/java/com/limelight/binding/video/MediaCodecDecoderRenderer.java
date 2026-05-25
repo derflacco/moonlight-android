@@ -2632,7 +2632,7 @@ try {
                         : lastTwo.totalFramesReceived;
 
                 if (decodeDenom > 0) {
-                    decodeTimeMs = (float) lastTwo.decoderTimeMs / (float) decodeDenom;
+                    decodeTimeMs = ((float) lastTwo.decoderTimeMs / 1000f) / (float) decodeDenom;
                 } else {
                     decodeTimeMs = 0f;
                 }
@@ -3110,10 +3110,15 @@ try {
     }
     //  returns pure decoder latency (enqueue->dequeue)
     public int getAveragePureDecoderLatency() {
-        if (globalVideoStats.totalFramesReceived == 0) {
+        final long samples = (globalVideoStats.decoderSamples > 0)
+                ? globalVideoStats.decoderSamples
+                : globalVideoStats.totalFramesReceived;
+
+        if (samples == 0) {
             return 0;
         }
-        return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
+
+        return (int)((globalVideoStats.decoderTimeMs / 1000L) / samples);
     }
 
     //  returns old end-to-end latency using the new field
@@ -3124,12 +3129,16 @@ try {
         return (int)(globalVideoStats.endToEndLatencyMs / globalVideoStats.totalFramesReceived);
     }
     public int getAverageDecoderLatency() {
-        if (globalVideoStats.totalFramesReceived == 0) {
+        final long samples = (globalVideoStats.decoderSamples > 0)
+                ? globalVideoStats.decoderSamples
+                : globalVideoStats.totalFramesReceived;
+
+        if (samples == 0) {
             return 0;
         }
-        return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
-    }
 
+        return (int)((globalVideoStats.decoderTimeMs / 1000L) / samples);
+    }
     public Boolean performanceWasTracked() {
         return minDecodeTime < Float.MAX_VALUE;
     }

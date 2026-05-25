@@ -46,10 +46,12 @@ public final class DecodeLatencyTracker {
         }
 
         final long decNs = endNs - enqNs;
-        final long decMs = decNs / 1_000_000L;
+        final long decUs = decNs / 1_000L;
 
-        if (decMs >= 0 && decMs < 1000) {
-            stats.decoderTimeMs += decMs;
+        // Store pure decoder latency in microseconds to preserve sub-ms precision.
+        // The field name is historical; display code converts it back to milliseconds.
+        if (decUs >= 0 && decUs < 1_000_000L) {
+            stats.decoderTimeMs += decUs;
             stats.decoderSamples++;
         }
 
