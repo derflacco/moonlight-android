@@ -638,48 +638,85 @@ public class MediaCodecHelper {
 //                    videoFormat.setInteger("vendor.mtk.vdec.bq.guard.interval.time.value", 2);
 //                    videoFormat.setInteger("vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
             else if (isDecoderInList(mtkDecoderPrefixes, decoderInfo.getName())) {
-                if (tryNumber < 4) {
-                    // --- PRESET: MTK Low-Latency (tiered) ---
-                    // tryNumber 0: stable baseline
-                    // tryNumber 1: reduced buffering (lower e2e)
-                    // tryNumber 2: ultra-low-latency (only if enableUltraLowLatency)
-                    // tryNumber 3: fallback/last attempt
+                // Unsupported MediaFormat keys are normally ignored silently. A successful
+                // configure() does not prove that a key was applied, so try 0 must contain
+                // every potentially useful MTK low-latency option. Later tries only recover
+                // from an actual configure() failure.
+                if (tryNumber == 0) {
+                    setNewOption = true;
 
-                    // Core low-latency path
-                    safeSet(videoFormat, "vdec-lowlatency", 1);
+                    LimeLog.info("Applying MTK decoder preset 0 to " + decoderInfo.getName());
+
+                    // Full low-latency preset. Unknown aliases may be ignored, but all
+                    // potentially effective keys are present in the first successful format.
+                    safeSet(videoFormat, MediaFormat.KEY_LOW_LATENCY, 1);
+                    safeSet(videoFormat, "vdec-lowlatency", 1);           // Legacy MTK mapping
+                    safeSet(videoFormat, "media.low-latency.enable", 1);  // Generic aliases
+                    safeSet(videoFormat, "vendor.low-latency.enable", 1);
+
                     safeSet(videoFormat, "vendor.mtk.vdec.low-latency.mode", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.disable-idle", 1);
-                    safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0); // app controls pacing
+                    safeSet(videoFormat, "vendor.mtk.vdec.vsync.adjust.enable", 0);
 
-                    // DVFS/boost (moderate and safe)
+                    // Never explicitly disable ULL. If the toggle is off, omit the key.
+                    if (ultraLowLatency) {
+                        safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", 1);
+                    }
+
+                    // Avoid one frame of preload. Depth 2 is safer than depth 1 on MTK.
+                    safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", 0);
+                    safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", 2);
+
+                    // Different MTK BSPs expose these keys with or without ".value".
+                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms.value", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", 2);
+                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time.value", 2);
+
                     safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.cpu.boost.mode.value", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.dvfs.mode", 1);
                     safeSet(videoFormat, "vendor.mtk.vdec.dvfs.level", 1);
 
-                    // Ultra-low-latency: only on the more aggressive tries (and only if user enabled it)
-                    final boolean ull = ultraLowLatency && (tryNumber >= 2);
-                    safeSet(videoFormat, "vendor.mtk.vdec.ultra-low-latency", ull ? 1 : 0);
-
-                    // Reduce internal buffering to lower queueing latency (best-effort)
-                    final int preloadFrames = (tryNumber >= 1) ? 0 : 1;
-                    safeSet(videoFormat, "vendor.mtk.vdec.preload.frame.count", preloadFrames);
-
-                    final int qDepth = (tryNumber >= 2) ? 1 : ((tryNumber >= 1) ? 2 : 3);
-                    safeSet(videoFormat, "vendor.mtk.vdec.input.max.queue.depth", qDepth);
-                    safeSet(videoFormat, "vendor.mtk.vdec.output.max.queue.depth", qDepth);
-
-                    final int fetchTimeoutMs = (tryNumber >= 1) ? 2 : 4;
-                    safeSet(videoFormat, "vendor.mtk.vdec.buffer.fetch.timeout.ms", fetchTimeoutMs);
-                    safeSet(videoFormat, "vendor.mtk.vdec.bq.guard.interval.time", fetchTimeoutMs);
-
-                    // Standard Android hints
                     safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
                     safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
                 }
-                setNewOption = true;
-            }
+                else if (tryNumber == 1) {
+                    setNewOption = true;
 
+                    LimeLog.info("Applying MTK decoder preset 1 to " + decoderInfo.getName());
+
+                    // Remove speculative vendor queue/DVFS keys, but retain both the
+                    // Android and legacy MTK low-latency paths.
+                    safeSet(videoFormat, MediaFormat.KEY_LOW_LATENCY, 1);
+                    safeSet(videoFormat, "vdec-lowlatency", 1);
+                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+                    safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                }
+                else if (tryNumber == 2) {
+                    setNewOption = true;
+
+                    LimeLog.info("Applying MTK decoder preset 2 to " + decoderInfo.getName());
+
+                    // Framework-only low-latency fallback.
+                    safeSet(videoFormat, MediaFormat.KEY_LOW_LATENCY, 1);
+                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+                    safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                }
+                else if (tryNumber == 3) {
+                    setNewOption = true;
+
+                    LimeLog.info("Applying MTK decoder preset 3 to " + decoderInfo.getName());
+
+                    // Performance-only compatibility fallback.
+                    safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+                    safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                }
+
+                // tryNumber >= 4: do not add any option and leave setNewOption false.
+                // The decoder will be tested with a clean base MediaFormat.
+            }
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
                 if (tryNumber < 4) {
                     // Kirin low latency options
