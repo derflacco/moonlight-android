@@ -795,7 +795,9 @@ public class StreamSettings extends AppCompatActivity {
             return new ArrayList<>(out);
         }
 
-        private static final double ASPECT_TOLERANCE = 0.03;
+        // Keep preset matching strict. A broad tolerance incorrectly classifies
+        // 19.5:9 phones (2340x1080) as 20:9 and generates distorted suggestions.
+        private static final double ASPECT_TOLERANCE = 0.005;
 
         private static boolean isAspectNear(double aspect, int num, int den) {
             double target = (double) num / (double) den;
@@ -829,21 +831,60 @@ public class StreamSettings extends AppCompatActivity {
         }
 
         private static int[] getDisplayLandscapeSize(Display display) {
-            int w;
-            int h;
+            int w = 0;
+            int h = 0;
 
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    Display.Mode mode = display.getMode();
-                    w = mode.getPhysicalWidth();
-                    h = mode.getPhysicalHeight();
-                } else {
+                    Display.Mode activeMode = display.getMode();
+                    if (activeMode != null) {
+                        w = activeMode.getPhysicalWidth();
+                        h = activeMode.getPhysicalHeight();
+                    }
+
+                    // Do not silently use the largest supported mode as the FSR target.
+                    // The renderer can only upscale to the actual app Surface. Log a
+                    // mismatch so TV devices running a 1080p Android mode on a 4K panel
+                    // can be diagnosed in the renderer/output path.
+                    long activeArea = (long) w * (long) h;
+                    int maxW = w;
+                    int maxH = h;
+                    long maxArea = activeArea;
+
+                    Display.Mode[] supportedModes = display.getSupportedModes();
+                    if (supportedModes != null) {
+                        for (Display.Mode mode : supportedModes) {
+                            if (mode == null) {
+                                continue;
+                            }
+
+                            int modeW = mode.getPhysicalWidth();
+                            int modeH = mode.getPhysicalHeight();
+                            long modeArea = (long) modeW * (long) modeH;
+                            if (modeArea > maxArea) {
+                                maxArea = modeArea;
+                                maxW = modeW;
+                                maxH = modeH;
+                            }
+                        }
+                    }
+
+                    LimeLog.info("Upscale target active mode: " + w + "x" + h);
+                    if (maxArea > activeArea) {
+                        LimeLog.info("Display supports a larger mode: " + maxW + "x" + maxH
+                                + "; renderer Surface size must be checked before using it as the upscale target");
+                    }
+                }
+
+                if (w <= 0 || h <= 0) {
                     DisplayMetrics metrics = new DisplayMetrics();
                     display.getRealMetrics(metrics);
                     w = metrics.widthPixels;
                     h = metrics.heightPixels;
+                    LimeLog.info("Upscale target fallback real metrics: " + w + "x" + h);
                 }
             } catch (Throwable t) {
+                LimeLog.warning("Unable to read display size for upscale suggestions: " + t);
                 w = 0;
                 h = 0;
             }
@@ -877,19 +918,17 @@ public class StreamSettings extends AppCompatActivity {
 
         private static String buildSuggestedEntryLabel(String value, int displayW, int displayH) {
             int[] wh = parseResolutionWxH(value);
-            if (wh == null) {
+            if (wh == null || displayW <= 0 || displayH <= 0) {
                 return value;
             }
 
-            long area = (long) wh[0] * (long) wh[1];
-            long base = (long) displayW * (long) displayH;
+            // Show the linear render scale, not the percentage of total pixels.
+            // Example: 1600x900 against 1920x1080 is 83% scale, not 69% pixels.
+            double scaleX = wh[0] / (double) displayW;
+            double scaleY = wh[1] / (double) displayH;
+            int pct = (int) Math.round(Math.min(scaleX, scaleY) * 100.0);
 
-            int pct = 0;
-            if (base > 0L) {
-                pct = (int) Math.round((area * 100.0) / (double) base);
-            }
-
-            return wh[0] + "x" + wh[1] + " (" + pct + "%)";
+            return wh[0] + "x" + wh[1] + " (" + pct + "% scale)";
         }
         private static long resolutionArea(String value) {
             int[] wh = parseResolutionWxH(value);
@@ -1043,11 +1082,11 @@ public class StreamSettings extends AppCompatActivity {
                 return;
             }
 
-            long area = (long) rwh[0] * (long) rwh[1];
-            long base = (long) displayW * (long) displayH;
-
-            // Only prompt when streaming below the display resolution.
-            if (area >= base) {
+            // Only prompt when the stream fits within the target and at least one
+            // dimension is lower. Pixel area alone is ambiguous for mismatched aspects.
+            boolean fitsInsideTarget = rwh[0] <= displayW && rwh[1] <= displayH;
+            boolean isLowerThanTarget = rwh[0] < displayW || rwh[1] < displayH;
+            if (!fitsInsideTarget || !isLowerThanTarget) {
                 after.run();
                 return;
             }
@@ -1991,7 +2030,7 @@ public class StreamSettings extends AppCompatActivity {
             return file1;
         }
 
-        }
     }
+}
 
 
