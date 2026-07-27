@@ -3570,43 +3570,69 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform vec2 uInvSrcSize;\n" +
                     "uniform mat4 uTexMatrix;\n" +
                     "\n" +
-                    "mediump float luma(mediump vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }\n" +
+                    // Cheap FSR-style luma: saves ALU versus a full Rec.709 dot product.
+                    "mediump float luma(mediump vec3 c){ return c.g + 0.5 * (c.r + c.b); }\n" +
                     "\n" +
                     "void main(){\n" +
-                    // Matrix-safe UV and texel steps
-                    "  highp vec2 uv    = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
-                    "  highp vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
-                    "  highp vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
+                    // Matrix-safe UV and texel steps. Keep these highp; color math can stay mediump.
+                    "  highp vec2 uv     = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  highp vec2 stepX  = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  highp vec2 stepY  = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
                     "\n" +
-                    // Base: relies on HW bilinear when sampler is LINEAR (setOesFilter(false))
-                    "  mediump vec3 c  = texture(uTex, uv).rgb;\n" +
-                    "  mediump vec3 l  = texture(uTex, uv - stepX).rgb;\n" +
-                    "  mediump vec3 r  = texture(uTex, uv + stepX).rgb;\n" +
-                    "  mediump vec3 t  = texture(uTex, uv + stepY).rgb;\n" +
-                    "  mediump vec3 b  = texture(uTex, uv - stepY).rgb;\n" +
+                    // Same five texture fetches as the old Performance shader.
+                    // The center is the hardware-bilinear upscale; the cross taps only guide reconstruction.
+                    "  mediump vec3 c = texture(uTex, uv).rgb;\n" +
+                    "  mediump vec3 l = texture(uTex, uv - stepX).rgb;\n" +
+                    "  mediump vec3 r = texture(uTex, uv + stepX).rgb;\n" +
+                    "  mediump vec3 t = texture(uTex, uv + stepY).rgb;\n" +
+                    "  mediump vec3 b = texture(uTex, uv - stepY).rgb;\n" +
                     "\n" +
-                    // Luma-only unsharp (prevents “neon” color shifts)
                     "  mediump float lc = luma(c);\n" +
                     "  mediump float ll = luma(l);\n" +
                     "  mediump float lr = luma(r);\n" +
                     "  mediump float lt = luma(t);\n" +
                     "  mediump float lb = luma(b);\n" +
-                    "  mediump float low = 0.25 * (ll + lr + lt + lb);\n" +
-                    "  mediump float diff = lc - low;\n" +
                     "\n" +
-                    // Strength knob (0.08..0.18). Start conservative.
-                    "  mediump float k = 0.12;\n" +
-                    "  mediump float l2 = lc + diff * k;\n" +
+                    // Cross-gradient orientation. gx dominates on a mostly vertical edge, so use
+                    // the vertical pair as the along-edge low-pass reference (and vice versa).
+                    "  mediump float gx = abs(lr - ll);\n" +
+                    "  mediump float gy = abs(lt - lb);\n" +
+                    "  mediump float invG = 1.0 / (gx + gy + 1e-4);\n" +
+                    "  mediump float verticalEdge = gx * invG;\n" +
+                    "  mediump float anis = abs(gx - gy) * invG;\n" +
                     "\n" +
-                    // Luma limiter to avoid halos/overshoot
+                    "  mediump float lowIso = 0.25 * (ll + lr + lt + lb);\n" +
+                    "  mediump float lowH   = 0.5 * (ll + lr);\n" +
+                    "  mediump float lowV   = 0.5 * (lt + lb);\n" +
+                    "  mediump float lowDir = mix(lowH, lowV, verticalEdge);\n" +
+                    // On strong directional edges, derive detail mostly from samples along the edge.
+                    // Flat/diagonal regions smoothly fall back toward the isotropic cross average.
+                    "  mediump float low = mix(lowIso, lowDir, 0.78 * anis);\n" +
+                    "\n" +
+                    // Small dead-zone suppresses codec/grain amplification at almost zero cost.
+                    "  mediump float detail = lc - low;\n" +
+                    "  mediump float ad = max(abs(detail) - (1.0 / 512.0), 0.0);\n" +
+                    "  detail = (detail < 0.0) ? -ad : ad;\n" +
+                    "\n" +
+                    // Slightly stronger only when a clear direction exists. This remains deliberately
+                    // conservative because RCAS runs immediately afterwards in EASU+RCAS mode.
+                    "  mediump float gain = 0.10 + 0.055 * anis;\n" +
+                    "  mediump float l2 = lc + detail * gain;\n" +
+                    "\n" +
+                    // Center-safe limiter: preserve isolated one-pixel detail while preventing halos.
                     "  mediump float mn = min(lc, min(min(ll, lr), min(lt, lb)));\n" +
                     "  mediump float mx = max(lc, max(max(ll, lr), max(lt, lb)));\n" +
-                    "  l2 = clamp(l2, mn, mx);\n" +
+                    "  mediump float pad = 0.008 + 0.018 * anis;\n" +
+                    "  l2 = clamp(l2, mn - pad, mx + pad);\n" +
                     "\n" +
-                    // Re-apply luma correction without changing chroma too much
-                    "  mediump float s = (lc > 1e-4) ? (l2 / lc) : 1.0;\n" +
-                    "  mediump vec3 outRgb = clamp(c * s, 0.0, 1.0);\n" +
-                    "  fragColor = vec4(outRgb, 1.0);\n" +
+                    // Hue-preserving luma correction. Avoid unstable scaling very close to black.
+                    "  mediump float delta = l2 - lc;\n" +
+                    "  mediump float scale = (lc > 1e-3) ? (l2 / lc) : 1.0;\n" +
+                    "  mediump vec3 scaled = c * scale;\n" +
+                    "  mediump vec3 additive = c + vec3(delta);\n" +
+                    "  mediump float useScale = step(1e-3, lc);\n" +
+                    "  mediump vec3 outRgb = mix(additive, scaled, useScale);\n" +
+                    "  fragColor = vec4(clamp(outRgb, 0.0, 1.0), 1.0);\n" +
                     "}\n";
     // RCAS shader with optimized OES path using precomputed varyings
     private static final String FS_RCAS =
@@ -3718,39 +3744,65 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  fragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);\n" +
                     "#endif\n" +
                     "}\n" ;
-    // Mali-friendly RCAS (FAST): 3-tap horizontal variant (center + left/right).
-    // Used only on Mali and only for preset=Performance to reduce bandwidth/texture fetch cost.
+    // Performance RCAS (FAST): 3 taps total, with derivative-guided horizontal/vertical direction.
+    // Keeps the old bandwidth cost while avoiding the visible H-only bias.
     private static final String FS_RCAS_FAST =
             "#version 300 es\n" +
                     "precision highp float;\n" +
-                    "precision highp samplerExternalOES;\n" +
                     "in vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform sampler2D uUpscaled;\n" +
                     "uniform vec2  uInvDstSize;\n" +
                     "uniform float uSharp;\n" +
                     "uniform vec3  uLumaCoeffs;\n" +
-                    "float luma(vec3 c){ return dot(c, uLumaCoeffs); }\n" +
+                    // Keep the uniform for API compatibility, but use the cheaper FSR-style luma here.
+                    "mediump float fastLuma(mediump vec3 c){ return c.g + 0.5 * (c.r + c.b); }\n" +
                     "void main(){\n" +
-                    "  vec2 texel = uInvDstSize;\n" +
-                    "  vec2 uv0 = vUv;\n" +
-                    "  vec3 c  = texture(uUpscaled, uv0).rgb;\n" +
-                    "  vec3 rx = texture(uUpscaled, uv0 + vec2(texel.x, 0.0)).rgb;\n" +
-                    "  vec3 lx = texture(uUpscaled, uv0 - vec2(texel.x, 0.0)).rgb;\n" +
-                    "  vec3 blur2 = 0.5*(rx + lx);\n" +
-                    "  vec3 detail = c - blur2;\n" +
-                    "  vec3 sgn = sign(detail);\n" +
-                    "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
-                    "  float gx = luma(rx) - luma(lx);\n" +
-                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx));\n" +
-                    "  float k = 1.8 * clamp(uSharp, 0.0, 1.0);\n" +
-                    "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
-                    "  vec3 lo = min(min(lx,rx), c);\n" +
-                    "  vec3 hi = max(max(lx,rx), c);\n" +
-                    "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
-                    "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
-                    "  fragColor = vec4(outc, 1.0);\n" +
+                    "  highp vec2 texel = uInvDstSize;\n" +
+                    "  highp vec2 uv0 = vUv;\n" +
+                    "  mediump vec3 c = texture(uUpscaled, uv0).rgb;\n" +
+                    "  mediump float sharp = clamp(uSharp, 0.0, 1.0);\n" +
+                    "  if (sharp <= 0.0001) { fragColor = vec4(c, 1.0); return; }\n" +
+                    "\n" +
+                    // Screen-space derivatives estimate edge orientation without extra texture fetches.
+                    // We then take the two RCAS taps along the edge rather than always horizontally.
+                    "  mediump float lc = fastLuma(c);\n" +
+                    "  mediump float dx = dFdx(lc);\n" +
+                    "  mediump float dy = dFdy(lc);\n" +
+                    "  mediump float useY = step(abs(dy), abs(dx));\n" +
+                    "  highp vec2 axis = mix(vec2(texel.x, 0.0), vec2(0.0, texel.y), useY);\n" +
+                    "\n" +
+                    // Still exactly three texture fetches total: center + two directional neighbors.
+                    "  mediump vec3 p = texture(uUpscaled, uv0 + axis).rgb;\n" +
+                    "  mediump vec3 n = texture(uUpscaled, uv0 - axis).rgb;\n" +
+                    "  mediump float lp = fastLuma(p);\n" +
+                    "  mediump float ln = fastLuma(n);\n" +
+                    "\n" +
+                    "  mediump float blur = 0.5 * (lp + ln);\n" +
+                    "  mediump float detail = lc - blur;\n" +
+                    "  mediump float ad = max(abs(detail) - (1.0 / 512.0), 0.0);\n" +
+                    "  detail = (detail < 0.0) ? -ad : ad;\n" +
+                    "\n" +
+                    // Diagonal/ambiguous edges receive a little less gain. Strong directional edges
+                    // are sharpened along-edge, which greatly reduces halos versus the old H-only pass.
+                    "  mediump float gMax = max(abs(dx), abs(dy));\n" +
+                    "  mediump float gMin = min(abs(dx), abs(dy));\n" +
+                    "  mediump float dirConfidence = (gMax - gMin) / (gMax + gMin + 1e-4);\n" +
+                    "  mediump float k = sharp * (1.18 + 0.22 * dirConfidence);\n" +
+                    "  mediump float outL = lc + detail * k;\n" +
+                    "\n" +
+                    // Center-safe directional limiter. No cross-edge taps are required.
+                    "  mediump float lo = min(lc, min(lp, ln));\n" +
+                    "  mediump float hi = max(lc, max(lp, ln));\n" +
+                    "  mediump float pad = 0.008 + 0.035 * sharp;\n" +
+                    "  outL = clamp(outL, lo - pad, hi + pad);\n" +
+                    "\n" +
+                    // Additive luma correction keeps the fast pass division-free here.
+                    // RGB channel differences are preserved until the final gamut clamp.
+                    "  mediump vec3 outc = c + vec3(outL - lc);\n" +
+                    "  fragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);\n" +
                     "}\n";
+
 
 
     // ===== FSR telemetry controls =====
