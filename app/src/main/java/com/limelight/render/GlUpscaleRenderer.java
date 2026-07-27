@@ -3355,7 +3355,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "uniform mat4 uTexMatrix;\n" +
                     "uniform vec2 uInvSrcSize;\n" +
                     "\n" +
-                    "float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\n" +
+                    "float luma(vec3 c){ return c.g + 0.5 * (c.r + c.b); }\n" +
                     "\n" +
                     "float APrxLoRcpF1(float a){ return uintBitsToFloat(uint(0x7ef07ebb) - floatBitsToUint(a)); }\n" +
                     "float APrxLoRsqF1(float a){ return uintBitsToFloat(uint(0x5f347d74) - (floatBitsToUint(a) >> uint(1))); }\n" +
@@ -3667,55 +3667,57 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                     "  vec3 by = texture(uUpscaled, uv0 - vec2(0.0, texel.y)).rgb;\n" +
                     "#endif\n" +
                     "\n" +
+                    "  float sharp = clamp(uSharp, 0.0, 1.0);\n" +
+                    "  if (sharp <= 0.0001) {\n" +
+                    "    fragColor = vec4(c, 1.0);\n" +
+                    "    return;\n" +
+                    "  }\n" +
+                    "\n" +
                     "#ifdef RCAS_LUMA_ONLY\n" +
-                    "  // HDR-safe, hue-preserving sharpening: operate on luma only, then scale RGB to match.\n" +
+                    "  // HDR path: keep hue-preserving luma-only sharpening, but make the limiter center-safe.\n" +
                     "  float lc  = luma(c);\n" +
                     "  float lrx = luma(rx);\n" +
                     "  float llx = luma(lx);\n" +
                     "  float lty = luma(ty);\n" +
                     "  float lby = luma(by);\n" +
                     "\n" +
-                    "  float blur4  = 0.25*(lrx + llx + lty + lby);\n" +
+                    "  float blur4  = 0.25 * (lrx + llx + lty + lby);\n" +
                     "  float detail = lc - blur4;\n" +
-                    "  float sgn    = sign(detail);\n" +
-                    "  detail = max(abs(detail) - (1.0/1023.0), 0.0) * sgn; // small deadzone (10-bit friendly)\n" +
+                    "  float edgeX = lrx - llx;\n" +
+                    "  float edgeY = lty - lby;\n" +
+                    "  float edgeW = 1.0 / (1.0 + 8.0 * (edgeX * edgeX + edgeY * edgeY));\n" +
+                    "  float outL = lc + detail * (1.35 * sharp * edgeW);\n" +
                     "\n" +
-                    "  float gx = lrx - llx;\n" +
-                    "  float gy = lty - lby;\n" +
-                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
-                    "\n" +
-                    "  // Keep this conservative to avoid halos on HDR highlights.\n" +
-                    "  float k = 1.6 * clamp(uSharp, 0.0, 1.0);\n" +
-                    "\n" +
-                    "  float outL = clamp(lc + detail * (k*edgeW), 0.0, 1.0);\n" +
-                    "\n" +
-                    "  float lo = min(min(min(llx,lrx),lty),lby);\n" +
-                    "  float hi = max(max(max(llx,lrx),lty),lby);\n" +
-                    "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
+                    "  // Include the center in the limiter so isolated fine detail is never crushed.\n" +
+                    "  float lo = min(lc, min(min(llx, lrx), min(lty, lby)));\n" +
+                    "  float hi = max(lc, max(max(llx, lrx), max(lty, lby)));\n" +
+                    "  float pad = 0.01 + 0.04 * sharp;\n" +
                     "  outL = clamp(outL, lo - pad, hi + pad);\n" +
                     "\n" +
-                    "  float scale = (lc > 1e-4) ? (outL / lc) : 1.0;\n" +
-                    "  vec3 outc = clamp(c * scale, 0.0, 1.0);\n" +
-                    "  fragColor = vec4(outc, 1.0);\n" +
+                    "  float scale = (lc > 1e-5) ? (outL / lc) : 1.0;\n" +
+                    "  fragColor = vec4(clamp(c * scale, 0.0, 1.0), 1.0);\n" +
                     "#else\n" +
-                    "  vec3 blur4 = 0.25*(rx + lx + ty + by);\n" +
-                    "  vec3 detail = c - blur4;\n" +
-                    "  vec3 sgn = sign(detail);\n" +
-                    "  detail = max(abs(detail) - vec3(1.0/255.0), vec3(0.0)) * sgn;\n" +
+                    "  // Reference-style RCAS limiter. Unlike the previous unsharp-mask path, this\n" +
+                    "  // derives a safe negative lobe from the local range instead of clamping the\n" +
+                    "  // final center pixel to the four-neighbor range.\n" +
+                    "  vec3 mn4 = min(min(lx, rx), min(ty, by));\n" +
+                    "  vec3 mx4 = max(max(lx, rx), max(ty, by));\n" +
                     "\n" +
-                    "  float gx = luma(rx) - luma(lx);\n" +
-                    "  float gy = luma(ty) - luma(by);\n" +
-                    "  float edgeW = 1.0 / (1.0 + 8.0*(gx*gx + gy*gy));\n" +
-                    "  float k = 1.8 * clamp(uSharp, 0.0, 1.0);\n" +
+                    "  vec3 hitMin = min(mn4, c) / max(4.0 * mx4, vec3(1e-6));\n" +
+                    "  vec3 denMax = min(4.0 * mn4 - vec3(4.0), vec3(-1e-6));\n" +
+                    "  vec3 hitMax = (vec3(1.0) - max(mx4, c)) / denMax;\n" +
+                    "  vec3 lobeRGB = max(-hitMin, hitMax);\n" +
                     "\n" +
-                    "  vec3 outc = clamp(c + detail * (k*edgeW), 0.0, 1.0);\n" +
-                    "  vec3 lo = min(min(min(lx,rx),ty),by);\n" +
-                    "  vec3 hi = max(max(max(lx,rx),ty),by);\n" +
-                    "  float pad = 0.012 + 0.06*clamp(uSharp,0.0,1.0);\n" +
-                    "  outc = clamp(outc, lo - vec3(pad), hi + vec3(pad));\n" +
-                    "  fragColor = vec4(outc, 1.0);\n" +
+                    "  const float RCAS_LIMIT = 0.1875; // 0.25 - 1/16, AMD FSR1 limit.\n" +
+                    "  float lobe = max(-RCAS_LIMIT,\n" +
+                    "                   min(max(max(lobeRGB.r, lobeRGB.g), lobeRGB.b), 0.0));\n" +
+                    "  lobe *= sharp;\n" +
+                    "\n" +
+                    "  float rcpL = 1.0 / max(4.0 * lobe + 1.0, 1e-5);\n" +
+                    "  vec3 outc = (c + lobe * (lx + rx + ty + by)) * rcpL;\n" +
+                    "  fragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);\n" +
                     "#endif\n" +
-                    "}\n";
+                    "}\n" ;
     // Mali-friendly RCAS (FAST): 3-tap horizontal variant (center + left/right).
     // Used only on Mali and only for preset=Performance to reduce bandwidth/texture fetch cost.
     private static final String FS_RCAS_FAST =
