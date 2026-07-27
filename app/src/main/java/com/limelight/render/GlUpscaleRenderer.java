@@ -3202,7 +3202,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         // - Perf needs more RCAS to compensate softness
         // - Balanced slightly more
         // - Quality unchanged
-        final float gain = (preset == 0) ? 1.35f : (preset == 1 ? 1.20f : 1.00f);
+        final float gain = (preset == 0) ? 1.35f : (preset == 1 ? 1.10f : 1.00f);
 
         s *= gain;
         return (s > 1f) ? 1f : s; // keep shader-side clamp behavior consistent
@@ -3514,50 +3514,65 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private static final String FS_EASU_BALANCED =
             "#version 300 es\n" +
                     "#extension GL_OES_EGL_image_external_essl3 : require\n" +
-                    "precision highp float;\n" +
+                    // Keep UV/matrix math highp, but move color/edge math to mediump.
+                    // Same 7 texture fetches as the previous Balanced shader.
+                    "precision mediump float;\n" +
                     "precision highp samplerExternalOES;\n" +
                     "\n" +
-                    "in vec2 vUv;\n" +
+                    "in highp vec2 vUv;\n" +
                     "layout(location=0) out vec4 fragColor;\n" +
                     "uniform samplerExternalOES uTex;\n" +
-                    "uniform vec2 uInvSrcSize;\n" +
-                    "uniform mat4 uTexMatrix;\n" +
+                    "uniform highp vec2 uInvSrcSize;\n" +
+                    "uniform highp mat4 uTexMatrix;\n" +
                     "\n" +
-                    "float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\n" +
+                    // FSR-style cheap luma. Lower ALU cost than Rec.709 dot and good for edge guidance.
+                    "mediump float luma(mediump vec3 c){ return c.g + 0.5 * (c.r + c.b); }\n" +
                     "\n" +
                     "void main(){\n" +
-                    "  vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
-                    "  vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
-                    "  vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
+                    "  highp vec2 uv = (uTexMatrix * vec4(vUv, 0.0, 1.0)).xy;\n" +
+                    "  highp vec2 stepX = (uTexMatrix * vec4(uInvSrcSize.x, 0.0, 0.0, 0.0)).xy;\n" +
+                    "  highp vec2 stepY = (uTexMatrix * vec4(0.0, uInvSrcSize.y, 0.0, 0.0)).xy;\n" +
                     "\n" +
-                    "  vec3 c = texture(uTex, uv).rgb;\n" +
-                    "  vec3 l = texture(uTex, uv - stepX).rgb;\n" +
-                    "  vec3 r = texture(uTex, uv + stepX).rgb;\n" +
-                    "  vec3 d = texture(uTex, uv - stepY).rgb;\n" +
-                    "  vec3 u = texture(uTex, uv + stepY).rgb;\n" +
+                    // Five cardinal taps: unchanged fetch count versus old Balanced.
+                    "  mediump vec3 c = texture(uTex, uv).rgb;\n" +
+                    "  mediump vec3 l = texture(uTex, uv - stepX).rgb;\n" +
+                    "  mediump vec3 r = texture(uTex, uv + stepX).rgb;\n" +
+                    "  mediump vec3 d = texture(uTex, uv - stepY).rgb;\n" +
+                    "  mediump vec3 u = texture(uTex, uv + stepY).rgb;\n" +
                     "\n" +
-                    "  float gx = luma(r) - luma(l);\n" +
-                    "  float gy = luma(u) - luma(d);\n" +
-                    "  float edge = clamp((abs(gx) + abs(gy)) * 1.25, 0.0, 1.0);\n" +
+                    "  mediump float gx = luma(r) - luma(l);\n" +
+                    "  mediump float gy = luma(u) - luma(d);\n" +
+                    "  mediump float ax = abs(gx);\n" +
+                    "  mediump float ay = abs(gy);\n" +
+                    "  mediump float edge = clamp((ax + ay) * 1.40, 0.0, 1.0);\n" +
                     "\n" +
-                    "  // Edge direction is perpendicular to gradient\n" +
-                    "  vec2 ed = normalize(vec2(gy, -gx) + vec2(1e-6));\n" +
-                    "  vec2 duv = ed.x * stepX + ed.y * stepY;\n" +
-                    "  vec3 s1 = texture(uTex, uv + duv * 0.5).rgb;\n" +
-                    "  vec3 s2 = texture(uTex, uv - duv * 0.5).rgb;\n" +
+                    // Edge direction is perpendicular to the gradient. This is the same directional\n" +
+                    // concept as before, but we preserve more of the center sample to avoid softness.\n" +
+                    "  mediump vec2 ed = normalize(vec2(gy, -gx) + vec2(1e-6));\n" +
+                    "  highp vec2 duv = ed.x * stepX + ed.y * stepY;\n" +
                     "\n" +
-                    "  // Isotropic base (cheap, stable)\n" +
-                    "  vec3 iso = (c * 4.0 + l + r + u + d) * (1.0 / 8.0);\n" +
-                    "  // Along-edge sampling reduces cross-edge blur\n" +
-                    "  vec3 along = 0.5 * (s1 + s2);\n" +
-                    "  vec3 pix = mix(iso, along, edge);\n" +
+                    // Two directional taps: total remains 7 texture fetches.\n" +
+                    "  mediump vec3 s1 = texture(uTex, uv + duv * 0.5).rgb;\n" +
+                    "  mediump vec3 s2 = texture(uTex, uv - duv * 0.5).rgb;\n" +
+                    "  mediump vec3 along = 0.5 * (s1 + s2);\n" +
                     "\n" +
-                    "  vec3 mn = min(c, min(min(l, r), min(u, d)));\n" +
-                    "  vec3 mx = max(c, max(max(l, r), max(u, d)));\n" +
+                    // IMPORTANT: old Balanced used a 5-tap isotropic low-pass as its base:\n" +
+                    // (c*4 + l+r+u+d)/8. That was the main source of visible softness.\n" +
+                    // Use the already bilinear center as the reconstruction base instead.\n" +
+                    // On strong edges we move toward the along-edge estimate, but never discard\n" +
+                    // the center completely. This retains fine text/texture while reducing\n" +
+                    // cross-edge blur and keeps the shader bandwidth identical.\n" +
+                    "  mediump float dirConfidence = abs(ax - ay) / (ax + ay + 1e-4);\n" +
+                    "  mediump float blend = edge * (0.66 + 0.10 * dirConfidence);\n" +
+                    "  mediump vec3 pix = mix(c, along, blend);\n" +
+                    "\n" +
+                    // Center-safe local limiter. Prevents halos/overshoot without crushing\n" +
+                    // isolated center detail.\n" +
+                    "  mediump vec3 mn = min(c, min(min(l, r), min(u, d)));\n" +
+                    "  mediump vec3 mx = max(c, max(max(l, r), max(u, d)));\n" +
                     "  pix = clamp(pix, mn, mx);\n" +
                     "  fragColor = vec4(clamp(pix, 0.0, 1.0), 1.0);\n" +
                     "}\n";
-
 
     private static final String FS_EASU_PERF =
             "#version 300 es\n" +
