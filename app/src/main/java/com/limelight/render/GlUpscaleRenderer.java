@@ -665,8 +665,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     // ===== Performance state =====
     private int vao = 0;
     private boolean hasVao = false;
-    private boolean gpuCapsDetected = false;
-    private boolean isMaliGpu = false;
     private long lastSizeQueryNs = 0L;
     private static final long SIZE_QUERY_MIN_NS = 400_000_000L;  // 0.4s baseline
     private static final long SIZE_QUERY_MAX_NS = 1_200_000_000L; // 1.2s max backoff
@@ -2497,21 +2495,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         fboW = 0;
         fboH = 0;
     }
-    private void detectGpuCapsOnce() {
-        if (gpuCapsDetected) return;
-        gpuCapsDetected = true;
-
-        String renderer = null;
-        String vendor = null;
-        try { renderer = GLES20.glGetString(GLES20.GL_RENDERER); } catch (Throwable ignored) {}
-        try { vendor = GLES20.glGetString(GLES20.GL_VENDOR); } catch (Throwable ignored) {}
-
-        final String r = (renderer != null) ? renderer.toLowerCase(java.util.Locale.US) : "";
-        final String v = (vendor != null) ? vendor.toLowerCase(java.util.Locale.US) : "";
-
-        // Conservative Mali detection (ARM vendor + Mali renderer).
-        isMaliGpu = (r.contains("mali") || v.contains("arm"));
-    }
 
     private void primeStaticUniforms() {
         // Samplers are constant: texture unit 0
@@ -2669,7 +2652,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext))
                     throw new RuntimeException("eglMakeCurrent failed");
-                detectGpuCapsOnce();
                 // Cache native handles (eglGetCurrent* wrappers are not reference-stable across calls)
                 eglContextHandle = safeEglContextHandle(eglContext);
                 eglWindowSurfaceHandle = safeEglSurfaceHandle(eglWindowSurface);
