@@ -131,6 +131,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final long ASYNC_DECODE_POLL_INTERVAL_NS = 500_000_000L; // 500 ms
     // Async drop-policy (latest-only) toggle.
     private static final String KEY_ASYNC_PREFER_LOWER_DELAYS = "checkbox_async_prefer_lower_delays";
+    // Sync latest-frame rendering toggle. Only applied while callback mode is disabled.
+    private static final String KEY_SYNC_LFR_ENABLED = "checkbox_sync_lfr";
+    private static final int SYNC_LFR_MAX_DRAIN_PER_TICK = 4;
 
     // Current codec mode (must not change while codec is executing).
     private boolean useAsyncCodec = ENABLE_ASYNC_DECODING &&
@@ -140,6 +143,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile boolean requestedUseAsyncCodec = useAsyncCodec;
     private long nextAsyncDecodePollNs = 0L;
 
+    // Live-reloaded independently of async mode. The render path also guards with !useAsyncCodec.
+    private volatile boolean syncLfrEnabled = false;
     private final AsyncCodecAdapter asyncCodec = new AsyncCodecAdapter();
 
     private boolean computeAsyncPreferLowerDelaysFromCurrentPrefs(int effectivePacing) {
@@ -292,6 +297,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         runtimeOutputDequeueTimeoutCustomEnabled = customEnabled;
         runtimeOutputDequeueTimeoutUs = dequeueUs;
+
+        final boolean requestedSyncLfr = readBooleanOverlayFirst(
+                KEY_SYNC_LFR_ENABLED,
+                prefs != null && prefs.syncLfrEnabled);
+        syncLfrEnabled = requestedSyncLfr;
+
         // Live-update async drop-policy toggle (safe at runtime).
         if (useAsyncCodec) {
             updateAsyncPreferLowerDelaysFromCurrentPrefs(getEffectivePacingForThreadPriorities());
@@ -302,6 +313,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (prefs != null) {
             prefs.decoderOutputDequeueTimeoutCustom = customEnabled;
             prefs.decoderOutputDequeueTimeoutUs = dequeueUs;
+            prefs.syncLfrEnabled = requestedSyncLfr;
         }
     }
 
@@ -617,6 +629,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.prefs = prefs;
         runtimeOutputDequeueTimeoutCustomEnabled = (prefs != null) && prefs.decoderOutputDequeueTimeoutCustom;
         runtimeOutputDequeueTimeoutUs = (prefs != null) ? prefs.decoderOutputDequeueTimeoutUs : 50000;
+        syncLfrEnabled = (prefs != null) && prefs.syncLfrEnabled;
         nextDecoderTimingPollNs = 0L;
 
         this.crashListener = crashListener;
@@ -667,7 +680,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" will use direct submit");
             }
             if (coldCfg.refFrameInvalidationAvc) {
-                                LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" will use reference frame invalidation for AVC");
+                LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" will use reference frame invalidation for AVC");
             }
             LimeLog.info("Decoder "+coldCfg.avcDecoder.getName()+" wants "+avcOptimalSlicesPerFrame+" slices per frame");
         }
@@ -950,14 +963,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         videoDecoder.start();
         MediaCodecHelper.applyFrameworkLowLatencyPostStart(videoDecoder);
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
-try {
-    MediaFormat __inF = videoDecoder.getInputFormat();
-    MediaFormat __outF = videoDecoder.getOutputFormat();
-    LimeLog.info("Decoder input format: " + (__inF != null ? __inF.toString() : "<null>"));
-    LimeLog.info("Decoder output format: " + (__outF != null ? __outF.toString() : "<null>"));
-} catch (Throwable t) {
-    LimeLog.info("Decoder formats unavailable after start");
-}
+        try {
+            MediaFormat __inF = videoDecoder.getInputFormat();
+            MediaFormat __outF = videoDecoder.getOutputFormat();
+            LimeLog.info("Decoder input format: " + (__inF != null ? __inF.toString() : "<null>"));
+            LimeLog.info("Decoder output format: " + (__outF != null ? __outF.toString() : "<null>"));
+        } catch (Throwable t) {
+            LimeLog.info("Decoder formats unavailable after start");
+        }
 
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
@@ -1728,9 +1741,60 @@ try {
                             try { decodeLatencyTracker.onDequeue(activeWindowVideoStats, presentationTimeUs, lastDequeueTimeNs, USE_FRAME_RENDER_TIME); }
                             catch (Throwable ignored) { }
 
+                            // Sync LFR: take a non-blocking snapshot of the decoder's ready
+                            // outputs, discard stale frames, and retain only the newest one.
+                            // The cap prevents the renderer from chasing a decoder that keeps
+                            // producing frames while old buffers are released.
+                            if (!useAsyncCodec && syncLfrEnabled) {
+                                int drained = 0;
+
+                                while (drained < SYNC_LFR_MAX_DRAIN_PER_TICK &&
+                                        (lastFlags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) == 0) {
+                                    final int newerIndex = nextOutputIndex(lfrInfo, 0);
+
+                                    if (newerIndex >= 0) {
+                                        final long newerDequeueNs = System.nanoTime();
+
+                                        // A newer decoded frame is ready, so the previously
+                                        // selected output is now stale and must not be rendered.
+                                        releaseOutputBufferNoRenderLocked(videoDecoder, lastIndex);
+
+                                        lastIndex = newerIndex;
+                                        presentationTimeUs = lfrInfo.presentationTimeUs;
+                                        lastFlags = lfrInfo.flags;
+                                        lastDequeueTimeNs = newerDequeueNs;
+
+                                        numFramesOut++;
+                                        drained++;
+
+                                        try {
+                                            decodeLatencyTracker.onDequeue(
+                                                    activeWindowVideoStats,
+                                                    presentationTimeUs,
+                                                    lastDequeueTimeNs,
+                                                    USE_FRAME_RENDER_TIME);
+                                        } catch (Throwable ignored) { }
+
+                                        continue;
+                                    }
+
+                                    if (newerIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                                        handleOutputFormatChangeSync();
+                                        continue;
+                                    }
+
+                                    if (newerIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+                                        continue;
+                                    }
+
+                                    // INFO_TRY_AGAIN_LATER: no newer output is ready now.
+                                    break;
+                                }
+                            }
+
                             if (pacingMode != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                // IMPORTANT: avoid "chase newest" draining here.
-                                // Dropping multiple output frames in a single tick looks like periodic big stutters on the client.
+                                // The default path avoids "chase newest" draining. The block
+                                // above performs a bounded drain only when Sync LFR is explicitly enabled.
 
 
 
@@ -1773,8 +1837,8 @@ try {
                                     continue;
                                 }
                             } else {
-                                // Balanced: enqueue for Choreographer (bounded queue)
-                                // IMPORTANT: keep bounded-queue behavior for smooth output; do NOT force "latest-only" draining here.
+                                // Balanced: enqueue the selected output for Choreographer. With
+                                // Sync LFR disabled, this retains the normal bounded-queue behavior.
                                 boolean dropped = false;
 
                                 // Non-blocking trimming to avoid size()/take() races

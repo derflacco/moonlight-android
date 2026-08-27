@@ -185,6 +185,7 @@ public class StreamSettings extends AppCompatActivity {
                             // Async decode UI dependencies
                             || "checkbox_async_decode".equals(key)
                             || "checkbox_async_prefer_lower_delays".equals(key)
+                            || "checkbox_sync_lfr".equals(key)
 
                             // Decoder output dequeue timeout UI dependencies
                             || "checkbox_custom_decoder_output_timeout_us".equals(key)
@@ -455,16 +456,22 @@ public class StreamSettings extends AppCompatActivity {
             final PreferenceGroup root = getPreferenceScreen();
 
             // Try to locate the async decode master toggle (key may vary across branches)
-            Preference asyncDecodeToggle = findPreference("checkbox_enable_async_decode");
+            Preference asyncDecodeToggle = findPreference("checkbox_async_decode");
+            if (asyncDecodeToggle == null) asyncDecodeToggle = findPreference("checkbox_enable_async_decode");
             if (asyncDecodeToggle == null) asyncDecodeToggle = findPreference("pref_async_decode_enable");
             if (asyncDecodeToggle == null) asyncDecodeToggle = findFirstPrefKeyContains(root, "async", "decode", "prefer");
             if (asyncDecodeToggle == null) asyncDecodeToggle = findFirstPrefKeyContains(root, "async", "decoder", "prefer");
 
-            // Default to enabled if we can't find the toggle (safer than hiding incorrectly)
-            boolean asyncDecodeEnabled = true;
+            // Async callback mode requires Android 6.0+. Use the stored value even if a
+            // branch-specific preference key prevents us from locating the UI object.
+            boolean asyncDecodeEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                    sp.getBoolean("checkbox_async_decode", true);
             if (asyncDecodeToggle != null) {
                 final String k = asyncDecodeToggle.getKey();
-                if (k != null) asyncDecodeEnabled = sp.getBoolean(k, true);
+                if (k != null) {
+                    asyncDecodeEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                            sp.getBoolean(k, true);
+                }
             }
 
             // Locate "Async: Prefer lower delays"
@@ -487,6 +494,17 @@ public class StreamSettings extends AppCompatActivity {
                         ((CheckBoxPreference) asyncPreferLowerDelays).setChecked(false);
                     }
                 }
+            }
+
+            // --- Sync LFR: visible only while async decode is disabled ---
+            final Preference syncLfr = findPreference("checkbox_sync_lfr");
+            if (syncLfr != null) {
+                final boolean showSyncLfr = !asyncDecodeEnabled;
+                try { syncLfr.setVisible(showSyncLfr); } catch (Throwable ignored) {}
+                syncLfr.setEnabled(showSyncLfr);
+
+                // Preserve the stored value while hidden. The renderer ignores Sync LFR
+                // in async mode and restores the user's choice when sync is selected again.
             }
 
             // --- Decoder output dequeue timeout visibility: only when customization is enabled ---

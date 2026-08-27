@@ -796,6 +796,9 @@
     <!-- Async Prefer Lower Delays -->
     <string name="pref_async_prefer_lower_delays_title">Async: LFR</string>
     <string name="pref_async_prefer_lower_delays_summary">Drop queued output frames and keep only the latest one to minimize latency (may increase frame drops under load).</string>
+    <!-- Sync Latest-Frame Rendering -->
+    <string name="pref_sync_lfr_title">Sync: LFR</string>
+    <string name="pref_sync_lfr_summary">Discard already-decoded stale output frames and render only the latest one (may increase frame drops or stutter under load).</string>
     <!-- Decoder dequeue and drain  -->
     <string name="decoder_output_dequeue_timeout_custom_title">Customize decoder output dequeue timeout</string>
     <string name="decoder_output_dequeue_timeout_custom_summary">When disabled, uses the built-in per-profile policy.</string>

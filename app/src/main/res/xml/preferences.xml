@@ -234,6 +234,13 @@
             app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
+            android:key="checkbox_sync_lfr"
+            android:defaultValue="false"
+            android:title="@string/pref_sync_lfr_title"
+            android:summary="@string/pref_sync_lfr_summary"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
             android:key="checkbox_immediate_frame_delivery"
             android:title="@string/immediate_frame_delivery_title"
             android:summary="@string/immediate_frame_delivery_summary"

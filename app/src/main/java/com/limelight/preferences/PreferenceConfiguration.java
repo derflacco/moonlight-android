@@ -23,6 +23,11 @@ public class PreferenceConfiguration {
     private static final String ASYNC_DECODE_ENABLED_PREF_STRING = "checkbox_async_decode";
     private static final boolean DEFAULT_ASYNC_DECODE_ENABLED = true;
 
+    // Latest-frame rendering for synchronous MediaCodec mode
+    public boolean syncLfrEnabled = false;
+    private static final String SYNC_LFR_ENABLED_PREF_STRING = "checkbox_sync_lfr";
+    private static final boolean DEFAULT_SYNC_LFR_ENABLED = false;
+
     // Customize decoder output dequeue timeout slider (UI gating)
     public boolean decoderOutputDequeueTimeoutCustom = false;
     private static final String DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING =
@@ -1139,6 +1144,7 @@ public class PreferenceConfiguration {
         config.snappyInput = prefs.getBoolean(SNAPPY_INPUT_PREF_STRING, DEFAULT_SNAPPY_INPUT);
         config.immediateFrameDelivery = prefs.getBoolean(IMMEDIATE_FRAME_DELIVERY_PREF_STRING, DEFAULT_IMMEDIATE_FRAME_DELIVERY);
         config.asyncDecodeEnabled = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) && prefs.getBoolean(ASYNC_DECODE_ENABLED_PREF_STRING, DEFAULT_ASYNC_DECODE_ENABLED);
+        config.syncLfrEnabled = prefs.getBoolean(SYNC_LFR_ENABLED_PREF_STRING, DEFAULT_SYNC_LFR_ENABLED);
         config.decoderOutputDequeueTimeoutCustom = prefs.getBoolean(
                 DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING,
                 DEFAULT_DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM);
