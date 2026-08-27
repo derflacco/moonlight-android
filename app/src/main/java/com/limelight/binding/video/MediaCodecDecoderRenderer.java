@@ -3530,7 +3530,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_GPU_RAW) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 final long tsNs = System.nanoTime();
-                releaseOutputBufferAtTimeLockedLollipop(videoDecoder, bufferIndex, tsNs);
+                releaseOutputBufferAtTimeLockedLollipop(videoDecoder, bufferIndex, 0L);
 
             } else {
                 releaseOutputBufferRenderLocked(videoDecoder, bufferIndex, true);
