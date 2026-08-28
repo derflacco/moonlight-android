@@ -1784,7 +1784,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 __fsr.dstW = fbW;
                 __fsr.dstH = fbH;
                 __fsr.sharp = effSharp;
-                __fsr.sampling = "OES->2D LINEAR + RCAS_2D";
                 maybeUpdateFsrNotesEasuRcas(ok, preset, upRatio);
                 __fsr.frames++;
                 pollFsrGpuTimers();
@@ -2115,9 +2114,6 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private boolean drawEasuRcasSafe(int dstW, int dstH, float sharp, int preset) {
         final boolean have2DEasu = (progEasuPerf2D != 0 || progEasuBalanced2D != 0 || progEasuQuality2D != 0);
 
-        if (__fsr.enabled) {
-            __fsr.sampling = have2DEasu ? "OES->2D COPY + EASU_2D + RCAS_2D" : "OES_EASU + RCAS_2D";
-        }
         if (!ensureFbo(dstW, dstH)) return false;
 
         if (preset < 0) preset = 0;
@@ -2163,6 +2159,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             } else {
                 return false;
             }
+        }
+
+        if (__fsr.enabled) {
+            __fsr.sampling = stagedOk
+                    ? "OES->2D LINEAR + EASU_2D + RCAS_2D"
+                    : "OES_EASU + RCAS_2D";
         }
 
         // EASU -> FBO
@@ -2423,7 +2425,11 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
             lastTexture = oesTexId;
         }
-        setOesFilter(true); // NEAREST: 1:1 staging copy, cheaper and avoids unnecessary blur
+        // MediaCodec commonly exposes a YUV 4:2:0 buffer through the external texture.
+        // NEAREST can freeze its chroma sampling grid into the RGBA staging texture; EASU
+        // then enlarges that grid and makes it especially visible while the image moves.
+        // Keep OES sampling LINEAR here, as in the direct RCAS upscale path.
+        setOesFilter(false);
 
         if (__fsr.enabled) {
             __fsr.ticBlit();
