@@ -38,7 +38,8 @@ ifeq ($(APP_PERF),1)
     endif
 
     # Base perf flags
-    APP_CFLAGS   += -O3 -DNDEBUG -ffunction-sections -fdata-sections
+    APP_CFLAGS   += -O3 -DNDEBUG -ffunction-sections -fdata-sections \
+                    -DLC_EXPERIMENTAL_DECODEQ_DROP_OLDEST
     APP_CPPFLAGS += -O3 -DNDEBUG -ffunction-sections -fdata-sections
 
     # AArch64: uses LSE when available (safe fallback)

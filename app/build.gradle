@@ -162,7 +162,7 @@ perf {
         //-03 thinlto
         ndkBuild {
             // Enable perf path and *release* optimizations
-            arguments "APP_PERF:=1", "APP_OPTIM:=release", "NDK_DEBUG=0", "APP_CFLAGS+=-DLC_EXPERIMENTAL_DECODEQ_DROP_OLDEST"
+            arguments "APP_PERF:=1", "APP_OPTIM:=release", "NDK_DEBUG=0"
             // per provare Full LTO:   add "APP_LTO_FULL=1"
             // per provare NO  LTO:    add "APP_LTO_NONE=1"
         }
