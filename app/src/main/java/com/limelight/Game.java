@@ -505,6 +505,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         onExternelDisplay = currentDisplay.getDisplayId() != Display.DEFAULT_DISPLAY;
 
+        Point nativeDisplaySize = new Point();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && currentDisplay.getMode() != null) {
+            nativeDisplaySize.x = currentDisplay.getMode().getPhysicalWidth();
+            nativeDisplaySize.y = currentDisplay.getMode().getPhysicalHeight();
+        } else {
+            currentDisplay.getRealSize(nativeDisplaySize);
+        }
+
         boolean shouldInvertDecoderResolution = false;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
@@ -877,6 +885,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
         }
 
+        int resolutionScaleFactor = prefConfig.resolutionScaleFactor;
+        if (prefConfig.autoResolutionScaleFactor) {
+            resolutionScaleFactor = PreferenceConfiguration.calculateAutoResolutionScaleFactor(
+                    displayWidth, displayHeight, nativeDisplaySize.x, nativeDisplaySize.y);
+            LimeLog.info("Auto host resolution scale factor: " + resolutionScaleFactor + "% (stream "
+                    + displayWidth + "x" + displayHeight + ", device "
+                    + nativeDisplaySize.x + "x" + nativeDisplaySize.y + ")");
+        }
+
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
                         displayWidth,
@@ -885,7 +902,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
                 .setVirtualDisplay(vDisplay)
-                .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
+                .setResolutionScaleFactor(resolutionScaleFactor)
                 .setApp(app)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
                 .setBitrate(isMetered ? prefConfig.meteredBitrate: prefConfig.bitrate)

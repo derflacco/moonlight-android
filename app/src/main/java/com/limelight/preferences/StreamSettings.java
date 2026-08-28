@@ -691,6 +691,20 @@ public class StreamSettings extends AppCompatActivity {
             suggestedPref.setEntries(entries);
             suggestedPref.setEntryValues(values);
 
+            CheckBoxPreference autoScalePref = findPreference(PreferenceConfiguration.AUTO_RESOLUTION_SCALE_FACTOR_PREF_STRING);
+            if (autoScalePref != null && autoScalePref.isChecked()) {
+                int[] streamWh = parseResolutionWxH(
+                        getPrefs().getString(PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                                PreferenceConfiguration.DEFAULT_RESOLUTION));
+                if (streamWh != null) {
+                    int factor = PreferenceConfiguration.calculateAutoResolutionScaleFactor(
+                            streamWh[0], streamWh[1], displayW, displayH);
+                    autoScalePref.setSummary(getString(
+                            R.string.summary_auto_resolution_scale_factor_active,
+                            displayW, displayH, factor));
+                }
+            }
+
             // Ensure the currently stored value is still valid (display mode changes can invalidate it).
             String cur = suggestedPref.getValue();
             if (cur != null && !cur.isEmpty()) {
@@ -1154,6 +1168,7 @@ public class StreamSettings extends AppCompatActivity {
             prefs.edit()
                     .putString(PreferenceConfiguration.CUSTOM_RESOLUTION_PREF_STRING, resolution)
                     .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, resolution)
+                    .putBoolean(PreferenceConfiguration.AUTO_RESOLUTION_SCALE_FACTOR_PREF_STRING, true)
                     .apply();
 
             // Keep user-selected bitrate stable. Only auto-adjust when bitrate is still at the old default.

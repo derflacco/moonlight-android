@@ -199,6 +199,9 @@
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>
     <string name="title_resolution_scale_factor">Resolution Scale Factor</string>
     <string name="summary_resolution_scale_factor">Server side requested virtual screen resolution will be multiplied by this factor. Streaming resolution are not affected.\ne.g. 120% will make 2000x1000 become 2400x1200.\nSetting a higher scale factor will improve image quality for some games.\nRequires Apollo to take effect.</string>
+    <string name="title_auto_resolution_scale_factor">Keep host at device resolution</string>
+    <string name="summary_auto_resolution_scale_factor">Automatically scale Apollo\'s host resolution to the device resolution while keeping the selected streaming resolution.</string>
+    <string name="summary_auto_resolution_scale_factor_active">Host target: %1$dx%2$d (%3$d%%)</string>
     <string name="resolution_prefix_native">Native</string>
     <string name="resolution_prefix_native_fullscreen">Native Full-Screen</string>
     <string name="resolution_prefix_native_landscape">(Landscape)</string>

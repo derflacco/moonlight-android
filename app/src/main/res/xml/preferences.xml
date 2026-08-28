@@ -91,8 +91,17 @@
             android:title="@string/title_top_center_display"
             app:iconSpaceReserved="false" />
 
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:disableDependentsState="true"
+            android:key="checkbox_auto_resolution_scale_factor"
+            android:summary="@string/summary_auto_resolution_scale_factor"
+            android:title="@string/title_auto_resolution_scale_factor"
+            app:iconSpaceReserved="false" />
+
         <com.limelight.preferences.SeekBarPreference
             android:defaultValue="100"
+            android:dependency="checkbox_auto_resolution_scale_factor"
             android:dialogMessage=""
             android:key="seekbar_resolution_scale_factor"
             android:max="200"

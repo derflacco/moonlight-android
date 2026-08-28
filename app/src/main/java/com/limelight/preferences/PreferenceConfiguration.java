@@ -93,6 +93,7 @@ public class PreferenceConfiguration {
     public static final String CUSTOM_REFRESH_RATE_PREF_STRING = "custom_refresh_rate";
     public static final String CUSTOM_RESOLUTION_PREF_STRING = "edit_diy_w_h";
     public static final String SUGGESTED_RESOLUTION_PREF_STRING = "list_resolution_suggested";
+    public static final String AUTO_RESOLUTION_SCALE_FACTOR_PREF_STRING = "checkbox_auto_resolution_scale_factor";
 
 
     private static final String LEGACY_RES_FPS_PREF_STRING = "list_resolution_fps";
@@ -208,6 +209,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
     private static final String DEFAULT_VIDEO_SCALE_MODE = "fit";
     private static final boolean DEFAULT_AUTO_INVERT_VIDEO_RESOLUTION = true;
+    private static final boolean DEFAULT_AUTO_RESOLUTION_SCALE_FACTOR = false;
     private static final int DEFAULT_RESOLUTION_SCALE_FACTOR = 100;
     private static final boolean DEFAULT_RESUME_WITHOUT_CONFIRM = false;
     private static final boolean DEFAULT_SOPS = true;
@@ -219,6 +221,29 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
+
+    public static int calculateAutoResolutionScaleFactor(int streamWidth, int streamHeight,
+                                                         int targetWidth, int targetHeight) {
+        if (streamWidth <= 0 || streamHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
+            return DEFAULT_RESOLUTION_SCALE_FACTOR;
+        }
+
+        // Compare dimensions in the same orientation. Suggested resolutions are stored in
+        // landscape form, but the stream may be inverted when auto-orientation is active.
+        if ((streamWidth > streamHeight) != (targetWidth > targetHeight)) {
+            int swap = targetWidth;
+            targetWidth = targetHeight;
+            targetHeight = swap;
+        }
+
+        double widthFactor = targetWidth / (double) streamWidth;
+        double heightFactor = targetHeight / (double) streamHeight;
+        int scaleFactor = (int) Math.round(Math.max(widthFactor, heightFactor) * 100.0);
+
+        // This mode is intended to preserve the device resolution while lowering only the
+        // encoded stream resolution. Never reduce the host below the requested stream size.
+        return Math.max(DEFAULT_RESOLUTION_SCALE_FACTOR, scaleFactor);
+    }
 
     private static final boolean DEFAULT_ONSCREEN_CONTROLLER = false;
     private static final boolean DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD = true;
@@ -360,6 +385,7 @@ public class PreferenceConfiguration {
 
     //Invert video width/height
     public boolean autoInvertVideoResolution;
+    public boolean autoResolutionScaleFactor;
     public int resolutionScaleFactor;
     public boolean resumeWithoutConfirm;
     //竖屏模式
@@ -1067,6 +1093,7 @@ public class PreferenceConfiguration {
         config.showOverlayZoomToggleButton = prefs.getBoolean(CHECKBOX_SHOW_OVERLAY_ZOOM_TOGGLE_BUTTON, DEFAULT_SHOW_OVERLAY_TOGGLE_BUTTON);
         config.autoOrientation = prefs.getBoolean(CHECKBOX_AUTO_ORIENTATION,false);
         config.autoInvertVideoResolution = prefs.getBoolean(AUTO_INVERT_VIDEO_RESOLUTION_PREF_STRING, DEFAULT_AUTO_INVERT_VIDEO_RESOLUTION);
+        config.autoResolutionScaleFactor = prefs.getBoolean(AUTO_RESOLUTION_SCALE_FACTOR_PREF_STRING, DEFAULT_AUTO_RESOLUTION_SCALE_FACTOR);
         config.resolutionScaleFactor = prefs.getInt(RESOLUTION_SCALE_FACTOR_PREF_STRING, DEFAULT_RESOLUTION_SCALE_FACTOR);
 
         config.resumeWithoutConfirm = prefs.getBoolean(RESUME_WITHOUT_CONFIRM_PREF_STRING, DEFAULT_RESUME_WITHOUT_CONFIRM);
