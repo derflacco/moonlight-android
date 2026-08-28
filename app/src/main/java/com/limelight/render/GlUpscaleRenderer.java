@@ -673,16 +673,38 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     private int stableSizeQueryCount = 0;
     private boolean lastSizeQueryOk = false;
     private int swapFailStreak = 0;
+    private int makeCurrentFailStreak = 0;
 
     // Threading
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean releaseRequested = new AtomicBoolean(false);
     private Thread renderThread;
     private volatile boolean useChoreoVsync = false;
     // Backend restarts (switching Choreographer vs manual loop) must never block the caller thread.
     private final AtomicBoolean restartInProgress = new AtomicBoolean(false);
+    private int automaticRecoveryAttempts = 0;
 
     private void requestBackendRestartAsync() {
+        requestRendererRestartAsync("VSync backend change", false);
+    }
+
+    private void requestRendererRecoveryAsync(String reason) {
+        requestRendererRestartAsync(reason, true);
+    }
+
+    private void requestRendererRestartAsync(String reason, boolean automaticRecovery) {
+        if (releaseRequested.get()) return;
         if (!restartInProgress.compareAndSet(false, true)) return;
+
+        // Make the current backend unwind before the restart worker joins it.
+        running.set(false);
+        synchronized (frameLock) {
+            frameLock.notifyAll();
+        }
+
+        final int recoveryAttempt = automaticRecovery
+                ? ++automaticRecoveryAttempts
+                : 0;
 
         new Thread(() -> {
             try {
@@ -698,15 +720,34 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 }
 
                 if (renderThread != null && renderThread.isAlive()) {
-                    LimeLog.warning("FSR: backend restart aborted (render thread still alive)");
+                    LimeLog.warning("FSR: renderer restart aborted (render thread still alive), reason=" + reason);
                     return;
+                }
+
+                if (releaseRequested.get()) return;
+
+                if (automaticRecovery) {
+                    // Bound restart churn on a persistently invalid native window/driver.
+                    final long delayMs = Math.min(1000L, 50L << Math.min(4, Math.max(0, recoveryAttempt - 1)));
+                    try {
+                        Thread.sleep(delayMs);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+
+                    if (releaseRequested.get()) return;
+
+                    swapFailStreak = 0;
+                    makeCurrentFailStreak = 0;
+                    LimeLog.warning("FSR: restarting renderer after " + reason + " (attempt " + recoveryAttempt + ")");
                 }
 
                 start();
             } finally {
                 restartInProgress.set(false);
             }
-        }, "GL-FSR1-Restart").start();
+        }, automaticRecovery ? "GL-FSR1-Recovery" : "GL-FSR1-Restart").start();
     }
 
     private volatile Handler renderHandler = null;
@@ -1162,7 +1203,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
     }
 
 
-    public void start() {
+    public synchronized void start() {
+        if (releaseRequested.get()) return;
+
         // Never spawn a second renderer thread: EGLContext cannot be current on two threads.
         final Thread existing = renderThread;
         if (existing != null && existing.isAlive()) {
@@ -1348,7 +1391,9 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
         }
     }
 
-    public void release() {
+    public synchronized void release() {
+        // Prevent an in-flight backend restart/recovery from resurrecting this renderer.
+        releaseRequested.set(true);
         stop();
 
         final Thread t = renderThread;
@@ -1399,7 +1444,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 } catch (Throwable t) {
                     LimeLog.warning("FSR: renderFrame crashed: " + t);
                     markGlErrorDirty();
-                    running.set(false);
+                    requestRendererRecoveryAsync("renderFrame exception");
                 }
             }
         } finally {
@@ -1432,8 +1477,13 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             if (!EGL14.eglMakeCurrent(eglDisplay, eglWindowSurface, eglWindowSurface, eglContext)) {
                 final int err = EGL14.eglGetError();
                 LimeLog.warning("FSR: eglMakeCurrent failed err=0x" + Integer.toHexString(err));
+                if (++makeCurrentFailStreak >= 3) {
+                    requestRendererRecoveryAsync("repeated eglMakeCurrent failures (0x" + Integer.toHexString(err) + ")");
+                }
                 return;
             }
+
+            makeCurrentFailStreak = 0;
 
             // After a new current surface/context bind, force non-blocking swap.
             swapIntervalZeroApplied = false;
@@ -1810,11 +1860,12 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
             LimeLog.warning("FSR: eglSwapBuffers failed err=0x" + Integer.toHexString(err) + " streak=" + swapFailStreak);
 
             if (swapFailStreak >= 6) {
-                LimeLog.warning("FSR: eglSwapBuffers failing repeatedly, stopping renderer to allow clean restart");
-                running.set(false);
+                requestRendererRecoveryAsync("repeated eglSwapBuffers failures (0x" + Integer.toHexString(err) + ")");
             }
         } else {
             swapFailStreak = 0;
+            makeCurrentFailStreak = 0;
+            if (automaticRecoveryAttempts != 0) automaticRecoveryAttempts = 0;
         }
 
         return ok;
@@ -3055,7 +3106,7 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
 
     private void invalidateTex2DFilterCache(int texId) {
         if (texId <= 0) return;
-        invalidateTex2DFilterCache(texId);
+        if (lastTex2DFilterTexId == texId) lastTex2DFilterTexId = -1;
         if (lastTex2DFilterTexId2 == texId) lastTex2DFilterTexId2 = -1;
     }
 
@@ -4248,6 +4299,8 @@ public final class GlUpscaleRenderer implements SurfaceTexture.OnFrameAvailableL
                 renderFrame(true);
             } catch (Throwable t) {
                 LimeLog.warning("renderFrame error: " + t);
+                markGlErrorDirty();
+                requestRendererRecoveryAsync("Choreographer renderFrame exception");
             }
 
             if (running.get() && useChoreoVsync) {
