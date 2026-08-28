@@ -51,10 +51,8 @@ import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
-import com.limelight.utils.DisplaySizer;
 import com.limelight.utils.FSRSizerInstaller;
 import com.limelight.utils.UiHelper;
-import com.limelight.render.GlUpscaleRenderer;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
@@ -567,31 +565,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         streamContainer = findViewById(R.id.streamContainer);
         streamContainer.init(this, prefConfig);
 
-        // Ensure present surface is display-sized (per device/rotation) and install FSR sizer
-        try {
-            android.view.SurfaceView __surface = null;
-            // Breadth-first search: find the first SurfaceView inside the container
-            java.util.ArrayDeque<android.view.View> q = new java.util.ArrayDeque<>();
-            q.add(streamContainer);
-            while (!q.isEmpty()) {
-                android.view.View cur = q.removeFirst();
-                if (cur instanceof android.view.SurfaceView) {
-                    __surface = (android.view.SurfaceView) cur;
-                    break;
-                }
-                if (cur instanceof android.view.ViewGroup) {
-                    android.view.ViewGroup g = (android.view.ViewGroup) cur;
-                    for (int i = 0; i < g.getChildCount(); i++) {
-                        q.add(g.getChildAt(i));
-                    }
-                }
-            }
-            if (__surface != null) {
-                com.limelight.utils.DisplaySizer.applyTo(__surface);
-                fsrSizer = com.limelight.utils.FSRSizerInstaller.installForSurfaceView(this, __surface, /*renderer*/ null);
-                if (fsrSizer != null) fsrSizer.start();
-            }
-        } catch (Throwable ignored) {}
         streamContainer.setOnGenericMotionListener(this);
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
@@ -817,6 +790,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 shouldInvertDecoderResolution,
                 glPrefs.glRenderer,
                 this);
+
+        // Only GlUpscale (FSR or FastGL) needs a display/view-sized producer Surface.
+        // The normal MediaCodec direct path must keep its original Surface sizing behavior.
+        installGlUpscaleSizerIfNeeded();
 
 
         // Don't stream HDR if the decoder can't support it
@@ -1490,16 +1467,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @TargetApi(Build.VERSION_CODES.O)
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
-
-        try {
-            if (fsrSizer != null) {
-                if (isInPictureInPictureMode) {
-                    fsrSizer.stop();
-                } else {
-                    fsrSizer.start();
-                }
-            }
-        } catch (Throwable ignored) {}
+        // Keep the sizer active: its layout listener switches the Surface buffer to the
+        // PiP view size and restores the presentation size when leaving PiP.
     }
 
     private boolean isRefreshRateEqualMatch(float refreshRate) {
@@ -1734,6 +1703,30 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // Use the lower of the current refresh rate and the selected refresh rate.
             // The preferred refresh rate may not actually be applied (ex: Battery Saver mode).
             return Math.min(currentDisplay.getRefreshRate(), displayRefreshRate);
+        }
+    }
+
+    private void installGlUpscaleSizerIfNeeded() {
+        if (prefConfig == null || !prefConfig.videoUpscaleEnable) return;
+        if (streamContainer == null || decoderRenderer == null) return;
+
+        try {
+            final SurfaceView surfaceView = streamContainer.getSurfaceView();
+            if (surfaceView == null) return;
+
+            fsrSizer = FSRSizerInstaller.installForSurfaceView(
+                    this,
+                    surfaceView,
+                    (width, height) -> {
+                        final MediaCodecDecoderRenderer renderer = decoderRenderer;
+                        if (renderer != null) {
+                            renderer.setUpscalerPresentationSizeHint(width, height);
+                        }
+                    });
+            fsrSizer.start();
+        } catch (Throwable t) {
+            LimeLog.warning("Unable to install GlUpscale Surface sizer: " + t);
+            fsrSizer = null;
         }
     }
 

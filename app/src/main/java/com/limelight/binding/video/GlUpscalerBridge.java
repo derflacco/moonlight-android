@@ -23,6 +23,7 @@ public final class GlUpscalerBridge {
         private static volatile java.lang.reflect.Method sSetDebugEnabled;
         private static volatile java.lang.reflect.Method sGetOverlayLine;
         private static volatile java.lang.reflect.Method sSetPresentationHint;
+        private static volatile java.lang.reflect.Method sSetPresentationSize;
 
         private static final java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method> sNoArg =
                 new java.util.concurrent.ConcurrentHashMap<>(4);
@@ -102,6 +103,22 @@ public final class GlUpscalerBridge {
             }
             return m;
         }
+
+        private static java.lang.reflect.Method setPresentationSize(Object inst) throws Throwable {
+            java.lang.reflect.Method m = sSetPresentationSize;
+            if (m != null) return m;
+            synchronized (Reflect.class) {
+                m = sSetPresentationSize;
+                if (m == null) {
+                    m = inst.getClass().getMethod(
+                            "setPresentationSizeHint",
+                            int.class,
+                            int.class);
+                    sSetPresentationSize = m;
+                }
+            }
+            return m;
+        }
     }
 
     public boolean isReady() {
@@ -161,6 +178,13 @@ public final class GlUpscalerBridge {
         if (upscaler == null || ctx == null) return;
         try {
             Reflect.setPresentationHint(upscaler).invoke(upscaler, ctx);
+        } catch (Throwable ignored) { }
+    }
+
+    public void setPresentationSizeHint(int width, int height) {
+        if (upscaler == null || width <= 0 || height <= 0) return;
+        try {
+            Reflect.setPresentationSize(upscaler).invoke(upscaler, width, height);
         } catch (Throwable ignored) { }
     }
 

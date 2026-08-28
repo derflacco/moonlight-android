@@ -236,6 +236,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Thread rendererThread;
     private int videoFormat;
     private Surface renderTarget;
+    private volatile int glPresentationHintW;
+    private volatile int glPresentationHintH;
     private volatile boolean stopping;
     private CrashListener crashListener;
 
@@ -614,7 +616,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Re-apply presentation hint to upscaler when render target may change
         if (glUpscaler != null) {
-            glUpscaler.setPresentationHint(context);
+            applyUpscalerPresentationHint();
+        }
+    }
+
+    public void setUpscalerPresentationSizeHint(int width, int height) {
+        if (width <= 0 || height <= 0) return;
+
+        glPresentationHintW = width;
+        glPresentationHintH = height;
+        applyUpscalerPresentationHint();
+    }
+
+    private void applyUpscalerPresentationHint() {
+        final GlUpscalerBridge upscaler = glUpscaler;
+        if (upscaler == null) return;
+
+        final int width = glPresentationHintW;
+        final int height = glPresentationHintH;
+        if (width > 0 && height > 0) {
+            upscaler.setPresentationSizeHint(width, height);
+        } else {
+            upscaler.setPresentationHint(context);
         }
     }
 
@@ -876,6 +899,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
 
             if (glUpscaler.ensureCreated(renderTarget, coldCfg.initialWidth, coldCfg.initialHeight, prefs, context)) {
+                // Prefer the exact Surface buffer size selected by FSRSizerInstaller over display-wide metrics.
+                applyUpscalerPresentationHint();
                 final Surface in = glUpscaler.getDecoderInputSurface();
                 if (in != null) {
                     __codecSurface = in;

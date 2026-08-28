@@ -2,7 +2,6 @@ package com.limelight.utils;
 
 import android.content.Context;
 import android.graphics.Rect;
-import android.hardware.display.DisplayManager;
 import android.util.DisplayMetrics;
 import android.view.Display;
 import android.view.SurfaceHolder;
@@ -28,30 +27,48 @@ public final class DisplaySizer {
     // Allow small mismatches due to insets/rounding without treating the view as "not fullscreen".
     private static final int MATCH_DISPLAY_TOLERANCE_PX = 12;
 
-    /** Returns {width, height} in pixels of the native presentation (for current rotation). */
-    public static int[] getPresentationSizePx(Context ctx) {
-        int w = 0, h = 0;
+    private static int[] getDisplayRealSizePx(Display display) {
+        if (display == null) return new int[]{0, 0};
 
-        // API 30+: maximum window metrics (rotation-aware, minimal system insets)
         try {
-            WindowManager wm = ctx.getSystemService(WindowManager.class);
-            if (wm != null) {
-                WindowMetrics m = wm.getMaximumWindowMetrics();
-                Rect b = m.getBounds();
-                w = Math.max(w, b.width());
-                h = Math.max(h, b.height());
+            DisplayMetrics metrics = new DisplayMetrics();
+            display.getRealMetrics(metrics);
+            if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                return new int[]{metrics.widthPixels, metrics.heightPixels};
             }
         } catch (Throwable ignored) {}
 
-        // All APIs: real metrics from default display
+        return new int[]{0, 0};
+    }
+
+    /** Returns {width, height} in pixels of the native presentation (for current rotation). */
+    public static int[] getPresentationSizePx(Context ctx) {
+        if (ctx == null) return new int[]{1, 1};
+
+        int w = 0, h = 0;
+
+        // Prefer the WindowManager display associated with this context. Unlike
+        // Display.DEFAULT_DISPLAY, this remains correct for activities on external displays.
         try {
-            DisplayManager dm = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
-            Display d = (dm != null ? dm.getDisplay(Display.DEFAULT_DISPLAY) : null);
-            if (d != null) {
-                DisplayMetrics dmets = new DisplayMetrics();
-                d.getRealMetrics(dmets);
-                w = Math.max(w, dmets.widthPixels);
-                h = Math.max(h, dmets.heightPixels);
+            final WindowManager wm;
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                wm = ctx.getSystemService(WindowManager.class);
+            } else {
+                wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+            }
+            if (wm != null) {
+                final int[] displaySize = getDisplayRealSizePx(wm.getDefaultDisplay());
+                w = displaySize[0];
+                h = displaySize[1];
+
+                if ((w <= 0 || h <= 0) && android.os.Build.VERSION.SDK_INT >= 30) {
+                    WindowMetrics m = wm.getMaximumWindowMetrics();
+                    Rect b = m.getBounds();
+                    if (b != null) {
+                        w = b.width();
+                        h = b.height();
+                    }
+                }
             }
         } catch (Throwable ignored) {}
 
@@ -66,6 +83,20 @@ public final class DisplaySizer {
 
         if (w <= 0 || h <= 0) { w = 1; h = 1; }
         return new int[]{ w, h };
+    }
+
+    /** Returns the presentation size for the display that actually owns this view. */
+    private static int[] getPresentationSizePx(View view) {
+        if (view != null) {
+            try {
+                final int[] displaySize = getDisplayRealSizePx(view.getDisplay());
+                if (displaySize[0] > 0 && displaySize[1] > 0) {
+                    return displaySize;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        return getPresentationSizePx(view != null ? view.getContext() : null);
     }
 
     /** Returns {width, height} of the current view size (layout size). Returns {0,0} if unknown. */
@@ -99,8 +130,7 @@ public final class DisplaySizer {
     public static int[] getBestBufferSizePx(View v) {
         if (v == null) return new int[]{1, 1};
 
-        final Context ctx = v.getContext();
-        final int[] pres = getPresentationSizePx(ctx);
+        final int[] pres = getPresentationSizePx(v);
         final int pw = pres[0];
         final int ph = pres[1];
 

@@ -5,8 +5,6 @@ import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 
-import com.limelight.render.GlUpscaleRenderer;
-
 import java.io.Closeable;
 import java.io.IOException;
 
@@ -20,6 +18,11 @@ public final class FSRSizerInstaller {
     /** Prevent instantiation. */
     private FSRSizerInstaller() {}
 
+    /** Receives the exact buffer size selected for the presentation Surface. */
+    public interface SizeHintSink {
+        void setPresentationSizeHint(int width, int height);
+    }
+
     public interface AutoCloser extends Closeable {
         void start();
         void stop();
@@ -30,10 +33,10 @@ public final class FSRSizerInstaller {
     /** Attach sizing to a TextureView and return a controllable handle. */
     public static AutoCloser installForTextureView(final Activity activity,
                                                    final TextureView tv,
-                                                   final GlUpscaleRenderer renderer) {
-        final TextureViewSizer sizer = new TextureViewSizer(activity, tv, () -> applyHint(tv, renderer));
+                                                   final SizeHintSink sink) {
+        final TextureViewSizer sizer = new TextureViewSizer(activity, tv, () -> applyHint(tv, sink));
         return new AutoCloser() {
-            @Override public void start() { sizer.start(); applyHint(tv, renderer); }
+            @Override public void start() { sizer.start(); }
             @Override public void stop()  { sizer.stop(); }
         };
     }
@@ -41,22 +44,22 @@ public final class FSRSizerInstaller {
     /** Attach sizing to a SurfaceView and return a controllable handle. */
     public static AutoCloser installForSurfaceView(final Activity activity,
                                                    final SurfaceView sv,
-                                                   final GlUpscaleRenderer renderer) {
-        final SurfaceViewSizer sizer = new SurfaceViewSizer(activity, sv, () -> applyHint(sv, renderer));
+                                                   final SizeHintSink sink) {
+        final SurfaceViewSizer sizer = new SurfaceViewSizer(activity, sv, () -> applyHint(sv, sink));
         return new AutoCloser() {
-            @Override public void start() { sizer.start(); applyHint(sv, renderer); }
+            @Override public void start() { sizer.start(); }
             @Override public void stop()  { sizer.stop(); }
         };
     }
 
     /** Push current buffer-size hint to the renderer (best-effort). */
-    private static void applyHint(final View targetView, final GlUpscaleRenderer renderer) {
-        if (renderer == null) return;
+    private static void applyHint(final View targetView, final SizeHintSink sink) {
+        if (sink == null) return;
         if (targetView == null) return;
 
         final int[] sz = DisplaySizer.getBestBufferSizePx(targetView);
         try {
-            renderer.setPresentationSizeHint(sz[0], sz[1]);
+            sink.setPresentationSizeHint(sz[0], sz[1]);
         } catch (Throwable ignored) { /* best-effort only */ }
     }
 }
