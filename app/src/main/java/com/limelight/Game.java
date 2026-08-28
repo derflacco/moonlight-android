@@ -40,6 +40,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.profiles.ProfilesManager;
+import com.limelight.ui.CompositorHeartbeat;
 import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
@@ -269,6 +270,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private TextView performanceOverlayMini;
 
     private TextView performanceOverlayBig;
+
+    private CompositorHeartbeat compositorHeartbeat;
 
     // === Perf overlay throttling (reduces UI-thread load and GC) ===
 // Stats don't need per-frame UI updates; coalesce and update at a fixed rate.
@@ -631,6 +634,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         performanceOverlayMini = findViewById(R.id.performanceOverlayMini);
 
         performanceOverlayBig = findViewById(R.id.performanceOverlayBig);
+
+        compositorHeartbeat = new CompositorHeartbeat(findViewById(R.id.tvCompositorHeartbeat));
 
 
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this, this);
@@ -1855,6 +1860,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         super.onDestroy();
 
         instance = null;
+        if (compositorHeartbeat != null) {
+            compositorHeartbeat.stop();
+        }
         timerHandler.removeCallbacksAndMessages(null);
 
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
@@ -1917,12 +1925,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     protected void onStart() {
         super.onStart();
 
+        if (prefConfig.enableTvCompositorWorkaround && compositorHeartbeat != null) {
+            compositorHeartbeat.start();
+        }
         try { if (fsrSizer != null) fsrSizer.start(); } catch (Throwable ignored) {}
     }
 
     @Override
     protected void onStop() {
 
+        if (compositorHeartbeat != null) {
+            compositorHeartbeat.stop();
+        }
         try { if (fsrSizer != null) fsrSizer.stop(); } catch (Throwable ignored) {}
 
         super.onStop();

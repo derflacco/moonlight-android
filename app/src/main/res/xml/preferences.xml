@@ -1061,6 +1061,12 @@
         app:iconSpaceReserved="false">
         <CheckBoxPreference
             android:defaultValue="false"
+            android:key="checkbox_tv_compositor_workaround"
+            android:summary="@string/summary_tv_compositor_workaround"
+            android:title="@string/title_tv_compositor_workaround"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
             android:key="checkbox_enable_perf_overlay"
             android:summary="@string/summary_enable_perf_overlay"
             android:title="@string/title_enable_perf_overlay"

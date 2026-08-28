@@ -738,6 +738,8 @@
     <string name="save">Save</string>
 
      <string name="category_perf_monitor_settings">Performance Monitor</string>
+    <string name="title_tv_compositor_workaround">Android TV display compatibility</string>
+    <string name="summary_tv_compositor_workaround">Keep a tiny UI composition heartbeat active during streaming. Try this if the TV flashes, crashes, or reboots unless the performance overlay is visible. May add minor compositor overhead.</string>
 
     <string name="title_checkbox_full_screen">Enable Full Screen</string>
     <string name="summary_checkbox_full_screen">Hide system bars with immersive mode</string>
