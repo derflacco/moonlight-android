@@ -174,4 +174,17 @@
     <string name="backup_unlock">Отключи</string>
     <string name="backup_import_without_pairing">Пропусни сдвоените компютри</string>
     <string name="backup_wrong_password">Грешна парола</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Някои елементи не могат да бъдат импортирани</string>
+    <string name="backup_unsupported_newer">Този файл е създаден от по-нова версия на приложението (%1$s).</string>
+    <string name="backup_unsupported_message">Следните елементи не се поддържат от тази версия и ще бъдат пропуснати. Всичко останало може да бъде импортирано:</string>
+    <string name="backup_unsupported_setting">Настройка: %1$s</string>
+    <string name="backup_unsupported_value">Несъвместима стойност: %1$s</string>
+    <string name="backup_unsupported_group">Група настройки: %1$s</string>
+    <string name="backup_unsupported_data">Файл: %1$s</string>
+    <string name="backup_unsupported_section">Раздел: %1$s</string>
+    <string name="backup_unsupported_pairing">Сдвоени компютри (неподдържани или непълни)</string>
+    <string name="backup_import_rest">Импортирай останалото</string>
+    <string name="backup_import_rolled_back">Импортът е неуспешен, предишните настройки са запазени: %1$s</string>
 </resources>

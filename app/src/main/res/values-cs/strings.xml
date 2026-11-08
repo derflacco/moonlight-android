@@ -280,4 +280,17 @@
     <string name="backup_unlock">Odemknout</string>
     <string name="backup_import_without_pairing">Přeskočit spárované počítače</string>
     <string name="backup_wrong_password">Nesprávné heslo</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Některé položky nelze importovat</string>
+    <string name="backup_unsupported_newer">Tento soubor byl vytvořen novější verzí aplikace (%1$s).</string>
+    <string name="backup_unsupported_message">Následující položky tato verze nepodporuje a budou přeskočeny. Vše ostatní lze importovat:</string>
+    <string name="backup_unsupported_setting">Nastavení: %1$s</string>
+    <string name="backup_unsupported_value">Nekompatibilní hodnota: %1$s</string>
+    <string name="backup_unsupported_group">Skupina nastavení: %1$s</string>
+    <string name="backup_unsupported_data">Soubor: %1$s</string>
+    <string name="backup_unsupported_section">Sekce: %1$s</string>
+    <string name="backup_unsupported_pairing">Spárované počítače (nepodporované nebo neúplné)</string>
+    <string name="backup_import_rest">Importovat zbytek</string>
+    <string name="backup_import_rolled_back">Import se nezdařil, předchozí nastavení zůstalo zachováno: %1$s</string>
 </resources>

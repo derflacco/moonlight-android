@@ -739,4 +739,17 @@
     <string name="backup_unlock">解锁</string>
     <string name="backup_import_without_pairing">跳过已配对的电脑</string>
     <string name="backup_wrong_password">密码错误</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">部分项目无法导入</string>
+    <string name="backup_unsupported_newer">此文件由更新版本的应用（%1$s）创建。</string>
+    <string name="backup_unsupported_message">以下项目不受此版本支持，将被跳过。其余内容均可导入：</string>
+    <string name="backup_unsupported_setting">设置：%1$s</string>
+    <string name="backup_unsupported_value">不兼容的值：%1$s</string>
+    <string name="backup_unsupported_group">设置组：%1$s</string>
+    <string name="backup_unsupported_data">文件：%1$s</string>
+    <string name="backup_unsupported_section">部分：%1$s</string>
+    <string name="backup_unsupported_pairing">已配对的电脑（不受支持或不完整）</string>
+    <string name="backup_import_rest">导入其余内容</string>
+    <string name="backup_import_rolled_back">导入失败，已保留之前的设置：%1$s</string>
 </resources>

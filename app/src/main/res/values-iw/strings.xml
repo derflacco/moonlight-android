@@ -185,4 +185,17 @@
     <string name="backup_unlock">ביטול נעילה</string>
     <string name="backup_import_without_pairing">דילוג על המחשבים המצומדים</string>
     <string name="backup_wrong_password">סיסמה שגויה</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">לא ניתן לייבא חלק מהפריטים</string>
+    <string name="backup_unsupported_newer">קובץ זה נוצר על ידי גרסה חדשה יותר של האפליקציה (%1$s).</string>
+    <string name="backup_unsupported_message">הפריטים הבאים אינם נתמכים בגרסה זו וידולגו. כל השאר ניתן לייבוא:</string>
+    <string name="backup_unsupported_setting">הגדרה: %1$s</string>
+    <string name="backup_unsupported_value">ערך לא תואם: %1$s</string>
+    <string name="backup_unsupported_group">קבוצת הגדרות: %1$s</string>
+    <string name="backup_unsupported_data">קובץ: %1$s</string>
+    <string name="backup_unsupported_section">מקטע: %1$s</string>
+    <string name="backup_unsupported_pairing">מחשבים מצומדים (לא נתמכים או חלקיים)</string>
+    <string name="backup_import_rest">ייבוא השאר</string>
+    <string name="backup_import_rolled_back">הייבוא נכשל, ההגדרות הקודמות נשמרו: %1$s</string>
 </resources>

@@ -321,4 +321,17 @@
     <string name="backup_unlock">잠금 해제</string>
     <string name="backup_import_without_pairing">페어링된 PC 건너뛰기</string>
     <string name="backup_wrong_password">비밀번호가 틀렸습니다</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">일부 항목을 가져올 수 없습니다</string>
+    <string name="backup_unsupported_newer">이 파일은 더 최신 버전의 앱(%1$s)에서 만들어졌습니다.</string>
+    <string name="backup_unsupported_message">다음 항목은 이 버전에서 지원되지 않아 건너뜁니다. 나머지는 모두 가져올 수 있습니다:</string>
+    <string name="backup_unsupported_setting">설정: %1$s</string>
+    <string name="backup_unsupported_value">호환되지 않는 값: %1$s</string>
+    <string name="backup_unsupported_group">설정 그룹: %1$s</string>
+    <string name="backup_unsupported_data">파일: %1$s</string>
+    <string name="backup_unsupported_section">섹션: %1$s</string>
+    <string name="backup_unsupported_pairing">페어링된 컴퓨터 (지원되지 않거나 불완전함)</string>
+    <string name="backup_import_rest">나머지 가져오기</string>
+    <string name="backup_import_rolled_back">가져오기에 실패했으며 이전 설정이 유지되었습니다: %1$s</string>
 </resources>

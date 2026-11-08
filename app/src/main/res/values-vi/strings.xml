@@ -670,4 +670,17 @@
     <string name="backup_unlock">Mở khóa</string>
     <string name="backup_import_without_pairing">Bỏ qua PC đã ghép nối</string>
     <string name="backup_wrong_password">Sai mật khẩu</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Không thể nhập một số mục</string>
+    <string name="backup_unsupported_newer">Tệp này được tạo bởi phiên bản ứng dụng mới hơn (%1$s).</string>
+    <string name="backup_unsupported_message">Các mục sau không được phiên bản này hỗ trợ và sẽ bị bỏ qua. Mọi thứ khác đều có thể nhập:</string>
+    <string name="backup_unsupported_setting">Cài đặt: %1$s</string>
+    <string name="backup_unsupported_value">Giá trị không tương thích: %1$s</string>
+    <string name="backup_unsupported_group">Nhóm cài đặt: %1$s</string>
+    <string name="backup_unsupported_data">Tệp: %1$s</string>
+    <string name="backup_unsupported_section">Mục: %1$s</string>
+    <string name="backup_unsupported_pairing">Máy tính đã ghép nối (không được hỗ trợ hoặc không đầy đủ)</string>
+    <string name="backup_import_rest">Nhập phần còn lại</string>
+    <string name="backup_import_rolled_back">Nhập thất bại, cài đặt trước đó đã được giữ lại: %1$s</string>
 </resources>

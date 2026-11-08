@@ -305,4 +305,17 @@
     <string name="backup_unlock">Lås upp</string>
     <string name="backup_import_without_pairing">Hoppa över parkopplade datorer</string>
     <string name="backup_wrong_password">Fel lösenord</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Vissa objekt kan inte importeras</string>
+    <string name="backup_unsupported_newer">Den här filen skapades av en nyare version av appen (%1$s).</string>
+    <string name="backup_unsupported_message">Följande objekt stöds inte av den här versionen och hoppas över. Allt annat kan importeras:</string>
+    <string name="backup_unsupported_setting">Inställning: %1$s</string>
+    <string name="backup_unsupported_value">Inkompatibelt värde: %1$s</string>
+    <string name="backup_unsupported_group">Inställningsgrupp: %1$s</string>
+    <string name="backup_unsupported_data">Fil: %1$s</string>
+    <string name="backup_unsupported_section">Avsnitt: %1$s</string>
+    <string name="backup_unsupported_pairing">Parkopplade datorer (stöds inte eller ofullständiga)</string>
+    <string name="backup_import_rest">Importera resten</string>
+    <string name="backup_import_rolled_back">Importen misslyckades, dina tidigare inställningar har behållits: %1$s</string>
 </resources>

@@ -622,4 +622,17 @@
     <string name="backup_unlock">Déverrouiller</string>
     <string name="backup_import_without_pairing">Ignorer les PC appairés</string>
     <string name="backup_wrong_password">Mot de passe incorrect</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Certains éléments ne peuvent pas être importés</string>
+    <string name="backup_unsupported_newer">Ce fichier a été créé par une version plus récente de l\'application (%1$s).</string>
+    <string name="backup_unsupported_message">Les éléments suivants ne sont pas pris en charge par cette version et seront ignorés. Tout le reste peut être importé :</string>
+    <string name="backup_unsupported_setting">Paramètre : %1$s</string>
+    <string name="backup_unsupported_value">Valeur incompatible : %1$s</string>
+    <string name="backup_unsupported_group">Groupe de paramètres : %1$s</string>
+    <string name="backup_unsupported_data">Fichier : %1$s</string>
+    <string name="backup_unsupported_section">Section : %1$s</string>
+    <string name="backup_unsupported_pairing">Ordinateurs appairés (non pris en charge ou incomplets)</string>
+    <string name="backup_import_rest">Importer le reste</string>
+    <string name="backup_import_rolled_back">Échec de l\'import, vos paramètres précédents ont été conservés : %1$s</string>
 </resources>

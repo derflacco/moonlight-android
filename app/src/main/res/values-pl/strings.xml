@@ -305,4 +305,17 @@
     <string name="backup_unlock">Odblokuj</string>
     <string name="backup_import_without_pairing">Pomiń sparowane komputery</string>
     <string name="backup_wrong_password">Nieprawidłowe hasło</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Niektórych elementów nie można zaimportować</string>
+    <string name="backup_unsupported_newer">Ten plik został utworzony przez nowszą wersję aplikacji (%1$s).</string>
+    <string name="backup_unsupported_message">Poniższe elementy nie są obsługiwane przez tę wersję i zostaną pominięte. Wszystko inne można zaimportować:</string>
+    <string name="backup_unsupported_setting">Ustawienie: %1$s</string>
+    <string name="backup_unsupported_value">Niezgodna wartość: %1$s</string>
+    <string name="backup_unsupported_group">Grupa ustawień: %1$s</string>
+    <string name="backup_unsupported_data">Plik: %1$s</string>
+    <string name="backup_unsupported_section">Sekcja: %1$s</string>
+    <string name="backup_unsupported_pairing">Sparowane komputery (nieobsługiwane lub niekompletne)</string>
+    <string name="backup_import_rest">Importuj resztę</string>
+    <string name="backup_import_rolled_back">Import nie powiódł się, poprzednie ustawienia zostały zachowane: %1$s</string>
 </resources>

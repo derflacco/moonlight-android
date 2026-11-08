@@ -245,4 +245,17 @@
     <string name="backup_unlock">Ξεκλείδωμα</string>
     <string name="backup_import_without_pairing">Παράλειψη συζευγμένων υπολογιστών</string>
     <string name="backup_wrong_password">Λάθος κωδικός</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Ορισμένα στοιχεία δεν μπορούν να εισαχθούν</string>
+    <string name="backup_unsupported_newer">Αυτό το αρχείο δημιουργήθηκε από νεότερη έκδοση της εφαρμογής (%1$s).</string>
+    <string name="backup_unsupported_message">Τα παρακάτω στοιχεία δεν υποστηρίζονται από αυτή την έκδοση και θα παραλειφθούν. Όλα τα υπόλοιπα μπορούν να εισαχθούν:</string>
+    <string name="backup_unsupported_setting">Ρύθμιση: %1$s</string>
+    <string name="backup_unsupported_value">Μη συμβατή τιμή: %1$s</string>
+    <string name="backup_unsupported_group">Ομάδα ρυθμίσεων: %1$s</string>
+    <string name="backup_unsupported_data">Αρχείο: %1$s</string>
+    <string name="backup_unsupported_section">Ενότητα: %1$s</string>
+    <string name="backup_unsupported_pairing">Συζευγμένοι υπολογιστές (μη υποστηριζόμενοι ή ελλιπείς)</string>
+    <string name="backup_import_rest">Εισαγωγή των υπολοίπων</string>
+    <string name="backup_import_rolled_back">Η εισαγωγή απέτυχε, οι προηγούμενες ρυθμίσεις διατηρήθηκαν: %1$s</string>
 </resources>

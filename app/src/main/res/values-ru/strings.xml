@@ -691,4 +691,17 @@
     <string name="backup_unlock">Разблокировать</string>
     <string name="backup_import_without_pairing">Пропустить сопряжённые ПК</string>
     <string name="backup_wrong_password">Неверный пароль</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Некоторые элементы нельзя импортировать</string>
+    <string name="backup_unsupported_newer">Этот файл создан более новой версией приложения (%1$s).</string>
+    <string name="backup_unsupported_message">Следующие элементы не поддерживаются этой версией и будут пропущены. Всё остальное можно импортировать:</string>
+    <string name="backup_unsupported_setting">Настройка: %1$s</string>
+    <string name="backup_unsupported_value">Несовместимое значение: %1$s</string>
+    <string name="backup_unsupported_group">Группа настроек: %1$s</string>
+    <string name="backup_unsupported_data">Файл: %1$s</string>
+    <string name="backup_unsupported_section">Раздел: %1$s</string>
+    <string name="backup_unsupported_pairing">Сопряжённые компьютеры (не поддерживаются или неполные)</string>
+    <string name="backup_import_rest">Импортировать остальное</string>
+    <string name="backup_import_rolled_back">Ошибка импорта, прежние настройки сохранены: %1$s</string>
 </resources>

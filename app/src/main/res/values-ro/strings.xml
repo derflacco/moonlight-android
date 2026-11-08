@@ -211,4 +211,17 @@
     <string name="backup_unlock">Deblochează</string>
     <string name="backup_import_without_pairing">Omite PC-urile asociate</string>
     <string name="backup_wrong_password">Parolă greșită</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Unele elemente nu pot fi importate</string>
+    <string name="backup_unsupported_newer">Acest fișier a fost creat de o versiune mai nouă a aplicației (%1$s).</string>
+    <string name="backup_unsupported_message">Următoarele elemente nu sunt acceptate de această versiune și vor fi omise. Tot restul poate fi importat:</string>
+    <string name="backup_unsupported_setting">Setare: %1$s</string>
+    <string name="backup_unsupported_value">Valoare incompatibilă: %1$s</string>
+    <string name="backup_unsupported_group">Grup de setări: %1$s</string>
+    <string name="backup_unsupported_data">Fișier: %1$s</string>
+    <string name="backup_unsupported_section">Secțiune: %1$s</string>
+    <string name="backup_unsupported_pairing">Calculatoare asociate (neacceptate sau incomplete)</string>
+    <string name="backup_import_rest">Importă restul</string>
+    <string name="backup_import_rolled_back">Importul a eșuat, setările anterioare au fost păstrate: %1$s</string>
 </resources>

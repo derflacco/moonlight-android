@@ -2118,21 +2118,49 @@ public class StreamSettings extends AppCompatActivity {
                 return;
             }
 
-            if (!SettingsBackup.hasPairing(backup)) {
-                confirmImport(backup, null);
+            final SettingsBackup.ImportPlan plan = SettingsBackup.analyze(requireActivity(), backup);
+            if (plan.hasUnsupported()) {
+                showUnsupportedWarning(backup, plan);
+            } else {
+                continueImport(backup, plan);
+            }
+        }
+
+        /** Lists what this version can't import; the user can import the rest or cancel. */
+        private void showUnsupportedWarning(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
+            StringBuilder message = new StringBuilder();
+            if (plan.isFromNewerVersion()) {
+                message.append(getString(R.string.backup_unsupported_newer,
+                        plan.appVersion != null ? plan.appVersion : "?")).append("\n\n");
+            }
+            message.append(getString(R.string.backup_unsupported_message)).append("\n");
+            for (String item : plan.unsupported) {
+                message.append("\n• ").append(item);
+            }
+            new AlertDialog.Builder(requireActivity())
+                    .setTitle(R.string.backup_unsupported_title)
+                    .setMessage(message.toString())
+                    .setPositiveButton(R.string.backup_import_rest, (d, w) -> continueImport(backup, plan))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
+        private void continueImport(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
+            if (!SettingsBackup.hasPairing(backup) || !plan.pairingSupported) {
+                confirmImport(backup, null, plan);
             } else if (!SettingsBackup.isPairingEncrypted(backup)) {
                 try {
-                    confirmImport(backup, SettingsBackup.openPairing(backup, null));
+                    confirmImport(backup, SettingsBackup.openPairing(backup, null), plan);
                 } catch (Exception e) {
                     e.printStackTrace();
                     Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
                 }
             } else {
-                askPairingPassword(backup);
+                askPairingPassword(backup, plan);
             }
         }
 
-        private void askPairingPassword(org.json.JSONObject backup) {
+        private void askPairingPassword(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
             Activity activity = requireActivity();
             android.widget.LinearLayout content = new android.widget.LinearLayout(activity);
             content.setOrientation(android.widget.LinearLayout.VERTICAL);
@@ -2145,7 +2173,7 @@ public class StreamSettings extends AppCompatActivity {
                     .setMessage(R.string.backup_password_required_message)
                     .setView(content)
                     .setPositiveButton(R.string.backup_unlock, null)
-                    .setNeutralButton(R.string.backup_import_without_pairing, (d, w) -> confirmImport(backup, null))
+                    .setNeutralButton(R.string.backup_import_without_pairing, (d, w) -> confirmImport(backup, null, plan))
                     .setNegativeButton(android.R.string.cancel, null)
                     .create();
             dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -2176,7 +2204,7 @@ public class StreamSettings extends AppCompatActivity {
                             Toast.makeText(activity, getString(R.string.backup_import_failed, failure), Toast.LENGTH_LONG).show();
                         } else {
                             dialog.dismiss();
-                            confirmImport(backup, result);
+                            confirmImport(backup, result, plan);
                         }
                     });
                 }).start();
@@ -2184,7 +2212,8 @@ public class StreamSettings extends AppCompatActivity {
             dialog.show();
         }
 
-        private void confirmImport(org.json.JSONObject backup, org.json.JSONObject pairing) {
+        private void confirmImport(org.json.JSONObject backup, org.json.JSONObject pairing,
+                                   SettingsBackup.ImportPlan plan) {
             String date = backup.optString("exportedAt", getString(R.string.backup_unknown_date));
             new AlertDialog.Builder(requireActivity())
                     .setTitle(R.string.backup_import_confirm_title)
@@ -2192,10 +2221,10 @@ public class StreamSettings extends AppCompatActivity {
                             : R.string.backup_import_confirm_keep_pairing, date))
                     .setPositiveButton(R.string.backup_import_button, (d, w) -> {
                         try {
-                            SettingsBackup.restore(requireActivity(), backup, pairing);
+                            SettingsBackup.restore(requireActivity(), backup, pairing, plan);
                         } catch (Exception e) {
                             e.printStackTrace();
-                            Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
+                            Toast.makeText(getActivity(), getString(R.string.backup_import_rolled_back, e.getMessage()), Toast.LENGTH_LONG).show();
                             return;
                         }
                         // Restart so that every component reloads the imported settings

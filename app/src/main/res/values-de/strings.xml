@@ -341,4 +341,17 @@
     <string name="backup_unlock">Entsperren</string>
     <string name="backup_import_without_pairing">Gekoppelte PCs überspringen</string>
     <string name="backup_wrong_password">Falsches Passwort</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Einige Elemente können nicht importiert werden</string>
+    <string name="backup_unsupported_newer">Diese Datei wurde mit einer neueren Version der App erstellt (%1$s).</string>
+    <string name="backup_unsupported_message">Die folgenden Elemente werden von dieser Version nicht unterstützt und übersprungen. Alles andere kann importiert werden:</string>
+    <string name="backup_unsupported_setting">Einstellung: %1$s</string>
+    <string name="backup_unsupported_value">Inkompatibler Wert: %1$s</string>
+    <string name="backup_unsupported_group">Einstellungsgruppe: %1$s</string>
+    <string name="backup_unsupported_data">Datei: %1$s</string>
+    <string name="backup_unsupported_section">Abschnitt: %1$s</string>
+    <string name="backup_unsupported_pairing">Gekoppelte Computer (nicht unterstützt oder unvollständig)</string>
+    <string name="backup_import_rest">Rest importieren</string>
+    <string name="backup_import_rolled_back">Import fehlgeschlagen, die bisherigen Einstellungen wurden beibehalten: %1$s</string>
 </resources>

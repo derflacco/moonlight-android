@@ -68,4 +68,17 @@
     <string name="backup_unlock">Malŝlosi</string>
     <string name="backup_import_without_pairing">Preterlasi parigitajn komputilojn</string>
     <string name="backup_wrong_password">Malĝusta pasvorto</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Kelkaj eroj ne povas esti importitaj</string>
+    <string name="backup_unsupported_newer">Ĉi tiu dosiero estis kreita de pli nova versio de la aplikaĵo (%1$s).</string>
+    <string name="backup_unsupported_message">La jenaj eroj ne estas subtenataj de ĉi tiu versio kaj estos preterlasitaj. Ĉio alia povas esti importita:</string>
+    <string name="backup_unsupported_setting">Agordo: %1$s</string>
+    <string name="backup_unsupported_value">Nekongrua valoro: %1$s</string>
+    <string name="backup_unsupported_group">Grupo de agordoj: %1$s</string>
+    <string name="backup_unsupported_data">Dosiero: %1$s</string>
+    <string name="backup_unsupported_section">Sekcio: %1$s</string>
+    <string name="backup_unsupported_pairing">Parigitaj komputiloj (nesubtenataj aŭ nekompletaj)</string>
+    <string name="backup_import_rest">Importi la reston</string>
+    <string name="backup_import_rolled_back">Importo malsukcesis, viaj antaŭaj agordoj estis konservitaj: %1$s</string>
 </resources>

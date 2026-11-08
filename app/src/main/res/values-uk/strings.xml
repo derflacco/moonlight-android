@@ -316,4 +316,17 @@
     <string name="backup_unlock">Розблокувати</string>
     <string name="backup_import_without_pairing">Пропустити спарені ПК</string>
     <string name="backup_wrong_password">Неправильний пароль</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Деякі елементи неможливо імпортувати</string>
+    <string name="backup_unsupported_newer">Цей файл створено новішою версією застосунку (%1$s).</string>
+    <string name="backup_unsupported_message">Наведені нижче елементи не підтримуються цією версією й будуть пропущені. Усе інше можна імпортувати:</string>
+    <string name="backup_unsupported_setting">Налаштування: %1$s</string>
+    <string name="backup_unsupported_value">Несумісне значення: %1$s</string>
+    <string name="backup_unsupported_group">Група налаштувань: %1$s</string>
+    <string name="backup_unsupported_data">Файл: %1$s</string>
+    <string name="backup_unsupported_section">Розділ: %1$s</string>
+    <string name="backup_unsupported_pairing">Спарені комп\'ютери (не підтримуються або неповні)</string>
+    <string name="backup_import_rest">Імпортувати решту</string>
+    <string name="backup_import_rolled_back">Помилка імпорту, попередні налаштування збережено: %1$s</string>
 </resources>

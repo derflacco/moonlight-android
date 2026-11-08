@@ -906,4 +906,15 @@
     <string name="backup_unlock">Unlock</string>
     <string name="backup_import_without_pairing">Skip paired PCs</string>
     <string name="backup_wrong_password">Wrong password</string>
+    <string name="backup_unsupported_title">Some items can\'t be imported</string>
+    <string name="backup_unsupported_newer">This file was made by a newer version of the app (%1$s).</string>
+    <string name="backup_unsupported_message">The following items aren\'t supported by this version and will be skipped. Everything else can be imported:</string>
+    <string name="backup_unsupported_setting">Setting: %1$s</string>
+    <string name="backup_unsupported_value">Incompatible value: %1$s</string>
+    <string name="backup_unsupported_group">Settings group: %1$s</string>
+    <string name="backup_unsupported_data">File: %1$s</string>
+    <string name="backup_unsupported_section">Section: %1$s</string>
+    <string name="backup_unsupported_pairing">Paired computers (unsupported or incomplete)</string>
+    <string name="backup_import_rest">Import the rest</string>
+    <string name="backup_import_rolled_back">Import failed, your previous settings were kept: %1$s</string>
 </resources>

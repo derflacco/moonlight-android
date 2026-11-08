@@ -244,4 +244,17 @@
     <string name="backup_unlock">Buka</string>
     <string name="backup_import_without_pairing">Lewati PC yang dipasangkan</string>
     <string name="backup_wrong_password">Kata sandi salah</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Beberapa item tidak dapat diimpor</string>
+    <string name="backup_unsupported_newer">File ini dibuat oleh versi aplikasi yang lebih baru (%1$s).</string>
+    <string name="backup_unsupported_message">Item berikut tidak didukung oleh versi ini dan akan dilewati. Semua yang lain dapat diimpor:</string>
+    <string name="backup_unsupported_setting">Pengaturan: %1$s</string>
+    <string name="backup_unsupported_value">Nilai tidak kompatibel: %1$s</string>
+    <string name="backup_unsupported_group">Grup pengaturan: %1$s</string>
+    <string name="backup_unsupported_data">File: %1$s</string>
+    <string name="backup_unsupported_section">Bagian: %1$s</string>
+    <string name="backup_unsupported_pairing">Komputer yang dipasangkan (tidak didukung atau tidak lengkap)</string>
+    <string name="backup_import_rest">Impor sisanya</string>
+    <string name="backup_import_rolled_back">Impor gagal, pengaturan sebelumnya tetap dipertahankan: %1$s</string>
 </resources>

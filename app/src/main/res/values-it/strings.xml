@@ -322,4 +322,17 @@
     <string name="backup_unlock">Sblocca</string>
     <string name="backup_import_without_pairing">Salta i PC associati</string>
     <string name="backup_wrong_password">Password errata</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Alcuni elementi non possono essere importati</string>
+    <string name="backup_unsupported_newer">Questo file è stato creato da una versione più recente dell\'app (%1$s).</string>
+    <string name="backup_unsupported_message">I seguenti elementi non sono supportati da questa versione e verranno saltati. Tutto il resto può essere importato:</string>
+    <string name="backup_unsupported_setting">Impostazione: %1$s</string>
+    <string name="backup_unsupported_value">Valore incompatibile: %1$s</string>
+    <string name="backup_unsupported_group">Gruppo di impostazioni: %1$s</string>
+    <string name="backup_unsupported_data">File: %1$s</string>
+    <string name="backup_unsupported_section">Sezione: %1$s</string>
+    <string name="backup_unsupported_pairing">Computer associati (non supportati o incompleti)</string>
+    <string name="backup_import_rest">Importa il resto</string>
+    <string name="backup_import_rolled_back">Importazione non riuscita, le impostazioni precedenti sono state mantenute: %1$s</string>
 </resources>

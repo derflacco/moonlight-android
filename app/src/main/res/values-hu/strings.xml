@@ -292,4 +292,17 @@
     <string name="backup_unlock">Feloldás</string>
     <string name="backup_import_without_pairing">Párosított gépek kihagyása</string>
     <string name="backup_wrong_password">Hibás jelszó</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Néhány elem nem importálható</string>
+    <string name="backup_unsupported_newer">Ezt a fájlt az alkalmazás egy újabb verziója hozta létre (%1$s).</string>
+    <string name="backup_unsupported_message">Az alábbi elemeket ez a verzió nem támogatja, ezért kimaradnak. Minden más importálható:</string>
+    <string name="backup_unsupported_setting">Beállítás: %1$s</string>
+    <string name="backup_unsupported_value">Nem kompatibilis érték: %1$s</string>
+    <string name="backup_unsupported_group">Beállításcsoport: %1$s</string>
+    <string name="backup_unsupported_data">Fájl: %1$s</string>
+    <string name="backup_unsupported_section">Szakasz: %1$s</string>
+    <string name="backup_unsupported_pairing">Párosított számítógépek (nem támogatott vagy hiányos)</string>
+    <string name="backup_import_rest">A többi importálása</string>
+    <string name="backup_import_rolled_back">Az importálás sikertelen, a korábbi beállítások megmaradtak: %1$s</string>
 </resources>

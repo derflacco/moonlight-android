@@ -306,4 +306,17 @@
     <string name="backup_unlock">Kilidi aç</string>
     <string name="backup_import_without_pairing">Eşleştirilmiş bilgisayarları atla</string>
     <string name="backup_wrong_password">Yanlış parola</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Bazı öğeler içe aktarılamıyor</string>
+    <string name="backup_unsupported_newer">Bu dosya uygulamanın daha yeni bir sürümüyle oluşturuldu (%1$s).</string>
+    <string name="backup_unsupported_message">Aşağıdaki öğeler bu sürümde desteklenmiyor ve atlanacak. Geri kalan her şey içe aktarılabilir:</string>
+    <string name="backup_unsupported_setting">Ayar: %1$s</string>
+    <string name="backup_unsupported_value">Uyumsuz değer: %1$s</string>
+    <string name="backup_unsupported_group">Ayar grubu: %1$s</string>
+    <string name="backup_unsupported_data">Dosya: %1$s</string>
+    <string name="backup_unsupported_section">Bölüm: %1$s</string>
+    <string name="backup_unsupported_pairing">Eşleştirilmiş bilgisayarlar (desteklenmiyor veya eksik)</string>
+    <string name="backup_import_rest">Kalanını içe aktar</string>
+    <string name="backup_import_rolled_back">İçe aktarma başarısız, önceki ayarlarınız korundu: %1$s</string>
 </resources>

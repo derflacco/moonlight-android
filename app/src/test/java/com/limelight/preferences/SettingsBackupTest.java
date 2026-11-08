@@ -47,9 +47,13 @@ public class SettingsBackupTest {
         defaults.edit()
                 .putBoolean("checkbox_show_onscreen_controls", true)
                 .putInt("seekbar_osc_opacity", 42)
+                .putString("list_resolution", "1920x1080")
+                .commit();
+        // Every value type, in a known settings group
+        SharedPreferences group = context.getSharedPreferences("HiddenApps", Context.MODE_PRIVATE);
+        group.edit()
                 .putLong("some_long", 1234567890123L)
                 .putFloat("some_float", 1.5f)
-                .putString("list_resolution", "1920x1080")
                 .putStringSet("some_set", new HashSet<>(Arrays.asList("a", "b")))
                 .commit();
         context.getSharedPreferences("OSC_3", Context.MODE_PRIVATE).edit().putString("6", "{\"v\":2}").commit();
@@ -75,6 +79,7 @@ public class SettingsBackupTest {
 
         // Wipe everything, add junk that the import must remove
         defaults.edit().clear().putBoolean("junk", true).commit();
+        group.edit().clear().commit();
         context.getSharedPreferences("OSC_3", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences("OSC_Keyboard", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences(GameMenu.PREF_NAME, Context.MODE_PRIVATE).edit().clear().commit();
@@ -88,14 +93,14 @@ public class SettingsBackupTest {
         JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(file.toByteArray()));
         assertTrue(SettingsBackup.hasPairing(backup));
         assertFalse(SettingsBackup.isPairingEncrypted(backup));
-        SettingsBackup.restore(context, backup, SettingsBackup.openPairing(backup, null));
+        SettingsBackup.restore(context, backup, SettingsBackup.openPairing(backup, null), SettingsBackup.analyze(context, backup));
 
         assertTrue(defaults.getBoolean("checkbox_show_onscreen_controls", false));
         assertEquals(42, defaults.getInt("seekbar_osc_opacity", 0));
-        assertEquals(1234567890123L, defaults.getLong("some_long", 0));
-        assertEquals(1.5f, defaults.getFloat("some_float", 0), 0.0001f);
+        assertEquals(1234567890123L, group.getLong("some_long", 0));
+        assertEquals(1.5f, group.getFloat("some_float", 0), 0.0001f);
         assertEquals("1920x1080", defaults.getString("list_resolution", null));
-        assertEquals(new HashSet<>(Arrays.asList("a", "b")), defaults.getStringSet("some_set", null));
+        assertEquals(new HashSet<>(Arrays.asList("a", "b")), group.getStringSet("some_set", null));
         assertFalse(defaults.contains("junk"));
         assertEquals("{\"v\":2}", context.getSharedPreferences("OSC_3", Context.MODE_PRIVATE).getString("6", null));
         assertEquals("{\"LEFT\":1}", context.getSharedPreferences("OSC_Keyboard", Context.MODE_PRIVATE).getString("key_29", null));
@@ -123,7 +128,8 @@ public class SettingsBackupTest {
                 .put("prefs", new JSONObject().put("default", new JSONObject()
                         .put("list_fps", new JSONObject().put("t", "s").put("v", "120"))))
                 .put("files", new JSONObject().put("profiles/profiles.json", "{}"));
-        SettingsBackup.restore(context, SettingsBackup.read(new ByteArrayInputStream(v1.toString().getBytes(StandardCharsets.UTF_8))), null);
+        JSONObject v1Backup = SettingsBackup.read(new ByteArrayInputStream(v1.toString().getBytes(StandardCharsets.UTF_8)));
+        SettingsBackup.restore(context, v1Backup, null, SettingsBackup.analyze(context, v1Backup));
         assertEquals("120", PreferenceManager.getDefaultSharedPreferences(context).getString("list_fps", null));
         assertEquals("{}", new String(Files.readAllBytes(new File(context.getFilesDir(), "profiles/profiles.json").toPath()), StandardCharsets.UTF_8));
     }
@@ -131,6 +137,7 @@ public class SettingsBackupTest {
     private static void writePairing(Context context, String key) throws Exception {
         File dataDir = context.getFilesDir().getParentFile();
         writeFile(new File(dataDir, "files/client.key"), key.getBytes(StandardCharsets.UTF_8));
+        writeFile(new File(dataDir, "files/client.crt"), ("crt-" + key).getBytes(StandardCharsets.UTF_8));
         writeFile(new File(dataDir, "databases/computers4.db"), ("db-" + key).getBytes(StandardCharsets.UTF_8));
     }
 
@@ -149,7 +156,7 @@ public class SettingsBackupTest {
                 "exported".getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP)));
 
         writePairing(context, "local");
-        SettingsBackup.restore(context, backup, null);
+        SettingsBackup.restore(context, backup, null, SettingsBackup.analyze(context, backup));
         assertEquals("local", readPairingKey(context));
     }
 
@@ -175,7 +182,7 @@ public class SettingsBackupTest {
         }
 
         writePairing(context, "local");
-        SettingsBackup.restore(context, backup, SettingsBackup.openPairing(backup, "hunter2"));
+        SettingsBackup.restore(context, backup, SettingsBackup.openPairing(backup, "hunter2"), SettingsBackup.analyze(context, backup));
         assertEquals("secret-key", readPairingKey(context));
     }
 
@@ -184,9 +191,127 @@ public class SettingsBackupTest {
         SettingsBackup.read(new ByteArrayInputStream("{\"LEFT\":1}".getBytes(StandardCharsets.UTF_8)));
     }
 
-    @Test(expected = JSONException.class)
-    public void rejectsNewerFormat() throws Exception {
-        JSONObject newer = new JSONObject().put("format", SettingsBackup.FORMAT).put("version", 99).put("prefs", new JSONObject());
-        SettingsBackup.read(new ByteArrayInputStream(newer.toString().getBytes(StandardCharsets.UTF_8)));
+    private static JSONObject typed(String type, Object value) throws JSONException {
+        return new JSONObject().put("t", type).put("v", value);
+    }
+
+    @Test
+    public void newerVersionOnlyImportsKnownSettings() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        SharedPreferences defaults = PreferenceManager.getDefaultSharedPreferences(context);
+        defaults.edit().clear().putString("list_fps", "60").commit();
+
+        JSONObject newer = new JSONObject()
+                .put("format", SettingsBackup.FORMAT).put("version", 99).put("appVersion", "9.9")
+                .put("future_section", new JSONObject())
+                .put("prefs", new JSONObject()
+                        .put("default", new JSONObject()
+                                .put("list_fps", typed("s", "120"))
+                                .put("checkbox_show_onscreen_controls", typed("b", true))
+                                .put("future_setting", typed("b", true))
+                                .put("seekbar_bitrate_kbps", typed("s", "not an int"))
+                                .put("future_typed_value", typed("x", 1))
+                                .put("list_resolution", new JSONObject().put("t", "s")))
+                        .put("FutureFeature", new JSONObject().put("a", typed("s", "b")))
+                        .put("OSC_Keyboard", new JSONObject().put("key_29", typed("s", "{}"))))
+                .put("data", new JSONObject()
+                        .put("files/profiles/profiles.json", android.util.Base64.encodeToString(
+                                "{}".getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+                        .put("files/future.bin", "AAAA"));
+
+        JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(newer.toString().getBytes(StandardCharsets.UTF_8)));
+        SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
+        assertTrue(plan.isFromNewerVersion());
+        assertEquals("9.9", plan.appVersion);
+        String report = String.join("\n", plan.unsupported);
+        assertTrue(report, report.contains("future_section"));
+        assertTrue(report, report.contains("future_setting"));
+        assertTrue(report, report.contains("seekbar_bitrate_kbps"));
+        assertTrue(report, report.contains("list_resolution"));
+        assertTrue(report, report.contains("FutureFeature"));
+        assertTrue(report, report.contains("files/future.bin"));
+        assertFalse(report, report.contains("list_fps"));
+        assertEquals(report, 7, plan.unsupported.size());
+
+        SettingsBackup.restore(context, backup, null, plan);
+        assertEquals("120", defaults.getString("list_fps", null));
+        assertTrue(defaults.getBoolean("checkbox_show_onscreen_controls", false));
+        assertFalse(defaults.contains("future_setting"));
+        assertFalse(defaults.contains("seekbar_bitrate_kbps"));
+        assertFalse(defaults.contains("list_resolution"));
+        assertTrue(context.getSharedPreferences("FutureFeature", Context.MODE_PRIVATE).getAll().isEmpty());
+        assertEquals("{}", context.getSharedPreferences("OSC_Keyboard", Context.MODE_PRIVATE).getString("key_29", null));
+        assertFalse(new File(context.getFilesDir(), "future.bin").exists());
+    }
+
+    @Test
+    public void failedImportRestoresThePreviousSettings() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        SharedPreferences defaults = PreferenceManager.getDefaultSharedPreferences(context);
+        defaults.edit().clear().putString("list_fps", "60").commit();
+        writePairing(context, "original");
+
+        JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(new JSONObject()
+                .put("format", SettingsBackup.FORMAT).put("version", 3)
+                .put("prefs", new JSONObject().put("default", new JSONObject().put("list_fps", typed("s", "120"))))
+                .toString().getBytes(StandardCharsets.UTF_8)));
+        // Corrupt paired computers data makes the import fail after the settings were written
+        JSONObject brokenPairing = new JSONObject()
+                .put("files/client.crt", "not base64 !!!")
+                .put("files/client.key", "not base64 !!!");
+        try {
+            SettingsBackup.restore(context, backup, brokenPairing, SettingsBackup.analyze(context, backup));
+            org.junit.Assert.fail("The import should have failed");
+        } catch (java.io.IOException expected) {
+        }
+        assertEquals("60", defaults.getString("list_fps", null));
+        assertEquals("original", readPairingKey(context));
+    }
+
+    /** Every setting key read or written by the code must be known by the import. */
+    @Test
+    public void everySettingUsedByTheCodeIsKnown() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        java.util.Set<String> known = SettingsBackup.knownSettings(context);
+
+        java.util.Map<String, java.util.Set<String>> constants = new java.util.HashMap<>();
+        java.util.Map<File, String> sources = new java.util.HashMap<>();
+        try (java.util.stream.Stream<java.nio.file.Path> files = Files.walk(new File("src/main/java").toPath())) {
+            for (java.nio.file.Path path : (Iterable<java.nio.file.Path>) files::iterator) {
+                if (path.toString().endsWith(".java")) {
+                    sources.put(path.toFile(), new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
+                }
+            }
+        }
+        assertFalse("No sources found", sources.isEmpty());
+        java.util.regex.Pattern constant = java.util.regex.Pattern.compile(
+                "static\\s+final\\s+String\\s+([A-Z0-9_]+)\\s*=\\s*\"([^\"]*)\"");
+        for (String source : sources.values()) {
+            java.util.regex.Matcher m = constant.matcher(source);
+            while (m.find()) {
+                constants.computeIfAbsent(m.group(1), k -> new HashSet<>()).add(m.group(2));
+            }
+        }
+        java.util.regex.Pattern access = java.util.regex.Pattern.compile(
+                "\\.(?:get|put)(?:Boolean|Int|String|Float|Long|StringSet)\\(\\s*(?:\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_.]*))\\s*,");
+        java.util.Set<String> missing = new java.util.TreeSet<>();
+        for (java.util.Map.Entry<File, String> source : sources.entrySet()) {
+            java.util.regex.Matcher m = access.matcher(source.getValue());
+            while (m.find()) {
+                java.util.Set<String> keys = new HashSet<>();
+                if (m.group(1) != null) {
+                    keys.add(m.group(1));
+                } else {
+                    String name = m.group(2).substring(m.group(2).lastIndexOf('.') + 1);
+                    keys.addAll(constants.getOrDefault(name, java.util.Collections.emptySet()));
+                }
+                for (String key : keys) {
+                    if (!known.contains(key)) {
+                        missing.add(key + " (" + source.getKey().getName() + ")");
+                    }
+                }
+            }
+        }
+        assertTrue("Settings unknown to SettingsBackup, add them to CODE_ONLY_KEYS: " + missing, missing.isEmpty());
     }
 }

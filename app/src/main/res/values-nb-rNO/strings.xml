@@ -241,4 +241,17 @@
     <string name="backup_unlock">Lås opp</string>
     <string name="backup_import_without_pairing">Hopp over parede PC-er</string>
     <string name="backup_wrong_password">Feil passord</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Noen elementer kan ikke importeres</string>
+    <string name="backup_unsupported_newer">Denne filen ble laget av en nyere versjon av appen (%1$s).</string>
+    <string name="backup_unsupported_message">Følgende elementer støttes ikke av denne versjonen og hoppes over. Alt annet kan importeres:</string>
+    <string name="backup_unsupported_setting">Innstilling: %1$s</string>
+    <string name="backup_unsupported_value">Inkompatibel verdi: %1$s</string>
+    <string name="backup_unsupported_group">Innstillingsgruppe: %1$s</string>
+    <string name="backup_unsupported_data">Fil: %1$s</string>
+    <string name="backup_unsupported_section">Seksjon: %1$s</string>
+    <string name="backup_unsupported_pairing">Parede datamaskiner (støttes ikke eller ufullstendige)</string>
+    <string name="backup_import_rest">Importer resten</string>
+    <string name="backup_import_rolled_back">Importen mislyktes, de tidligere innstillingene er beholdt: %1$s</string>
 </resources>

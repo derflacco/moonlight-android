@@ -256,4 +256,17 @@
     <string name="backup_unlock">Ontgrendelen</string>
     <string name="backup_import_without_pairing">Gekoppelde pc\'s overslaan</string>
     <string name="backup_wrong_password">Onjuist wachtwoord</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Sommige items kunnen niet worden geïmporteerd</string>
+    <string name="backup_unsupported_newer">Dit bestand is gemaakt met een nieuwere versie van de app (%1$s).</string>
+    <string name="backup_unsupported_message">De volgende items worden niet ondersteund door deze versie en worden overgeslagen. Al het andere kan worden geïmporteerd:</string>
+    <string name="backup_unsupported_setting">Instelling: %1$s</string>
+    <string name="backup_unsupported_value">Incompatibele waarde: %1$s</string>
+    <string name="backup_unsupported_group">Instellingengroep: %1$s</string>
+    <string name="backup_unsupported_data">Bestand: %1$s</string>
+    <string name="backup_unsupported_section">Sectie: %1$s</string>
+    <string name="backup_unsupported_pairing">Gekoppelde computers (niet ondersteund of onvolledig)</string>
+    <string name="backup_import_rest">De rest importeren</string>
+    <string name="backup_import_rolled_back">Importeren mislukt, je vorige instellingen zijn behouden: %1$s</string>
 </resources>
