@@ -77,6 +77,12 @@
                 android:text="@string/overlay_editor_style_short" />
 
             <TextView
+                android:id="@+id/oe_global_opacity"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_opacity"
+                android:text="@string/overlay_editor_opacity" />
+
+            <TextView
                 android:id="@+id/oe_more"
                 style="@style/OverlayEditorAction"
                 android:drawableTop="@drawable/ic_oe_more"

@@ -19,7 +19,6 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.input.overlay.ButtonStyle;
 import com.limelight.binding.input.overlay.GamepadStyleRenderer;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -64,7 +63,7 @@ public class DigitalPad extends VirtualControllerElement {
 
         //虚拟手柄皮肤 yuzu
         if(style == ButtonStyle.CLASSIC) {
-            int oscOpacity=PreferenceConfiguration.readPreferences(getContext()).oscOpacity;
+            int overlayAlpha = getOverlayAlpha();
 
             paint.setColor(isPressed() ? pressedColor:getDefaultColor());
             rect.left = rect.top = paint.getStrokeWidth();
@@ -74,14 +73,14 @@ public class DigitalPad extends VirtualControllerElement {
             if (direction == DIGITAL_PAD_DIRECTION_NO_DIRECTION) {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad);
                 d.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                d.setAlpha((int) (oscOpacity*2.55));
+                d.setAlpha(overlayAlpha);
                 d.draw(canvas);
             }
 
             if (direction == DIGITAL_PAD_DIRECTION_UP) {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 d.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                d.setAlpha((int) (oscOpacity*2.55));
+                d.setAlpha(overlayAlpha);
                 d.draw(canvas);
             }
 
@@ -89,7 +88,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 Drawable newD=rotateDrawable(d,180);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
@@ -97,7 +96,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 Drawable newD=rotateDrawable(d,270);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
@@ -105,7 +104,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 Drawable newD=rotateDrawable(d,90);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
             //right up
@@ -113,14 +112,14 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 Drawable newD=rotateDrawable(d,90);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
             if((direction & DIGITAL_PAD_DIRECTION_LEFT) > 0 && (direction & DIGITAL_PAD_DIRECTION_UP) > 0){
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 d.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                d.setAlpha((int) (oscOpacity*2.55));
+                d.setAlpha(overlayAlpha);
                 d.draw(canvas);
             }
 
@@ -128,7 +127,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 Drawable newD=rotateDrawable(d,180);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
@@ -136,7 +135,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 Drawable newD=rotateDrawable(d,270);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 

@@ -26,4 +26,7 @@ public interface EditableOverlay {
 
     /** Rebuilds the overlay from the defaults and the active slot. */
     void reloadLayout();
+
+    /** Sets the overlay opacity (0..100 %), applied on top of each element's own opacity. */
+    void setOpacity(int opacity);
 }

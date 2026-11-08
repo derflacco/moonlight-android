@@ -335,6 +335,65 @@ public class OverlayEditorUiTest {
         shot(activity, "08_style_changed_then_undo");
     }
 
+    private static int overlayAlpha(EditableElement element) throws Exception {
+        java.lang.reflect.Field field = VirtualControllerElement.class.getDeclaredField("normalColor");
+        field.setAccessible(true);
+        return ((int) field.get(element)) >>> 24;
+    }
+
+    @Test
+    public void quickOpacitySliderAppliesLiveAndSaves() throws Exception {
+        Activity activity = Robolectric.buildActivity(InputOverlayEditorActivity.class).setup().visible().get();
+        idle();
+        EditableElement a = gamepadElement(activity, VirtualControllerElement.EID_A);
+
+        activity.findViewById(R.id.oe_global_opacity).performClick();
+        idle();
+        android.widget.PopupWindow popup = shadowOf((android.app.Application) ApplicationProvider.getApplicationContext()).getLatestPopupWindow();
+        assertNotNull(popup);
+        assertTrue(popup.isShowing());
+        List<View> sliders = new ArrayList<>();
+        findSeekBars(popup.getContentView(), sliders);
+        assertEquals(1, sliders.size());
+        android.widget.SeekBar slider = (android.widget.SeekBar) sliders.get(0);
+
+        Context context = ApplicationProvider.getApplicationContext();
+        int before = com.limelight.preferences.PreferenceConfiguration.readPreferences(context).oscOpacity;
+        assertEquals(before, slider.getProgress());
+
+        // Applied live while dragging, not saved yet
+        slider.setProgress(30);
+        idle();
+        assertEquals(30 * 255 / 100, overlayAlpha(a));
+        assertEquals(before, com.limelight.preferences.PreferenceConfiguration.readPreferences(context).oscOpacity);
+        shot(activity, "09_quick_opacity_30");
+
+        // Saved when the popup closes
+        popup.dismiss();
+        idle();
+        assertEquals(30, com.limelight.preferences.PreferenceConfiguration.readPreferences(context).oscOpacity);
+
+        // The Style dialog shows the same value
+        activity.findViewById(R.id.oe_options).performClick();
+        idle();
+        android.app.AlertDialog dialog = (android.app.AlertDialog) org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+        sliders.clear();
+        findSeekBars(dialog.getWindow().getDecorView(), sliders);
+        assertEquals(30, ((android.widget.SeekBar) sliders.get(0)).getProgress());
+    }
+
+    private static void findSeekBars(View view, List<View> out) {
+        if (view instanceof android.widget.SeekBar) {
+            out.add(view);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                findSeekBars(group.getChildAt(i), out);
+            }
+        }
+    }
+
     @Test
     public void styles() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();

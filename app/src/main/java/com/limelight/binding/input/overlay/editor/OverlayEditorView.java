@@ -20,6 +20,7 @@ import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.PopupWindow;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -159,6 +160,7 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
         redoButton.setOnClickListener(v -> redo());
         addButton.setOnClickListener(v -> showAddDialog());
         findViewById(R.id.oe_options).setOnClickListener(v -> showOptionsDialog());
+        findViewById(R.id.oe_global_opacity).setOnClickListener(this::showGlobalOpacityPopup);
         findViewById(R.id.oe_more).setOnClickListener(this::showMoreMenu);
 
         panelVisible.setOnClickListener(v -> editSelected(e -> e.getEditState().shown = !e.getEditState().shown));
@@ -933,6 +935,69 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
     // ------------------------------------------------------------------------------------
     // Options (style, opacity, ...)
     // ------------------------------------------------------------------------------------
+
+    /**
+     * Quick slider for the overlay opacity (all the controls of both overlays), applied live
+     * while dragging and saved when the popup is dismissed.
+     */
+    private void showGlobalOpacityPopup(View anchor) {
+        Context context = getContext();
+        final int initial = PreferenceConfiguration.readPreferences(context).oscOpacity;
+
+        LinearLayout content = new LinearLayout(context);
+        content.setOrientation(LinearLayout.HORIZONTAL);
+        content.setGravity(Gravity.CENTER_VERTICAL);
+        content.setBackgroundResource(R.drawable.oe_bar_bg);
+        content.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        TextView title = new TextView(context);
+        title.setText(R.string.overlay_editor_global_opacity);
+        title.setTextColor(0xFFFFFFFF);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        content.addView(title);
+
+        final SeekBar slider = new SeekBar(context);
+        slider.setMax(100);
+        slider.setProgress(initial);
+        content.addView(slider, new LinearLayout.LayoutParams(dp(220), ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        final TextView value = new TextView(context);
+        value.setTextColor(0xFFFFFFFF);
+        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        value.setGravity(Gravity.END);
+        value.setMinWidth(dp(44));
+        value.setText(initial + "%");
+        content.addView(value);
+
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                value.setText(progress + "%");
+                for (EditableOverlay overlay : overlays) {
+                    overlay.setOpacity(progress);
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+
+        PopupWindow popup = new PopupWindow(content, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setOutsideTouchable(true);
+        popup.setElevation(dp(6));
+        popup.setOnDismissListener(() -> {
+            if (slider.getProgress() != initial) {
+                prefs.edit().putInt(OverlayEditorSettings.OPACITY, slider.getProgress()).apply();
+            }
+        });
+        popup.showAsDropDown(anchor, 0, dp(4), Gravity.CENTER_HORIZONTAL);
+    }
 
     private void showOptionsDialog() {
         Context context = getContext();
