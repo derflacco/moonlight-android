@@ -48,7 +48,9 @@
     </style>
 
     <style name="OverlayEditorLabel">
-        <item name="android:layout_width">64dp</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:minWidth">64dp</item>
+        <item name="android:paddingRight">8dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textColor">#B3FFFFFF</item>
         <item name="android:textSize">12sp</item>

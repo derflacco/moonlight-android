@@ -180,6 +180,8 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
         setupNudge(R.id.oe_nudge_up, 0, -1);
         setupNudge(R.id.oe_nudge_down, 0, 1);
 
+        alignSliderLabels();
+
         sizeBar.setMax(SIZE_MAX_PERCENT - SIZE_MIN_PERCENT);
         widthBar.setMax(SIZE_MAX_PERCENT - SIZE_MIN_PERCENT);
         heightBar.setMax(SIZE_MAX_PERCENT - SIZE_MIN_PERCENT);
@@ -188,6 +190,22 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
         widthBar.setOnSeekBarChangeListener(new SliderListener(SliderListener.WIDTH));
         heightBar.setOnSeekBarChangeListener(new SliderListener(SliderListener.HEIGHT));
         opacityBar.setOnSeekBarChangeListener(new SliderListener(SliderListener.OPACITY));
+    }
+
+    /** Gives every slider label the width of the longest one, so that the sliders line up in any language. */
+    private void alignSliderLabels() {
+        List<TextView> labels = new ArrayList<>();
+        for (View row : new View[]{rowSize, rowWidth, rowHeight, (View) opacityBar.getParent()}) {
+            labels.add((TextView) ((ViewGroup) row).getChildAt(0));
+        }
+        int width = 0;
+        for (TextView label : labels) {
+            label.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED);
+            width = Math.max(width, label.getMeasuredWidth());
+        }
+        for (TextView label : labels) {
+            label.setMinWidth(width);
+        }
     }
 
     private void start(EditableOverlay initial) {
