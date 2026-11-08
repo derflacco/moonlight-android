@@ -58,10 +58,11 @@ import javax.crypto.spec.SecretKeySpec;
  * Only device specific caches are left out. The file uses logical names, so it can be
  * imported in another build of the app (different application id / signature).
  *
- * <p>Importing only applies what this version of the app knows: {@link #analyze} lists the
- * settings, files and sections that are unknown (e.g. made by a newer version) or that have
- * an incompatible value, and {@link #restore} skips them. If the import fails midway, the
- * previous configuration is put back.</p>
+ * <p>Importing only applies the settings of the settings screen (read from
+ * res/xml/preferences.xml, with the value type of each one) and the known data groups:
+ * {@link #analyze} lists everything else (settings of a newer version, internal state,
+ * incompatible values, unknown files and sections) and {@link #restore} skips it. If the
+ * import fails midway, the previous configuration is put back.</p>
  */
 public final class SettingsBackup {
     public static final String FORMAT = "artemis-settings";
@@ -74,32 +75,16 @@ public final class SettingsBackup {
     private static final Set<String> EXCLUDED_PREFS = new HashSet<>(Arrays.asList(
             "GlPreferences", "DecoderTombstone"));
 
-    /** SharedPreferences files this version knows, besides the default one. */
+    /**
+     * Data stored outside of the settings screen that backups carry, besides the settings
+     * (each one is a SharedPreferences file).
+     */
     private static final Set<String> KNOWN_PREF_FILES = new HashSet<>(Arrays.asList(
             // Gamepad / keyboard overlay layouts
             "OSC", "OSC_2", "OSC_3", "OSC_4", "OSC_5",
             "OSC_Keyboard", "OSC_Keyboard_2", "OSC_Keyboard_3", "OSC_Keyboard_4", "OSC_Keyboard_5",
             // Special keys, hidden apps
             "specialPrefs", "HiddenApps"));
-
-    /**
-     * Settings stored in the default SharedPreferences that are not declared in
-     * res/xml/preferences.xml (internal state, values migrated from older versions...).
-     * Keep in sync with the code: SettingsBackupTest checks that every key read or written
-     * by the app is known.
-     */
-    private static final Set<String> CODE_ONLY_KEYS = new HashSet<>(Arrays.asList(
-            "ArtemisStreaming", "CrashCount", "LastNotifiedCrashCount",
-            "OSC", "special_key",
-            "checkbox_51_surround", "checkbox_disable_frame_drop", "checkbox_enforce_refresh_rate",
-            "checkbox_stretch_video", "checkbox_touchscreen_trackpad",
-            "list_resolution_fps", "seekbar_bitrate",
-            "number_pan_offset_x", "number_pan_offset_y", "number_zoom_scale",
-            "performance_log", "pref_cpu_warmup_enable",
-            "pref_hdr_enable", "pref_hdr_pipeline_enable", "pref_video_hdr_enable",
-            "pref_low_latency_frame_balance", "runtimeOutputDequeueTimeoutCustomEnabled",
-            // Not settings (bundle / codec / fragment keys), listed so that the code scan passes
-            "key", "low-latency", "android.content.extra.IS_SENSITIVE", "Fingerprint", "Renderer"));
 
     /** Top level sections of a backup file this version understands. */
     private static final Set<String> KNOWN_SECTIONS = new HashSet<>(Arrays.asList(
@@ -235,11 +220,12 @@ public final class SettingsBackup {
         }
     }
 
-    /** Every setting key of the default SharedPreferences this version knows. */
-    static Set<String> knownSettings(Context context) {
-        Set<String> keys = new HashSet<>(declaredSettings(context).keySet());
-        keys.addAll(CODE_ONLY_KEYS);
-        return keys;
+    /**
+     * The settings an import can apply: the ones of the settings screen. Anything else found
+     * in a backup (settings of a newer version, internal state...) is reported and skipped.
+     */
+    static Map<String, String> supportedSettings(Context context) {
+        return declaredSettings(context);
     }
 
     // ------------------------------------------------------------------------------------
@@ -498,11 +484,8 @@ public final class SettingsBackup {
             }
         }
 
-        // Settings
-        Set<String> localNames = localPrefs(context);
-        Map<String, String> declared = declaredSettings(context);
-        Set<String> known = new HashSet<>(declared.keySet());
-        known.addAll(CODE_ONLY_KEYS);
+        // Settings: only the ones of the settings screen, and the known data groups
+        Map<String, String> supported = supportedSettings(context);
 
         JSONObject prefs = backup.optJSONObject("prefs");
         Iterator<String> names = prefs.keys();
@@ -512,8 +495,7 @@ public final class SettingsBackup {
                 continue;
             }
             JSONObject values = prefs.optJSONObject(name);
-            if (values == null || (!DEFAULT_PREFS.equals(name) && !KNOWN_PREF_FILES.contains(name)
-                    && !localNames.contains(name))) {
+            if (values == null || (!DEFAULT_PREFS.equals(name) && !KNOWN_PREF_FILES.contains(name))) {
                 unsupported.add(context.getString(R.string.backup_unsupported_group, name));
                 continue;
             }
@@ -524,7 +506,7 @@ public final class SettingsBackup {
                 String key = keys.next();
                 String label = DEFAULT_PREFS.equals(name) ? key : name + " / " + key;
                 JSONObject typed = values.optJSONObject(key);
-                if (DEFAULT_PREFS.equals(name) && !known.contains(key) && !local.containsKey(key)) {
+                if (DEFAULT_PREFS.equals(name) && !supported.containsKey(key)) {
                     unsupported.add(context.getString(R.string.backup_unsupported_setting, label));
                     continue;
                 }
@@ -533,8 +515,8 @@ public final class SettingsBackup {
                     continue;
                 }
                 // The value must have the type this version stores for that setting
-                String expected = local.containsKey(key) ? typeOf(local.get(key))
-                        : DEFAULT_PREFS.equals(name) ? declared.get(key) : null;
+                String expected = DEFAULT_PREFS.equals(name) ? supported.get(key)
+                        : local.containsKey(key) ? typeOf(local.get(key)) : null;
                 if (expected != null && !expected.equals(typed.optString("t"))) {
                     unsupported.add(context.getString(R.string.backup_unsupported_value, label));
                     continue;

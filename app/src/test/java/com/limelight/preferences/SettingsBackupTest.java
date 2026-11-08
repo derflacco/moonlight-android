@@ -29,6 +29,7 @@ import java.util.HashSet;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 @Config(sdk = {33}, shadows = {com.limelight.shadows.ShadowMoonBridge.class, com.limelight.shadows.ShadowGameManager.class})
@@ -65,7 +66,7 @@ public class SettingsBackupTest {
             out.write("{\"profiles\":[]}".getBytes(StandardCharsets.UTF_8));
         }
 
-        // Any other preferences file is included automatically, caches are not
+        // Unknown settings groups are exported but not imported, caches are not even exported
         context.getSharedPreferences("SomeFutureFeature", Context.MODE_PRIVATE).edit().putString("x", "y").commit();
         context.getSharedPreferences("GlPreferences", Context.MODE_PRIVATE).edit().putString("gl", "cache").commit();
         // Paired PCs: pairing identity and computer database
@@ -106,7 +107,7 @@ public class SettingsBackupTest {
         assertEquals("{\"LEFT\":1}", context.getSharedPreferences("OSC_Keyboard", Context.MODE_PRIVATE).getString("key_29", null));
         assertEquals("[]", context.getSharedPreferences(GameMenu.PREF_NAME, Context.MODE_PRIVATE).getString(GameMenu.KEY_NAME, null));
         assertEquals("{\"profiles\":[]}", new String(Files.readAllBytes(profiles.toPath()), StandardCharsets.UTF_8));
-        assertEquals("y", context.getSharedPreferences("SomeFutureFeature", Context.MODE_PRIVATE).getString("x", null));
+        assertNull(context.getSharedPreferences("SomeFutureFeature", Context.MODE_PRIVATE).getString("x", null));
         assertEquals("other device", context.getSharedPreferences("GlPreferences", Context.MODE_PRIVATE).getString("gl", null));
         assertArrayEquals(new byte[]{0, 1, 2, (byte) 0xFF}, Files.readAllBytes(new File(dataDir, "files/client.key").toPath()));
         assertEquals("CERT", new String(Files.readAllBytes(new File(dataDir, "files/client.crt").toPath()), StandardCharsets.UTF_8));
@@ -268,50 +269,47 @@ public class SettingsBackupTest {
         assertEquals("original", readPairingKey(context));
     }
 
-    /** Every setting key read or written by the code must be known by the import. */
+    /** Every setting of the settings screen survives an export / import, internal state doesn't. */
     @Test
-    public void everySettingUsedByTheCodeIsKnown() throws Exception {
+    public void everySettingOfTheSettingsScreenIsImported() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
-        java.util.Set<String> known = SettingsBackup.knownSettings(context);
+        SharedPreferences defaults = PreferenceManager.getDefaultSharedPreferences(context);
+        java.util.Map<String, String> screen = SettingsBackup.supportedSettings(context);
+        assertTrue("Settings screen not read", screen.size() > 100);
 
-        java.util.Map<String, java.util.Set<String>> constants = new java.util.HashMap<>();
-        java.util.Map<File, String> sources = new java.util.HashMap<>();
-        try (java.util.stream.Stream<java.nio.file.Path> files = Files.walk(new File("src/main/java").toPath())) {
-            for (java.nio.file.Path path : (Iterable<java.nio.file.Path>) files::iterator) {
-                if (path.toString().endsWith(".java")) {
-                    sources.put(path.toFile(), new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
-                }
+        SharedPreferences.Editor editor = defaults.edit().clear();
+        int typed = 0;
+        for (java.util.Map.Entry<String, String> setting : screen.entrySet()) {
+            String type = setting.getValue();
+            if (type == null) {
+                continue;
+            }
+            typed++;
+            switch (type) {
+                case "b": editor.putBoolean(setting.getKey(), true); break;
+                case "i": editor.putInt(setting.getKey(), 7); break;
+                case "ss": editor.putStringSet(setting.getKey(), new HashSet<>(Arrays.asList("x"))); break;
+                default: editor.putString(setting.getKey(), "imported"); break;
             }
         }
-        assertFalse("No sources found", sources.isEmpty());
-        java.util.regex.Pattern constant = java.util.regex.Pattern.compile(
-                "static\\s+final\\s+String\\s+([A-Z0-9_]+)\\s*=\\s*\"([^\"]*)\"");
-        for (String source : sources.values()) {
-            java.util.regex.Matcher m = constant.matcher(source);
-            while (m.find()) {
-                constants.computeIfAbsent(m.group(1), k -> new HashSet<>()).add(m.group(2));
+        // State saved by the app itself, not a setting of the screen
+        editor.putFloat("number_zoom_scale", 2f);
+        editor.commit();
+        assertTrue(typed > 100);
+
+        JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(
+                SettingsBackup.export(context, false, null).toString().getBytes(StandardCharsets.UTF_8)));
+        defaults.edit().clear().commit();
+        SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
+        assertEquals(java.util.Collections.singletonList(
+                context.getString(com.limelight.R.string.backup_unsupported_setting, "number_zoom_scale")), plan.unsupported);
+        SettingsBackup.restore(context, backup, null, plan);
+
+        for (java.util.Map.Entry<String, String> setting : screen.entrySet()) {
+            if (setting.getValue() != null) {
+                assertTrue("Not imported: " + setting.getKey(), defaults.contains(setting.getKey()));
             }
         }
-        java.util.regex.Pattern access = java.util.regex.Pattern.compile(
-                "\\.(?:get|put)(?:Boolean|Int|String|Float|Long|StringSet)\\(\\s*(?:\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_.]*))\\s*,");
-        java.util.Set<String> missing = new java.util.TreeSet<>();
-        for (java.util.Map.Entry<File, String> source : sources.entrySet()) {
-            java.util.regex.Matcher m = access.matcher(source.getValue());
-            while (m.find()) {
-                java.util.Set<String> keys = new HashSet<>();
-                if (m.group(1) != null) {
-                    keys.add(m.group(1));
-                } else {
-                    String name = m.group(2).substring(m.group(2).lastIndexOf('.') + 1);
-                    keys.addAll(constants.getOrDefault(name, java.util.Collections.emptySet()));
-                }
-                for (String key : keys) {
-                    if (!known.contains(key)) {
-                        missing.add(key + " (" + source.getKey().getName() + ")");
-                    }
-                }
-            }
-        }
-        assertTrue("Settings unknown to SettingsBackup, add them to CODE_ONLY_KEYS: " + missing, missing.isEmpty());
+        assertFalse(defaults.contains("number_zoom_scale"));
     }
 }
