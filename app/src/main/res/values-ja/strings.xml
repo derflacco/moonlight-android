@@ -184,4 +184,36 @@
 \nカスタム解像度を作成することに起因する問題について、私たちは責任を負いません。
 \n
 \nモニターが必要な表示設定をサポートしていない場合もあります。その場合は、仮想モニターを設定してみてください。最後に、デバイスまたはホストPCが特定の解像度またはリフレッシュレートでのストリーミングをサポートしていない場合、残念ながら運が悪かったということになります。</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">バックアップと復元</string>
+    <string name="backup_title">設定のエクスポート / インポート</string>
+    <string name="backup_summary">設定、プロファイル、オーバーレイのレイアウト、特殊キー、必要に応じてペアリング済みPCをファイルに保存、またはファイルから復元します</string>
+    <string name="backup_export">エクスポート</string>
+    <string name="backup_import">インポート</string>
+    <string name="backup_export_done">設定をエクスポートしました</string>
+    <string name="backup_export_failed">エクスポートに失敗しました: %1$s</string>
+    <string name="backup_import_failed">インポートに失敗しました: %1$s</string>
+    <string name="backup_import_confirm_title">現在の設定を置き換えますか？</string>
+    <string name="backup_import_confirm">すべて（設定、プロファイル、オーバーレイのレイアウト、特殊キー、ペアリング済みPC）が %1$s にエクスポートされたファイルの内容で置き換えられます。\n\nその後アプリが再起動します。</string>
+    <string name="backup_import_button">インポートして再起動</string>
+    <string name="backup_unknown_date">不明な日付</string>
+    <string name="backup_dialog_message">エクスポートでは、すべての設定、プロファイル、オーバーレイのレイアウト、特殊キーをファイルに保存します。ペアリング済みPCを含めることもできます。\n\nインポートでは、それらをファイルの内容で置き換えます。</string>
+    <string name="backup_import_confirm_keep_pairing">設定、プロファイル、オーバーレイのレイアウト、特殊キーが %1$s にエクスポートされたファイルの内容で置き換えられます。ペアリング済みPCは保持されます。\n\nその後アプリが再起動します。</string>
+    <string name="backup_export_title">設定のエクスポート</string>
+    <string name="backup_export_always_included">設定、プロファイル、オーバーレイのレイアウト、特殊キーは常に含まれます。</string>
+    <string name="backup_include_pairing">ペアリング済みのコンピューターを含める</string>
+    <string name="backup_pairing_password_hint">インポート先のアプリは、再ペアリングなしでPCに接続できるようになります。ファイルのこの部分をパスワードで保護してください:</string>
+    <string name="backup_password">パスワード</string>
+    <string name="backup_password_confirm">パスワードの確認</string>
+    <string name="backup_password_mismatch">パスワードが一致しません</string>
+    <string name="backup_no_password_title">ペアリング済みのコンピューターをパスワードなしでエクスポートしますか？</string>
+    <string name="backup_no_password_message">ファイルにはこのアプリのペアリングキーが保護なしで含まれます。コピーを入手した人は誰でも、あなたの承認やペアリングなしで、ペアリング済みPCに接続し、ストリーミングや操作ができます。\n\nセキュリティ上のリスクを理解したうえで、パスワードなしでエクスポートしますか？</string>
+    <string name="backup_no_password_proceed">理解しました、エクスポートする</string>
+    <string name="backup_no_password_back">パスワードを設定</string>
+    <string name="backup_password_required_title">パスワードで保護されています</string>
+    <string name="backup_password_required_message">このファイル内のペアリング済みコンピューターはパスワードで保護されています。</string>
+    <string name="backup_unlock">ロック解除</string>
+    <string name="backup_import_without_pairing">ペアリング済みPCをスキップ</string>
+    <string name="backup_wrong_password">パスワードが違います</string>
 </resources>

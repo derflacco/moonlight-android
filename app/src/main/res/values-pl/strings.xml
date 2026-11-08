@@ -273,4 +273,36 @@
     <string name="summary_setup_guide">Wyświetl instrukcje, jak skonfigurować komputer do gier do streamowania</string>
     <string name="title_enable_commit_text">Włącz przekazywanie tekstu (pisanie gestem/głos)</string>
     <string name="summary_enable_commit_text">Przekazuje wieloznakowy tekst z klawiatur ekranowych (pisanie gestem, podpowiedzi, dyktowanie głosowe) do hosta. Może powodować problemy w grach wymagających wprowadzania znak po znaku.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Kopia zapasowa i przywracanie</string>
+    <string name="backup_title">Eksport / import ustawień</string>
+    <string name="backup_summary">Zapisz ustawienia, profile, układy nakładki, klawisze specjalne i opcjonalnie sparowane komputery do pliku lub przywróć je z pliku</string>
+    <string name="backup_export">Eksportuj</string>
+    <string name="backup_import">Importuj</string>
+    <string name="backup_export_done">Ustawienia wyeksportowane</string>
+    <string name="backup_export_failed">Eksport nie powiódł się: %1$s</string>
+    <string name="backup_import_failed">Import nie powiódł się: %1$s</string>
+    <string name="backup_import_confirm_title">Zastąpić bieżące ustawienia?</string>
+    <string name="backup_import_confirm">Spowoduje to zastąpienie wszystkiego (ustawień, profili, układów nakładki, klawiszy specjalnych i sparowanych komputerów) zawartością pliku wyeksportowanego %1$s.\n\nAplikacja zostanie następnie uruchomiona ponownie.</string>
+    <string name="backup_import_button">Importuj i uruchom ponownie</string>
+    <string name="backup_unknown_date">nieznanego dnia</string>
+    <string name="backup_dialog_message">Eksport zapisuje wszystkie ustawienia, profile, układy nakładki i klawisze specjalne do pliku. Można też dołączyć sparowane komputery.\n\nImport zastępuje je zawartością pliku.</string>
+    <string name="backup_import_confirm_keep_pairing">Spowoduje to zastąpienie ustawień, profili, układów nakładki i klawiszy specjalnych zawartością pliku wyeksportowanego %1$s. Sparowane komputery zostaną zachowane.\n\nAplikacja zostanie następnie uruchomiona ponownie.</string>
+    <string name="backup_export_title">Eksport ustawień</string>
+    <string name="backup_export_always_included">Ustawienia, profile, układy nakładki i klawisze specjalne są zawsze dołączane.</string>
+    <string name="backup_include_pairing">Dołącz sparowane komputery</string>
+    <string name="backup_pairing_password_hint">Aplikacja, do której zaimportujesz plik, połączy się z Twoimi komputerami bez ponownego parowania. Chroń tę część pliku hasłem:</string>
+    <string name="backup_password">Hasło</string>
+    <string name="backup_password_confirm">Potwierdź hasło</string>
+    <string name="backup_password_mismatch">Hasła nie są zgodne</string>
+    <string name="backup_no_password_title">Wyeksportować sparowane komputery bez hasła?</string>
+    <string name="backup_no_password_message">Plik będzie zawierał niechroniony klucz parowania tej aplikacji. Każdy, kto zdobędzie jego kopię, może połączyć się z Twoimi sparowanymi komputerami, strumieniować je i sterować nimi bez Twojej zgody i bez parowania.\n\nCzy rozumiesz zagrożenia bezpieczeństwa i mimo to chcesz eksportować bez hasła?</string>
+    <string name="backup_no_password_proceed">Rozumiem, eksportuj mimo to</string>
+    <string name="backup_no_password_back">Ustaw hasło</string>
+    <string name="backup_password_required_title">Chronione hasłem</string>
+    <string name="backup_password_required_message">Sparowane komputery w tym pliku są chronione hasłem.</string>
+    <string name="backup_unlock">Odblokuj</string>
+    <string name="backup_import_without_pairing">Pomiń sparowane komputery</string>
+    <string name="backup_wrong_password">Nieprawidłowe hasło</string>
 </resources>

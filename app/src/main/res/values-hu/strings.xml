@@ -260,4 +260,36 @@
     <string name="pacing_latency">A legalacsonyabb késleltetés előnyben részesítése</string>
     <string name="title_enable_commit_text">Commit-szöveg bevitel engedélyezése (húzás/hang)</string>
     <string name="summary_enable_commit_text">A képernyő-billentyűzetek többkarakteres szövegét (gesztusos gépelés, predikciók, hangalapú diktálás) továbbítja. Megzavarhatja azokat a játékokat, amelyek egyes gombnyomásokra támaszkodnak.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Biztonsági mentés és visszaállítás</string>
+    <string name="backup_title">Beállítások exportálása / importálása</string>
+    <string name="backup_summary">Mentse a beállításokat, profilokat, átfedés-elrendezéseket, speciális billentyűket és opcionálisan a párosított számítógépeket egy fájlba, vagy állítsa vissza őket egy fájlból</string>
+    <string name="backup_export">Exportálás</string>
+    <string name="backup_import">Importálás</string>
+    <string name="backup_export_done">Beállítások exportálva</string>
+    <string name="backup_export_failed">Az exportálás sikertelen: %1$s</string>
+    <string name="backup_import_failed">Az importálás sikertelen: %1$s</string>
+    <string name="backup_import_confirm_title">Lecseréli a jelenlegi beállításokat?</string>
+    <string name="backup_import_confirm">Ez mindent (beállítások, profilok, átfedés-elrendezések, speciális billentyűk és párosított számítógépek) lecserél a(z) %1$s napon exportált fájl tartalmára.\n\nAz alkalmazás ezután újraindul.</string>
+    <string name="backup_import_button">Importálás és újraindítás</string>
+    <string name="backup_unknown_date">ismeretlen dátum</string>
+    <string name="backup_dialog_message">Az exportálás minden beállítást, profilt, átfedés-elrendezést és speciális billentyűt fájlba ment. A párosított számítógépek is belefoglalhatók.\n\nAz importálás ezeket egy fájl tartalmára cseréli.</string>
+    <string name="backup_import_confirm_keep_pairing">Ez a beállításokat, profilokat, átfedés-elrendezéseket és speciális billentyűket lecseréli a(z) %1$s napon exportált fájl tartalmára. A párosított számítógépek megmaradnak.\n\nAz alkalmazás ezután újraindul.</string>
+    <string name="backup_export_title">Beállítások exportálása</string>
+    <string name="backup_export_always_included">A beállítások, profilok, átfedés-elrendezések és speciális billentyűk mindig benne vannak.</string>
+    <string name="backup_include_pairing">Párosított számítógépek belefoglalása</string>
+    <string name="backup_pairing_password_hint">Az importáló alkalmazás új párosítás nélkül csatlakozhat a számítógépeihez. Védje a fájl ezen részét jelszóval:</string>
+    <string name="backup_password">Jelszó</string>
+    <string name="backup_password_confirm">Jelszó megerősítése</string>
+    <string name="backup_password_mismatch">A jelszavak nem egyeznek</string>
+    <string name="backup_no_password_title">Exportálja a párosított számítógépeket jelszó nélkül?</string>
+    <string name="backup_no_password_message">A fájl védelem nélkül tartalmazza ennek az alkalmazásnak a párosítási kulcsát. Bárki, aki hozzájut egy másolatához, csatlakozhat a párosított számítógépeihez, streamelheti és vezérelheti őket az Ön jóváhagyása és párosítás nélkül.\n\nÉrti a biztonsági kockázatokat, és mégis jelszó nélkül szeretne exportálni?</string>
+    <string name="backup_no_password_proceed">Értem, exportálás mégis</string>
+    <string name="backup_no_password_back">Jelszó megadása</string>
+    <string name="backup_password_required_title">Jelszóval védett</string>
+    <string name="backup_password_required_message">A fájlban lévő párosított számítógépeket jelszó védi.</string>
+    <string name="backup_unlock">Feloldás</string>
+    <string name="backup_import_without_pairing">Párosított gépek kihagyása</string>
+    <string name="backup_wrong_password">Hibás jelszó</string>
 </resources>

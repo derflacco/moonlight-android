@@ -255,4 +255,36 @@
     <string name="summary_analog_scrolling">Selecciona um stick analógico para fazer scroll quando a emulação de rato está ativada</string>
     <string name="title_enable_commit_text">Ativar entrada de texto commit (gesto/voz)</string>
     <string name="summary_enable_commit_text">Reencaminha texto com vários caracteres proveniente de teclados virtuais (digitação por gestos, previsões, ditado por voz). Pode causar problemas em jogos que dependem de entradas tecla-a-tecla.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Cópia de segurança e restauro</string>
+    <string name="backup_title">Exportar / importar definições</string>
+    <string name="backup_summary">Guarde as suas definições, perfis, esquemas da sobreposição, teclas especiais e, opcionalmente, os PCs emparelhados num ficheiro, ou restaure-os a partir de um</string>
+    <string name="backup_export">Exportar</string>
+    <string name="backup_import">Importar</string>
+    <string name="backup_export_done">Definições exportadas</string>
+    <string name="backup_export_failed">Falha ao exportar: %1$s</string>
+    <string name="backup_import_failed">Falha ao importar: %1$s</string>
+    <string name="backup_import_confirm_title">Substituir as definições atuais?</string>
+    <string name="backup_import_confirm">Isto substitui tudo (definições, perfis, esquemas da sobreposição, teclas especiais e PCs emparelhados) pelo conteúdo do ficheiro exportado em %1$s.\n\nA aplicação será reiniciada em seguida.</string>
+    <string name="backup_import_button">Importar e reiniciar</string>
+    <string name="backup_unknown_date">uma data desconhecida</string>
+    <string name="backup_dialog_message">Exportar guarda todas as definições, perfis, esquemas da sobreposição e teclas especiais num ficheiro. Os PCs emparelhados também podem ser incluídos.\n\nImportar substitui-os pelo conteúdo de um ficheiro.</string>
+    <string name="backup_import_confirm_keep_pairing">Isto substitui as suas definições, perfis, esquemas da sobreposição e teclas especiais pelo conteúdo do ficheiro exportado em %1$s. Os PCs emparelhados são mantidos.\n\nA aplicação será reiniciada em seguida.</string>
+    <string name="backup_export_title">Exportar definições</string>
+    <string name="backup_export_always_included">As definições, perfis, esquemas da sobreposição e teclas especiais são sempre incluídos.</string>
+    <string name="backup_include_pairing">Incluir computadores emparelhados</string>
+    <string name="backup_pairing_password_hint">A aplicação que importar poderá ligar-se aos seus PCs sem novo emparelhamento. Proteja esta parte do ficheiro com uma palavra-passe:</string>
+    <string name="backup_password">Palavra-passe</string>
+    <string name="backup_password_confirm">Confirmar palavra-passe</string>
+    <string name="backup_password_mismatch">As palavras-passe não coincidem</string>
+    <string name="backup_no_password_title">Exportar computadores emparelhados sem palavra-passe?</string>
+    <string name="backup_no_password_message">O ficheiro conterá a chave de emparelhamento desta aplicação sem proteção. Qualquer pessoa que obtenha uma cópia poderá ligar-se aos seus PCs emparelhados, transmiti-los e controlá-los sem a sua aprovação e sem emparelhamento.\n\nCompreende os riscos de segurança e pretende mesmo assim exportar sem palavra-passe?</string>
+    <string name="backup_no_password_proceed">Compreendo, exportar mesmo assim</string>
+    <string name="backup_no_password_back">Definir palavra-passe</string>
+    <string name="backup_password_required_title">Protegido por palavra-passe</string>
+    <string name="backup_password_required_message">Os computadores emparelhados neste ficheiro estão protegidos por palavra-passe.</string>
+    <string name="backup_unlock">Desbloquear</string>
+    <string name="backup_import_without_pairing">Ignorar PCs emparelhados</string>
+    <string name="backup_wrong_password">Palavra-passe incorreta</string>
 </resources>

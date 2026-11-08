@@ -294,4 +294,36 @@
     <string name="title_checkbox_remember_zoom_pan">Recordar zoom y desplazamiento</string>
     <string name="summary_checkbox_remember_zoom_pan">Guarda la posición de zoom y desplazamiento entre sesiones.</string>
     <string name="title_edit_profile">Editar perfil</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Copia de seguridad y restauración</string>
+    <string name="backup_title">Exportar / importar ajustes</string>
+    <string name="backup_summary">Guarda tus ajustes, perfiles, diseños de la superposición, teclas especiales y, opcionalmente, los PC emparejados en un archivo, o restáuralos desde uno</string>
+    <string name="backup_export">Exportar</string>
+    <string name="backup_import">Importar</string>
+    <string name="backup_export_done">Ajustes exportados</string>
+    <string name="backup_export_failed">Error al exportar: %1$s</string>
+    <string name="backup_import_failed">Error al importar: %1$s</string>
+    <string name="backup_import_confirm_title">¿Reemplazar los ajustes actuales?</string>
+    <string name="backup_import_confirm">Esto reemplaza todo (ajustes, perfiles, diseños de la superposición, teclas especiales y PC emparejados) por el contenido del archivo exportado el %1$s.\n\nLa aplicación se reiniciará después.</string>
+    <string name="backup_import_button">Importar y reiniciar</string>
+    <string name="backup_unknown_date">una fecha desconocida</string>
+    <string name="backup_dialog_message">Exportar guarda todos los ajustes, perfiles, diseños de la superposición y teclas especiales en un archivo. También se pueden incluir los PC emparejados.\n\nImportar los reemplaza por el contenido de un archivo.</string>
+    <string name="backup_import_confirm_keep_pairing">Esto reemplaza tus ajustes, perfiles, diseños de la superposición y teclas especiales por el contenido del archivo exportado el %1$s. Los PC emparejados se conservan.\n\nLa aplicación se reiniciará después.</string>
+    <string name="backup_export_title">Exportar ajustes</string>
+    <string name="backup_export_always_included">Los ajustes, perfiles, diseños de la superposición y teclas especiales siempre se incluyen.</string>
+    <string name="backup_include_pairing">Incluir los equipos emparejados</string>
+    <string name="backup_pairing_password_hint">La aplicación importada podrá conectarse a tus PC sin volver a emparejarlos. Protege esta parte del archivo con una contraseña:</string>
+    <string name="backup_password">Contraseña</string>
+    <string name="backup_password_confirm">Confirmar contraseña</string>
+    <string name="backup_password_mismatch">Las contraseñas no coinciden</string>
+    <string name="backup_no_password_title">¿Exportar los equipos emparejados sin contraseña?</string>
+    <string name="backup_no_password_message">El archivo contendrá la clave de emparejamiento de esta aplicación sin protección. Cualquiera que obtenga una copia podrá conectarse a tus PC emparejados, transmitirlos y controlarlos sin tu aprobación y sin emparejarse.\n\n¿Entiendes los riesgos de seguridad y aun así quieres exportar sin contraseña?</string>
+    <string name="backup_no_password_proceed">Lo entiendo, exportar de todos modos</string>
+    <string name="backup_no_password_back">Establecer una contraseña</string>
+    <string name="backup_password_required_title">Protegido con contraseña</string>
+    <string name="backup_password_required_message">Los equipos emparejados de este archivo están protegidos con una contraseña.</string>
+    <string name="backup_unlock">Desbloquear</string>
+    <string name="backup_import_without_pairing">Omitir los PC emparejados</string>
+    <string name="backup_wrong_password">Contraseña incorrecta</string>
 </resources>

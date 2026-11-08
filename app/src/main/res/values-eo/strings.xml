@@ -36,4 +36,36 @@
     <string name="unpairing">Malparigante…</string>
     <string name="applist_connect_msg">Konektante al komputilo…</string>
     <string name="pcview_menu_unpair_pc">Malparigi</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Savkopio kaj restarigo</string>
+    <string name="backup_title">Eksporti / importi agordojn</string>
+    <string name="backup_summary">Konservu viajn agordojn, profilojn, aranĝojn de la surmetaĵo, specialajn klavojn kaj laŭvole parigitajn komputilojn en dosieron, aŭ restarigu ilin el dosiero</string>
+    <string name="backup_export">Eksporti</string>
+    <string name="backup_import">Importi</string>
+    <string name="backup_export_done">Agordoj eksportitaj</string>
+    <string name="backup_export_failed">Eksporto malsukcesis: %1$s</string>
+    <string name="backup_import_failed">Importo malsukcesis: %1$s</string>
+    <string name="backup_import_confirm_title">Ĉu anstataŭigi la nunajn agordojn?</string>
+    <string name="backup_import_confirm">Ĉi tio anstataŭigas ĉion (agordojn, profilojn, aranĝojn de la surmetaĵo, specialajn klavojn kaj parigitajn komputilojn) per la enhavo de la dosiero eksportita je %1$s.\n\nPoste la aplikaĵo rekomenciĝos.</string>
+    <string name="backup_import_button">Importi kaj rekomenci</string>
+    <string name="backup_unknown_date">nekonata dato</string>
+    <string name="backup_dialog_message">Eksporto konservas ĉiujn agordojn, profilojn, aranĝojn de la surmetaĵo kaj specialajn klavojn en dosieron. Parigitaj komputiloj ankaŭ povas esti inkluzivitaj.\n\nImporto anstataŭigas ilin per la enhavo de dosiero.</string>
+    <string name="backup_import_confirm_keep_pairing">Ĉi tio anstataŭigas viajn agordojn, profilojn, aranĝojn de la surmetaĵo kaj specialajn klavojn per la enhavo de la dosiero eksportita je %1$s. Viaj parigitaj komputiloj restas.\n\nPoste la aplikaĵo rekomenciĝos.</string>
+    <string name="backup_export_title">Eksporti agordojn</string>
+    <string name="backup_export_always_included">Agordoj, profiloj, aranĝoj de la surmetaĵo kaj specialaj klavoj ĉiam estas inkluzivitaj.</string>
+    <string name="backup_include_pairing">Inkluzivi parigitajn komputilojn</string>
+    <string name="backup_pairing_password_hint">La importinta aplikaĵo povos konektiĝi al viaj komputiloj sen nova parigo. Protektu ĉi tiun parton de la dosiero per pasvorto:</string>
+    <string name="backup_password">Pasvorto</string>
+    <string name="backup_password_confirm">Konfirmu la pasvorton</string>
+    <string name="backup_password_mismatch">La pasvortoj ne kongruas</string>
+    <string name="backup_no_password_title">Ĉu eksporti parigitajn komputilojn sen pasvorto?</string>
+    <string name="backup_no_password_message">La dosiero enhavos la parigan ŝlosilon de ĉi tiu aplikaĵo sen protekto. Ĉiu, kiu ricevas kopion, povas konektiĝi al viaj parigitaj komputiloj, elsendfluigi kaj regi ilin sen via permeso kaj sen parigo.\n\nĈu vi komprenas la sekurecajn riskojn kaj tamen volas eksporti sen pasvorto?</string>
+    <string name="backup_no_password_proceed">Mi komprenas, tamen eksporti</string>
+    <string name="backup_no_password_back">Agordi pasvorton</string>
+    <string name="backup_password_required_title">Protektita per pasvorto</string>
+    <string name="backup_password_required_message">La parigitaj komputiloj en ĉi tiu dosiero estas protektitaj per pasvorto.</string>
+    <string name="backup_unlock">Malŝlosi</string>
+    <string name="backup_import_without_pairing">Preterlasi parigitajn komputilojn</string>
+    <string name="backup_wrong_password">Malĝusta pasvorto</string>
 </resources>

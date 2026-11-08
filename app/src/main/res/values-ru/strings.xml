@@ -659,4 +659,36 @@
     <string name="render_mode_2d">По умолчанию 2D</string>
     <string name="title_checkbox_full_screen">Включить полноэкранный режим</string>
     <string name="summary_checkbox_full_screen">Скрывать системные панели в режиме погружения</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Резервное копирование и восстановление</string>
+    <string name="backup_title">Экспорт / импорт настроек</string>
+    <string name="backup_summary">Сохраните настройки, профили, раскладки оверлея, специальные клавиши и при желании сопряжённые ПК в файл или восстановите их из файла</string>
+    <string name="backup_export">Экспорт</string>
+    <string name="backup_import">Импорт</string>
+    <string name="backup_export_done">Настройки экспортированы</string>
+    <string name="backup_export_failed">Ошибка экспорта: %1$s</string>
+    <string name="backup_import_failed">Ошибка импорта: %1$s</string>
+    <string name="backup_import_confirm_title">Заменить текущие настройки?</string>
+    <string name="backup_import_confirm">Всё (настройки, профили, раскладки оверлея, специальные клавиши и сопряжённые ПК) будет заменено содержимым файла, экспортированного %1$s.\n\nЗатем приложение перезапустится.</string>
+    <string name="backup_import_button">Импортировать и перезапустить</string>
+    <string name="backup_unknown_date">неизвестную дату</string>
+    <string name="backup_dialog_message">Экспорт сохраняет все настройки, профили, раскладки оверлея и специальные клавиши в файл. Также можно включить сопряжённые ПК.\n\nИмпорт заменяет их содержимым файла.</string>
+    <string name="backup_import_confirm_keep_pairing">Настройки, профили, раскладки оверлея и специальные клавиши будут заменены содержимым файла, экспортированного %1$s. Сопряжённые ПК сохранятся.\n\nЗатем приложение перезапустится.</string>
+    <string name="backup_export_title">Экспорт настроек</string>
+    <string name="backup_export_always_included">Настройки, профили, раскладки оверлея и специальные клавиши включаются всегда.</string>
+    <string name="backup_include_pairing">Включить сопряжённые компьютеры</string>
+    <string name="backup_pairing_password_hint">Приложение, в которое выполняется импорт, сможет подключаться к вашим ПК без повторного сопряжения. Защитите эту часть файла паролем:</string>
+    <string name="backup_password">Пароль</string>
+    <string name="backup_password_confirm">Подтвердите пароль</string>
+    <string name="backup_password_mismatch">Пароли не совпадают</string>
+    <string name="backup_no_password_title">Экспортировать сопряжённые компьютеры без пароля?</string>
+    <string name="backup_no_password_message">Файл будет содержать незащищённый ключ сопряжения этого приложения. Любой, кто получит его копию, сможет подключиться к вашим сопряжённым ПК, транслировать их и управлять ими без вашего согласия и без сопряжения.\n\nВы понимаете риски безопасности и всё равно хотите экспортировать без пароля?</string>
+    <string name="backup_no_password_proceed">Понимаю, всё равно экспортировать</string>
+    <string name="backup_no_password_back">Задать пароль</string>
+    <string name="backup_password_required_title">Защищено паролем</string>
+    <string name="backup_password_required_message">Сопряжённые компьютеры в этом файле защищены паролем.</string>
+    <string name="backup_unlock">Разблокировать</string>
+    <string name="backup_import_without_pairing">Пропустить сопряжённые ПК</string>
+    <string name="backup_wrong_password">Неверный пароль</string>
 </resources>

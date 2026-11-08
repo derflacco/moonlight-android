@@ -707,4 +707,36 @@
 
     <string name="title_checkbox_full_screen">启用全屏</string>
     <string name="summary_checkbox_full_screen">使用沉浸模式隐藏系统状态栏</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">备份与恢复</string>
+    <string name="backup_title">导出 / 导入设置</string>
+    <string name="backup_summary">将设置、配置文件、叠加层布局、特殊按键以及（可选）已配对的电脑保存到文件，或从文件恢复</string>
+    <string name="backup_export">导出</string>
+    <string name="backup_import">导入</string>
+    <string name="backup_export_done">设置已导出</string>
+    <string name="backup_export_failed">导出失败：%1$s</string>
+    <string name="backup_import_failed">导入失败：%1$s</string>
+    <string name="backup_import_confirm_title">替换当前设置？</string>
+    <string name="backup_import_confirm">这将用 %1$s 导出的文件内容替换所有内容（设置、配置文件、叠加层布局、特殊按键和已配对的电脑）。\n\n之后应用将重新启动。</string>
+    <string name="backup_import_button">导入并重启</string>
+    <string name="backup_unknown_date">未知日期</string>
+    <string name="backup_dialog_message">导出会将所有设置、配置文件、叠加层布局和特殊按键保存到文件中，也可以包含已配对的电脑。\n\n导入会用文件内容替换它们。</string>
+    <string name="backup_import_confirm_keep_pairing">这将用 %1$s 导出的文件内容替换你的设置、配置文件、叠加层布局和特殊按键。已配对的电脑会保留。\n\n之后应用将重新启动。</string>
+    <string name="backup_export_title">导出设置</string>
+    <string name="backup_export_always_included">设置、配置文件、叠加层布局和特殊按键始终包含在内。</string>
+    <string name="backup_include_pairing">包含已配对的电脑</string>
+    <string name="backup_pairing_password_hint">导入后的应用无需重新配对即可连接你的电脑。请用密码保护文件的这一部分：</string>
+    <string name="backup_password">密码</string>
+    <string name="backup_password_confirm">确认密码</string>
+    <string name="backup_password_mismatch">两次输入的密码不一致</string>
+    <string name="backup_no_password_title">不设密码导出已配对的电脑？</string>
+    <string name="backup_no_password_message">文件将以未加密的形式包含此应用的配对密钥。任何获得副本的人都可以在未经你同意且无需配对的情况下连接你已配对的电脑，进行串流和控制。\n\n你是否了解安全风险，仍要在不设密码的情况下导出？</string>
+    <string name="backup_no_password_proceed">我了解，仍然导出</string>
+    <string name="backup_no_password_back">设置密码</string>
+    <string name="backup_password_required_title">受密码保护</string>
+    <string name="backup_password_required_message">此文件中的已配对电脑受密码保护。</string>
+    <string name="backup_unlock">解锁</string>
+    <string name="backup_import_without_pairing">跳过已配对的电脑</string>
+    <string name="backup_wrong_password">密码错误</string>
 </resources>

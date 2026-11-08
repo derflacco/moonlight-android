@@ -252,4 +252,36 @@
     <string name="fps_suffix_fps">FPS</string>
     <string name="title_enable_commit_text">Ativar envio de texto concluído (gesto/voz)</string>
     <string name="summary_enable_commit_text">Encaminha textos com vários caracteres de teclados virtuais (digitação por gestos, sugestões, ditado por voz). Pode causar problemas em jogos que dependem de entrada tecla por tecla.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Backup e restauração</string>
+    <string name="backup_title">Exportar / importar configurações</string>
+    <string name="backup_summary">Salve suas configurações, perfis, layouts da sobreposição, teclas especiais e, opcionalmente, os PCs pareados em um arquivo, ou restaure-os a partir de um</string>
+    <string name="backup_export">Exportar</string>
+    <string name="backup_import">Importar</string>
+    <string name="backup_export_done">Configurações exportadas</string>
+    <string name="backup_export_failed">Falha ao exportar: %1$s</string>
+    <string name="backup_import_failed">Falha ao importar: %1$s</string>
+    <string name="backup_import_confirm_title">Substituir as configurações atuais?</string>
+    <string name="backup_import_confirm">Isso substitui tudo (configurações, perfis, layouts da sobreposição, teclas especiais e PCs pareados) pelo conteúdo do arquivo exportado em %1$s.\n\nO app será reiniciado em seguida.</string>
+    <string name="backup_import_button">Importar e reiniciar</string>
+    <string name="backup_unknown_date">uma data desconhecida</string>
+    <string name="backup_dialog_message">Exportar salva todas as configurações, perfis, layouts da sobreposição e teclas especiais em um arquivo. Os PCs pareados também podem ser incluídos.\n\nImportar os substitui pelo conteúdo de um arquivo.</string>
+    <string name="backup_import_confirm_keep_pairing">Isso substitui suas configurações, perfis, layouts da sobreposição e teclas especiais pelo conteúdo do arquivo exportado em %1$s. Os PCs pareados são mantidos.\n\nO app será reiniciado em seguida.</string>
+    <string name="backup_export_title">Exportar configurações</string>
+    <string name="backup_export_always_included">Configurações, perfis, layouts da sobreposição e teclas especiais são sempre incluídos.</string>
+    <string name="backup_include_pairing">Incluir computadores pareados</string>
+    <string name="backup_pairing_password_hint">O app que importar poderá se conectar aos seus PCs sem parear novamente. Proteja esta parte do arquivo com uma senha:</string>
+    <string name="backup_password">Senha</string>
+    <string name="backup_password_confirm">Confirmar senha</string>
+    <string name="backup_password_mismatch">As senhas não coincidem</string>
+    <string name="backup_no_password_title">Exportar computadores pareados sem senha?</string>
+    <string name="backup_no_password_message">O arquivo conterá a chave de pareamento deste app sem proteção. Qualquer pessoa que obtiver uma cópia poderá se conectar aos seus PCs pareados, transmiti-los e controlá-los sem sua aprovação e sem pareamento.\n\nVocê entende os riscos de segurança e ainda quer exportar sem senha?</string>
+    <string name="backup_no_password_proceed">Entendo, exportar mesmo assim</string>
+    <string name="backup_no_password_back">Definir uma senha</string>
+    <string name="backup_password_required_title">Protegido por senha</string>
+    <string name="backup_password_required_message">Os computadores pareados neste arquivo estão protegidos por senha.</string>
+    <string name="backup_unlock">Desbloquear</string>
+    <string name="backup_import_without_pairing">Ignorar PCs pareados</string>
+    <string name="backup_wrong_password">Senha incorreta</string>
 </resources>

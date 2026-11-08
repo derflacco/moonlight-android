@@ -153,4 +153,36 @@
     <string name="title_checkbox_touchscreen_trackpad">השתמש במסך מגע כמשטח מגע</string>
     <string name="title_enable_commit_text">הפעל קלט commit-text (החלקה/קול)</string>
     <string name="summary_enable_commit_text">מעביר טקסט מרובה תווים ממקלדות וירטואליות (החלקה, הצעות, הקלדה קולית). עלול לגרום בעיות במשחקים שמסתמכים על קלט לפי מקש.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">גיבוי ושחזור</string>
+    <string name="backup_title">ייצוא / ייבוא הגדרות</string>
+    <string name="backup_summary">שמירת ההגדרות, הפרופילים, פריסות שכבת הבקרה, המקשים המיוחדים ובאופן אופציונלי המחשבים המצומדים לקובץ, או שחזורם מקובץ</string>
+    <string name="backup_export">ייצוא</string>
+    <string name="backup_import">ייבוא</string>
+    <string name="backup_export_done">ההגדרות יוצאו</string>
+    <string name="backup_export_failed">הייצוא נכשל: %1$s</string>
+    <string name="backup_import_failed">הייבוא נכשל: %1$s</string>
+    <string name="backup_import_confirm_title">להחליף את ההגדרות הנוכחיות?</string>
+    <string name="backup_import_confirm">פעולה זו מחליפה הכול (הגדרות, פרופילים, פריסות שכבת הבקרה, מקשים מיוחדים ומחשבים מצומדים) בתוכן הקובץ שיוצא בתאריך %1$s.\n\nהאפליקציה תופעל מחדש לאחר מכן.</string>
+    <string name="backup_import_button">ייבוא והפעלה מחדש</string>
+    <string name="backup_unknown_date">תאריך לא ידוע</string>
+    <string name="backup_dialog_message">הייצוא שומר את כל ההגדרות, הפרופילים, פריסות שכבת הבקרה והמקשים המיוחדים בקובץ. ניתן לכלול גם את המחשבים המצומדים.\n\nהייבוא מחליף אותם בתוכן של קובץ.</string>
+    <string name="backup_import_confirm_keep_pairing">פעולה זו מחליפה את ההגדרות, הפרופילים, פריסות שכבת הבקרה והמקשים המיוחדים בתוכן הקובץ שיוצא בתאריך %1$s. המחשבים המצומדים נשמרים.\n\nהאפליקציה תופעל מחדש לאחר מכן.</string>
+    <string name="backup_export_title">ייצוא הגדרות</string>
+    <string name="backup_export_always_included">ההגדרות, הפרופילים, פריסות שכבת הבקרה והמקשים המיוחדים נכללים תמיד.</string>
+    <string name="backup_include_pairing">הכללת המחשבים המצומדים</string>
+    <string name="backup_pairing_password_hint">האפליקציה שתייבא תוכל להתחבר למחשבים שלך ללא צימוד מחדש. הגן על חלק זה של הקובץ בסיסמה:</string>
+    <string name="backup_password">סיסמה</string>
+    <string name="backup_password_confirm">אימות סיסמה</string>
+    <string name="backup_password_mismatch">הסיסמאות אינן תואמות</string>
+    <string name="backup_no_password_title">לייצא את המחשבים המצומדים ללא סיסמה?</string>
+    <string name="backup_no_password_message">הקובץ יכיל את מפתח הצימוד של אפליקציה זו ללא הגנה. כל מי שיקבל עותק שלו יוכל להתחבר למחשבים המצומדים שלך, להזרים אותם ולשלוט בהם ללא אישורך וללא צימוד.\n\nהאם אתה מבין את סיכוני האבטחה ועדיין רוצה לייצא ללא סיסמה?</string>
+    <string name="backup_no_password_proceed">אני מבין, לייצא בכל זאת</string>
+    <string name="backup_no_password_back">הגדרת סיסמה</string>
+    <string name="backup_password_required_title">מוגן בסיסמה</string>
+    <string name="backup_password_required_message">המחשבים המצומדים בקובץ זה מוגנים בסיסמה.</string>
+    <string name="backup_unlock">ביטול נעילה</string>
+    <string name="backup_import_without_pairing">דילוג על המחשבים המצומדים</string>
+    <string name="backup_wrong_password">סיסמה שגויה</string>
 </resources>
