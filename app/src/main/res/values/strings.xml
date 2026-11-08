@@ -875,4 +875,35 @@
         <item>prime_little</item>
     </string-array>
 
+    <!-- Settings backup -->
+    <string name="backup_category">Backup &amp; restore</string>
+    <string name="backup_title">Export / import settings</string>
+    <string name="backup_summary">Save your settings, profiles, overlay layouts, special keys and optionally your paired PCs to a file, or restore them from one</string>
+    <string name="backup_export">Export</string>
+    <string name="backup_import">Import</string>
+    <string name="backup_export_done">Settings exported</string>
+    <string name="backup_export_failed">Export failed: %1$s</string>
+    <string name="backup_import_failed">Import failed: %1$s</string>
+    <string name="backup_import_confirm_title">Replace current settings?</string>
+    <string name="backup_import_confirm">This replaces everything (settings, profiles, overlay layouts, special keys and paired PCs) with the content of the file exported on %1$s.\n\nThe app restarts afterwards.</string>
+    <string name="backup_import_button">Import and restart</string>
+    <string name="backup_unknown_date">an unknown date</string>
+    <string name="backup_dialog_message">Export saves every setting, settings profiles, overlay layouts and special keys to a file. Paired PCs can be included too.\n\nImport replaces them with the content of a file.</string>
+    <string name="backup_import_confirm_keep_pairing">This replaces your settings, profiles, overlay layouts and special keys with the content of the file exported on %1$s. Your paired PCs are kept.\n\nThe app restarts afterwards.</string>
+    <string name="backup_export_title">Export settings</string>
+    <string name="backup_export_always_included">Settings, settings profiles, overlay layouts and special keys are always included.</string>
+    <string name="backup_include_pairing">Include paired computers</string>
+    <string name="backup_pairing_password_hint">The imported app will be able to connect to your PCs without pairing again. Protect this part of the file with a password:</string>
+    <string name="backup_password">Password</string>
+    <string name="backup_password_confirm">Confirm password</string>
+    <string name="backup_password_mismatch">The passwords don\'t match</string>
+    <string name="backup_no_password_title">Export paired computers without a password?</string>
+    <string name="backup_no_password_message">The file will contain this app\'s pairing key unprotected. Anyone who gets a copy of it can connect to your paired PCs and stream and control them, without your approval and without pairing.\n\nDo you understand the security risks and still want to export without a password?</string>
+    <string name="backup_no_password_proceed">I understand, export anyway</string>
+    <string name="backup_no_password_back">Set a password</string>
+    <string name="backup_password_required_title">Password protected</string>
+    <string name="backup_password_required_message">The paired computers in this file are protected by a password.</string>
+    <string name="backup_unlock">Unlock</string>
+    <string name="backup_import_without_pairing">Skip paired PCs</string>
+    <string name="backup_wrong_password">Wrong password</string>
 </resources>

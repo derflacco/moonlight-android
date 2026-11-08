@@ -1660,6 +1660,14 @@ public class StreamSettings extends AppCompatActivity {
             });
 
             Preference _pref;
+            _pref = findPreference("backup_export_import");
+            if (_pref != null) {
+                _pref.setOnPreferenceClickListener(preference -> {
+                    showBackupDialog();
+                    return true;
+                });
+            }
+
             _pref = findPreference("import_keyboard_file");
             if (_pref != null) {
                 _pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
@@ -1959,12 +1967,265 @@ public class StreamSettings extends AppCompatActivity {
             }, 500);
         }
 
+        private static final int BACKUP_EXPORT_REQUEST_CODE = 1003;
+        private static final int BACKUP_IMPORT_REQUEST_CODE = 1004;
+
+        // Export options, kept while the file picker is open
+        private boolean pendingExportPairing;
+        private String pendingExportPassword;
+
+        private int dp(int value) {
+            return Math.round(value * getResources().getDisplayMetrics().density);
+        }
+
+        private void showBackupDialog() {
+            new AlertDialog.Builder(requireActivity())
+                    .setTitle(R.string.backup_title)
+                    .setMessage(R.string.backup_dialog_message)
+                    .setPositiveButton(R.string.backup_export, (dialog, which) -> showExportOptions())
+                    .setNeutralButton(R.string.backup_import, (dialog, which) -> {
+                        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        // Some file managers don't tag .json files as JSON
+                        intent.setType("*/*");
+                        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "application/octet-stream", "text/plain"});
+                        startActivityForResult(intent, BACKUP_IMPORT_REQUEST_CODE);
+                    })
+                    .show();
+        }
+
+        private android.widget.EditText passwordField(int hintRes) {
+            android.widget.EditText field = new android.widget.EditText(requireActivity());
+            field.setHint(hintRes);
+            field.setSingleLine(true);
+            field.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            return field;
+        }
+
+        private void showExportOptions() {
+            Activity activity = requireActivity();
+            android.widget.LinearLayout content = new android.widget.LinearLayout(activity);
+            content.setOrientation(android.widget.LinearLayout.VERTICAL);
+            content.setPadding(dp(24), dp(8), dp(24), 0);
+
+            android.widget.TextView always = new android.widget.TextView(activity);
+            always.setText(R.string.backup_export_always_included);
+            content.addView(always);
+
+            android.widget.CheckBox includePairing = new android.widget.CheckBox(activity);
+            includePairing.setText(R.string.backup_include_pairing);
+            includePairing.setChecked(false);
+            android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(12);
+            content.addView(includePairing, lp);
+
+            android.widget.LinearLayout pairingOptions = new android.widget.LinearLayout(activity);
+            pairingOptions.setOrientation(android.widget.LinearLayout.VERTICAL);
+            pairingOptions.setVisibility(View.GONE);
+            android.widget.TextView pairingHint = new android.widget.TextView(activity);
+            pairingHint.setText(R.string.backup_pairing_password_hint);
+            pairingHint.setAlpha(0.8f);
+            pairingOptions.addView(pairingHint);
+            android.widget.EditText password = passwordField(R.string.backup_password);
+            android.widget.EditText confirm = passwordField(R.string.backup_password_confirm);
+            pairingOptions.addView(password);
+            pairingOptions.addView(confirm);
+            content.addView(pairingOptions);
+
+            includePairing.setOnCheckedChangeListener((button, checked) ->
+                    pairingOptions.setVisibility(checked ? View.VISIBLE : View.GONE));
+
+            android.widget.ScrollView scroll = new android.widget.ScrollView(activity);
+            scroll.addView(content);
+
+            AlertDialog dialog = new AlertDialog.Builder(activity)
+                    .setTitle(R.string.backup_export_title)
+                    .setView(scroll)
+                    .setPositiveButton(R.string.backup_export, null)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .create();
+            dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                if (!includePairing.isChecked()) {
+                    dialog.dismiss();
+                    pickExportFile(false, null);
+                    return;
+                }
+                String pw = password.getText().toString();
+                if (!pw.isEmpty() && !pw.equals(confirm.getText().toString())) {
+                    confirm.setError(getString(R.string.backup_password_mismatch));
+                    return;
+                }
+                if (!pw.isEmpty()) {
+                    dialog.dismiss();
+                    pickExportFile(true, pw);
+                    return;
+                }
+                // No password: make sure the risk is understood
+                new AlertDialog.Builder(activity)
+                        .setTitle(R.string.backup_no_password_title)
+                        .setMessage(R.string.backup_no_password_message)
+                        .setPositiveButton(R.string.backup_no_password_proceed, (w, which) -> {
+                            dialog.dismiss();
+                            pickExportFile(true, null);
+                        })
+                        .setNegativeButton(R.string.backup_no_password_back, null)
+                        .show();
+            }));
+            dialog.show();
+        }
+
+        private void pickExportFile(boolean includePairing, String password) {
+            pendingExportPairing = includePairing;
+            pendingExportPassword = password;
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/json");
+            intent.putExtra(Intent.EXTRA_TITLE, SettingsBackup.suggestedFileName());
+            startActivityForResult(intent, BACKUP_EXPORT_REQUEST_CODE);
+        }
+
+        private void exportBackup(Uri uri) {
+            final Activity activity = requireActivity();
+            final android.content.Context appContext = activity.getApplicationContext();
+            final boolean includePairing = pendingExportPairing;
+            final String password = pendingExportPassword;
+            pendingExportPassword = null;
+            // Key derivation takes a moment: don't block the UI
+            new Thread(() -> {
+                String error = null;
+                try (java.io.OutputStream out = appContext.getContentResolver().openOutputStream(uri, "wt")) {
+                    SettingsBackup.write(SettingsBackup.export(appContext, includePairing, password), out);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    error = e.getMessage();
+                }
+                final String result = error;
+                activity.runOnUiThread(() -> Toast.makeText(appContext,
+                        result == null ? appContext.getString(R.string.backup_export_done)
+                                : appContext.getString(R.string.backup_export_failed, result),
+                        Toast.LENGTH_LONG).show());
+            }).start();
+        }
+
+        private void importBackup(Uri uri) {
+            final org.json.JSONObject backup;
+            try (java.io.InputStream in = requireActivity().getContentResolver().openInputStream(uri)) {
+                backup = SettingsBackup.read(in);
+            } catch (Exception e) {
+                e.printStackTrace();
+                Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            if (!SettingsBackup.hasPairing(backup)) {
+                confirmImport(backup, null);
+            } else if (!SettingsBackup.isPairingEncrypted(backup)) {
+                try {
+                    confirmImport(backup, SettingsBackup.openPairing(backup, null));
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
+                }
+            } else {
+                askPairingPassword(backup);
+            }
+        }
+
+        private void askPairingPassword(org.json.JSONObject backup) {
+            Activity activity = requireActivity();
+            android.widget.LinearLayout content = new android.widget.LinearLayout(activity);
+            content.setOrientation(android.widget.LinearLayout.VERTICAL);
+            content.setPadding(dp(24), dp(8), dp(24), 0);
+            android.widget.EditText password = passwordField(R.string.backup_password);
+            content.addView(password);
+
+            AlertDialog dialog = new AlertDialog.Builder(activity)
+                    .setTitle(R.string.backup_password_required_title)
+                    .setMessage(R.string.backup_password_required_message)
+                    .setView(content)
+                    .setPositiveButton(R.string.backup_unlock, null)
+                    .setNeutralButton(R.string.backup_import_without_pairing, (d, w) -> confirmImport(backup, null))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .create();
+            dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                final String pw = password.getText().toString();
+                final android.widget.Button unlock = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+                unlock.setEnabled(false);
+                new Thread(() -> {
+                    org.json.JSONObject pairing = null;
+                    String error = null;
+                    boolean wrongPassword = false;
+                    try {
+                        pairing = SettingsBackup.openPairing(backup, pw);
+                    } catch (SettingsBackup.WrongPasswordException e) {
+                        wrongPassword = true;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        error = e.getMessage();
+                    }
+                    final org.json.JSONObject result = pairing;
+                    final boolean wrong = wrongPassword;
+                    final String failure = error;
+                    activity.runOnUiThread(() -> {
+                        unlock.setEnabled(true);
+                        if (wrong) {
+                            password.setError(getString(R.string.backup_wrong_password));
+                        } else if (failure != null) {
+                            dialog.dismiss();
+                            Toast.makeText(activity, getString(R.string.backup_import_failed, failure), Toast.LENGTH_LONG).show();
+                        } else {
+                            dialog.dismiss();
+                            confirmImport(backup, result);
+                        }
+                    });
+                }).start();
+            }));
+            dialog.show();
+        }
+
+        private void confirmImport(org.json.JSONObject backup, org.json.JSONObject pairing) {
+            String date = backup.optString("exportedAt", getString(R.string.backup_unknown_date));
+            new AlertDialog.Builder(requireActivity())
+                    .setTitle(R.string.backup_import_confirm_title)
+                    .setMessage(getString(pairing != null ? R.string.backup_import_confirm
+                            : R.string.backup_import_confirm_keep_pairing, date))
+                    .setPositiveButton(R.string.backup_import_button, (d, w) -> {
+                        try {
+                            SettingsBackup.restore(requireActivity(), backup, pairing);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        // Restart so that every component reloads the imported settings
+                        Activity activity = requireActivity();
+                        Intent restart = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
+                        if (restart != null) {
+                            restart.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                            activity.startActivity(restart);
+                        }
+                        Runtime.getRuntime().exit(0);
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
         int READ_REQUEST_CODE = 1001;
         int READ_REQUEST_SPECIAL_CODE = 1002;
 
         @Override
         public void onActivityResult(int requestCode, int resultCode, Intent data) {
             super.onActivityResult(requestCode, resultCode, data);
+            if ((requestCode == BACKUP_EXPORT_REQUEST_CODE || requestCode == BACKUP_IMPORT_REQUEST_CODE)
+                    && resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                if (requestCode == BACKUP_EXPORT_REQUEST_CODE) {
+                    exportBackup(data.getData());
+                } else {
+                    importBackup(data.getData());
+                }
+                return;
+            }
             if (requestCode == READ_REQUEST_CODE && resultCode == Activity.RESULT_OK && data.getData() != null) {
                 try {
                     Uri uri = data.getData();
