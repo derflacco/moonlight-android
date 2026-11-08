@@ -269,6 +269,28 @@ public class SettingsBackupTest {
         assertEquals("original", readPairingKey(context));
     }
 
+    /** Files that aren't settings (library markers, caches...) are neither exported nor touched. */
+    @Test
+    public void otherFilesOfTheAppAreLeftAlone() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        context.getSharedPreferences("_has_set_default_values", Context.MODE_PRIVATE).edit().putBoolean("_has_set_default_values", true).commit();
+        context.getSharedPreferences("SomeLibrary", Context.MODE_PRIVATE).edit().putString("state", "local").commit();
+        PreferenceManager.getDefaultSharedPreferences(context).edit().putString("list_fps", "90").commit();
+
+        JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(
+                SettingsBackup.export(context, false, null).toString().getBytes(StandardCharsets.UTF_8)));
+        assertFalse(backup.getJSONObject("prefs").has("_has_set_default_values"));
+        assertFalse(backup.getJSONObject("prefs").has("SomeLibrary"));
+        SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
+        assertTrue(plan.unsupported.toString(), plan.unsupported.isEmpty());
+
+        context.getSharedPreferences("SomeLibrary", Context.MODE_PRIVATE).edit().putString("state", "changed").commit();
+        SettingsBackup.restore(context, backup, null, plan);
+        assertEquals("changed", context.getSharedPreferences("SomeLibrary", Context.MODE_PRIVATE).getString("state", null));
+        assertTrue(context.getSharedPreferences("_has_set_default_values", Context.MODE_PRIVATE).getBoolean("_has_set_default_values", false));
+        assertEquals("90", PreferenceManager.getDefaultSharedPreferences(context).getString("list_fps", null));
+    }
+
     /** Every setting of the settings screen survives an export / import, internal state doesn't. */
     @Test
     public void everySettingOfTheSettingsScreenIsImported() throws Exception {

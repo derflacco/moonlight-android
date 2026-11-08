@@ -71,9 +71,11 @@ public final class SettingsBackup {
     /** Logical name of the default SharedPreferences (its file name depends on the package). */
     private static final String DEFAULT_PREFS = "default";
 
-    /** Device specific caches / crash detection state, not user settings. */
+    /** Not user settings (caches, crash detection, library markers): silently ignored in backups. */
     private static final Set<String> EXCLUDED_PREFS = new HashSet<>(Arrays.asList(
-            "GlPreferences", "DecoderTombstone"));
+            "GlPreferences", "DecoderTombstone",
+            // Internal files of Android / androidx that older builds exported
+            "_has_set_default_values", "android.app.ActivityThread.IDS"));
 
     /**
      * Data stored outside of the settings screen that backups carry, besides the settings
@@ -133,29 +135,19 @@ public final class SettingsBackup {
         return context.getPackageName() + "_preferences";
     }
 
-    private static String logicalPrefsName(Context context, String fileName) {
-        return fileName.equals(defaultPrefsFile(context)) ? DEFAULT_PREFS : fileName;
-    }
-
     private static SharedPreferences openPrefs(Context context, String logicalName) {
         return context.getSharedPreferences(
                 DEFAULT_PREFS.equals(logicalName) ? defaultPrefsFile(context) : logicalName, Context.MODE_PRIVATE);
     }
 
-    /** Logical names of the SharedPreferences files present on this installation. */
-    private static Set<String> localPrefs(Context context) {
-        Set<String> names = new HashSet<>();
+    /**
+     * The SharedPreferences files a backup carries: the settings and the known data groups.
+     * Other files of the app (caches, markers of libraries...) are never exported nor touched
+     * by an import.
+     */
+    private static Set<String> supportedGroups() {
+        Set<String> names = new HashSet<>(KNOWN_PREF_FILES);
         names.add(DEFAULT_PREFS);
-        File[] files = new File(dataDir(context), "shared_prefs").listFiles();
-        if (files != null) {
-            for (File file : files) {
-                String name = file.getName();
-                if (name.endsWith(".xml")) {
-                    names.add(logicalPrefsName(context, name.substring(0, name.length() - 4)));
-                }
-            }
-        }
-        names.removeAll(EXCLUDED_PREFS);
         return names;
     }
 
@@ -239,7 +231,7 @@ public final class SettingsBackup {
     public static JSONObject export(Context context, boolean includePairing, String password)
             throws JSONException, IOException, GeneralSecurityException {
         JSONObject prefs = new JSONObject();
-        for (String name : localPrefs(context)) {
+        for (String name : supportedGroups()) {
             SharedPreferences sp = openPrefs(context, name);
             if (!sp.getAll().isEmpty()) {
                 prefs.put(name, exportPrefs(sp));
@@ -680,10 +672,8 @@ public final class SettingsBackup {
             throws JSONException, IOException {
         JSONObject prefs = backup.getJSONObject("prefs");
 
-        // Every known settings file is replaced, even the ones that aren't in the backup
-        Set<String> names = localPrefs(context);
-        names.addAll(plan.acceptedKeys.keySet());
-        for (String name : names) {
+        // Every supported settings file is replaced, even the ones that aren't in the backup
+        for (String name : supportedGroups()) {
             SharedPreferences.Editor editor = openPrefs(context, name).edit().clear();
             JSONObject values = prefs.optJSONObject(name);
             Set<String> accepted = plan.acceptedKeys.get(name);
