@@ -352,4 +352,7 @@
     <string name="overlay_editor_toolbar_bottom">Dole</string>
     <string name="overlay_element_wasd_dpad">Kříž WASD</string>
     <string name="overlay_element_wasd_stick">Páčka WASD</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Neprůhlednost kruhu plovoucí páčky: %1$d%%</string>
 </resources>

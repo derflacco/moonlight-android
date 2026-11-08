@@ -398,4 +398,7 @@
     <string name="overlay_editor_toolbar_bottom">Abajo</string>
     <string name="overlay_element_wasd_dpad">Cruceta WASD</string>
     <string name="overlay_element_wasd_stick">Joystick WASD</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Opacidad del círculo de los joysticks flotantes: %1$d%%</string>
 </resources>

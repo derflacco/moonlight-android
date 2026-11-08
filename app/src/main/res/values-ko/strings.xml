@@ -393,4 +393,7 @@
     <string name="overlay_editor_toolbar_bottom">아래</string>
     <string name="overlay_element_wasd_dpad">WASD 방향 패드</string>
     <string name="overlay_element_wasd_stick">WASD 스틱</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">플로팅 스틱 원의 불투명도: %1$d%%</string>
 </resources>

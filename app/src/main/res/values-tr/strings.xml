@@ -378,4 +378,7 @@
     <string name="overlay_editor_toolbar_bottom">Altta</string>
     <string name="overlay_element_wasd_dpad">WASD yön tuşları</string>
     <string name="overlay_element_wasd_stick">WASD çubuğu</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Yüzen çubuk dairesinin opaklığı: %%%1$d</string>
 </resources>

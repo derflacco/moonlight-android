@@ -19,8 +19,8 @@ public enum ButtonStyle {
     /** The historical outline ("official") skin. */
     OUTLINE("outline", R.string.overlay_style_outline);
 
-    public static final String PREF_KEY = "list_osc_button_style";
-    private static final String LEGACY_OUTLINE_PREF = "checkbox_onscreen_style_official";
+    public static final String PREF_KEY = OverlayEditorSettings.BUTTON_STYLE;
+    private static final String LEGACY_OUTLINE_PREF = OverlayEditorSettings.LEGACY_OUTLINE_STYLE;
 
     public final String value;
     public final int labelRes;

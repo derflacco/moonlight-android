@@ -288,4 +288,7 @@
     <string name="overlay_editor_toolbar_bottom">下</string>
     <string name="overlay_element_wasd_dpad">WASD十字キー</string>
     <string name="overlay_element_wasd_stick">WASDスティック</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">フローティングスティックの円の不透明度: %1$d%%</string>
 </resources>

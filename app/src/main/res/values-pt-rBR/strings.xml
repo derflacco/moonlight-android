@@ -356,4 +356,7 @@
     <string name="overlay_editor_toolbar_bottom">Embaixo</string>
     <string name="overlay_element_wasd_dpad">Direcional WASD</string>
     <string name="overlay_element_wasd_stick">Analógico WASD</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Opacidade do círculo dos analógicos flutuantes: %1$d%%</string>
 </resources>

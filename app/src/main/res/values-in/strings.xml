@@ -316,4 +316,7 @@
     <string name="overlay_editor_toolbar_bottom">Bawah</string>
     <string name="overlay_element_wasd_dpad">D-pad WASD</string>
     <string name="overlay_element_wasd_stick">Stik WASD</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Opasitas lingkaran stik mengambang: %1$d%%</string>
 </resources>

@@ -328,4 +328,7 @@
     <string name="overlay_editor_toolbar_bottom">Onder</string>
     <string name="overlay_element_wasd_dpad">WASD-pad</string>
     <string name="overlay_element_wasd_stick">WASD-stick</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Dekking van de cirkel van zwevende sticks: %1$d%%</string>
 </resources>

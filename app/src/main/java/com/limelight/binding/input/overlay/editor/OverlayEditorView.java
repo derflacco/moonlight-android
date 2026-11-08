@@ -35,6 +35,7 @@ import com.limelight.binding.input.overlay.EditableElement;
 import com.limelight.binding.input.overlay.EditableOverlay;
 import com.limelight.binding.input.overlay.ElementEditState;
 import com.limelight.binding.input.overlay.LayoutSlots;
+import com.limelight.binding.input.overlay.OverlayEditorSettings;
 import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
@@ -55,10 +56,10 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
         void onEditorClosed(boolean saved);
     }
 
-    private static final String PREF_SNAP = "overlay_editor_snap";
-    private static final String PREF_GRID = "overlay_editor_grid";
+    private static final String PREF_SNAP = OverlayEditorSettings.EDITOR_SNAP;
+    private static final String PREF_GRID = OverlayEditorSettings.EDITOR_GRID;
     /** "auto" (dock where it covers the fewest controls), "top" or "bottom". */
-    private static final String PREF_TOOLBAR_POSITION = "overlay_editor_toolbar_position";
+    private static final String PREF_TOOLBAR_POSITION = OverlayEditorSettings.EDITOR_TOOLBAR_POSITION;
 
     private static final int SIZE_MIN_PERCENT = 30;
     private static final int SIZE_MAX_PERCENT = 300;
@@ -986,6 +987,39 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
         CheckBox squareKeys = checkBox(R.string.overlay_editor_option_square_keys, config.enableKeyboardSquare);
         content.addView(guide);
         content.addView(freeSticks);
+
+        // Opacity of the floating sticks' touch circle
+        final TextView freeSticksOpacityLabel = new TextView(context);
+        final SeekBar freeSticksOpacity = new SeekBar(context);
+        freeSticksOpacity.setMax(100);
+        freeSticksOpacity.setProgress(config.enableNewAnalogStickOpacity);
+        freeSticksOpacityLabel.setText(context.getString(R.string.overlay_editor_option_free_sticks_opacity,
+                config.enableNewAnalogStickOpacity));
+        freeSticksOpacityLabel.setPadding(dp(32), 0, 0, 0);
+        freeSticksOpacity.setPadding(dp(40), dp(4), dp(16), dp(8));
+        freeSticksOpacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                freeSticksOpacityLabel.setText(context.getString(R.string.overlay_editor_option_free_sticks_opacity, progress));
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+        Runnable updateFreeSticks = () -> {
+            int visibility = freeSticks.isChecked() ? VISIBLE : GONE;
+            freeSticksOpacityLabel.setVisibility(visibility);
+            freeSticksOpacity.setVisibility(visibility);
+        };
+        freeSticks.setOnCheckedChangeListener((button, checked) -> updateFreeSticks.run());
+        updateFreeSticks.run();
+        content.addView(freeSticksOpacityLabel);
+        content.addView(freeSticksOpacity);
         content.addView(squareKeys);
 
         ScrollView scroll = new ScrollView(context);
@@ -1000,10 +1034,11 @@ public class OverlayEditorView extends FrameLayout implements EditorCanvasView.C
                         ((ButtonStyle) checkedStyle.getTag()).save(context);
                     }
                     prefs.edit()
-                            .putInt("seekbar_osc_opacity", opacity.getProgress())
-                            .putBoolean("checkbox_show_guide_button", guide.isChecked())
-                            .putBoolean("checkbox_enable_analog_stick_new", freeSticks.isChecked())
-                            .putBoolean("checkbox_enable_keyboard_square", squareKeys.isChecked())
+                            .putInt(OverlayEditorSettings.OPACITY, opacity.getProgress())
+                            .putBoolean(OverlayEditorSettings.SHOW_GUIDE_BUTTON, guide.isChecked())
+                            .putBoolean(OverlayEditorSettings.FLOATING_STICKS, freeSticks.isChecked())
+                            .putInt(OverlayEditorSettings.FLOATING_STICKS_OPACITY, freeSticksOpacity.getProgress())
+                            .putBoolean(OverlayEditorSettings.SQUARE_KEYS, squareKeys.isChecked())
                             .commit();
                     for (EditableOverlay overlay : overlays) {
                         reloadOverlay(overlay, true);

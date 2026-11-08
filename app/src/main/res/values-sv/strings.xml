@@ -377,4 +377,7 @@
     <string name="overlay_editor_toolbar_bottom">Nederst</string>
     <string name="overlay_element_wasd_dpad">WASD-styrkors</string>
     <string name="overlay_element_wasd_stick">WASD-spak</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Opacitet för cirkeln kring flytande spakar: %1$d%%</string>
 </resources>

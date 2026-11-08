@@ -394,4 +394,7 @@
     <string name="overlay_editor_toolbar_bottom">In basso</string>
     <string name="overlay_element_wasd_dpad">Croce WASD</string>
     <string name="overlay_element_wasd_stick">Levetta WASD</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Opacità del cerchio delle levette flottanti: %1$d%%</string>
 </resources>

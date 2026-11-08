@@ -933,6 +933,7 @@
     <string name="overlay_editor_controls">Controls</string>
     <string name="overlay_editor_option_guide">Show the Home (Guide) button</string>
     <string name="overlay_editor_option_free_sticks">Floating analog sticks (appear where you touch)</string>
+    <string name="overlay_editor_option_free_sticks_opacity">Floating stick touch circle opacity: %1$d%%</string>
     <string name="overlay_editor_option_square_keys">Square keyboard keys</string>
     <string name="overlay_editor_apply">Apply</string>
     <string name="overlay_editor_saved">Layout saved</string>

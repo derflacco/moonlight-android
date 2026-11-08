@@ -20,7 +20,7 @@ public final class LayoutSlots {
     public static final int SLOT_COUNT = 5;
 
     /** Active gamepad slot (file name). */
-    public static final String PREF_GAMEPAD_SLOT = "osc_gamepad_layout";
+    public static final String PREF_GAMEPAD_SLOT = OverlayEditorSettings.GAMEPAD_LAYOUT;
     /** Active keyboard slot (file name), historical preference key. */
     public static final String PREF_KEYBOARD_SLOT = "keyboard_axi_list";
 

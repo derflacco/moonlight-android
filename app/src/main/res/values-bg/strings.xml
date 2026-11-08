@@ -246,4 +246,7 @@
     <string name="overlay_editor_toolbar_bottom">Долу</string>
     <string name="overlay_element_wasd_dpad">WASD кръстачка</string>
     <string name="overlay_element_wasd_stick">WASD стик</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Непрозрачност на кръга на плаващия стик: %1$d%%</string>
 </resources>

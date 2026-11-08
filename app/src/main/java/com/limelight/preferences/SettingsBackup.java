@@ -48,7 +48,8 @@ import java.util.TreeSet;
  * imported in another build of the app (different application id / signature).
  *
  * <p>Importing only applies the settings of the settings screen (read from
- * res/xml/preferences.xml, with the value type of each one) and the known data groups:
+ * res/xml/preferences.xml, with the value type of each one), the settings of the input overlay
+ * editor ({@link com.limelight.binding.input.overlay.OverlayEditorSettings}) and the known data groups:
  * {@link #analyze} lists everything else (settings of a newer version, internal state,
  * incompatible values, unknown files and sections) and {@link #restore} skips it. If the
  * import fails midway, the previous configuration is put back.</p>
@@ -185,7 +186,10 @@ public final class SettingsBackup {
      * in a backup (settings of a newer version, internal state...) is reported and skipped.
      */
     static Map<String, String> supportedSettings(Context context) {
-        return declaredSettings(context);
+        Map<String, String> settings = declaredSettings(context);
+        // The input overlay editor is the other settings screen
+        settings.putAll(com.limelight.binding.input.overlay.OverlayEditorSettings.declared());
+        return settings;
     }
 
     // ------------------------------------------------------------------------------------

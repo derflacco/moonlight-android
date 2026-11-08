@@ -811,4 +811,7 @@
     <string name="overlay_editor_toolbar_bottom">底部</string>
     <string name="overlay_element_wasd_dpad">WASD 十字键</string>
     <string name="overlay_element_wasd_stick">WASD 摇杆</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">浮动摇杆圆圈不透明度：%1$d%%</string>
 </resources>

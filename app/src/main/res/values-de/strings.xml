@@ -413,4 +413,7 @@
     <string name="overlay_editor_toolbar_bottom">Unten</string>
     <string name="overlay_element_wasd_dpad">WASD-Steuerkreuz</string>
     <string name="overlay_element_wasd_stick">WASD-Stick</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Deckkraft des Kreises der schwebenden Sticks: %1$d%%</string>
 </resources>
