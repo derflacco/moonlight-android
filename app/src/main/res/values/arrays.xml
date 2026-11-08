@@ -151,11 +151,11 @@
 
 
     <string-array name="keyboard_axi_names">
-        <item>@string/keyboard_layout_set_1</item>
-        <item>@string/keyboard_layout_set_1</item>
-        <item>@string/keyboard_layout_set_1</item>
-        <item>@string/keyboard_layout_set_1</item>
-        <item>@string/keyboard_layout_set_1</item>
+        <item>@string/overlay_editor_slot_1</item>
+        <item>@string/overlay_editor_slot_2</item>
+        <item>@string/overlay_editor_slot_3</item>
+        <item>@string/overlay_editor_slot_4</item>
+        <item>@string/overlay_editor_slot_5</item>
     </string-array>
     <string-array name="keyboard_axi_values" translatable="false">
         <item>OSC_Keyboard</item>

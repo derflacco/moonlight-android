@@ -43,7 +43,8 @@ public class ConfirmDeleteOscPreference extends DialogPreference {
         @Override
         public void onDialogClosed(boolean positiveResult) {
             if (positiveResult) {
-                getContext().getSharedPreferences(OSC_PREFERENCE, Context.MODE_PRIVATE).edit().clear().apply();
+                com.limelight.binding.input.overlay.LayoutSlots.openActive(getContext(),
+                        com.limelight.binding.input.overlay.LayoutSlots.Kind.GAMEPAD).edit().clear().apply();
                 Toast.makeText(getContext(), R.string.toast_reset_osc_success, Toast.LENGTH_SHORT).show();
             }
         }

@@ -130,6 +130,7 @@ public class KeyBoardDigitalButton extends keyBoardVirtualControllerElement {
 
     public void setText(String text) {
         this.text = text;
+        setDisplayName(text);
         invalidate();
     }
 

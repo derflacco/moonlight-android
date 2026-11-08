@@ -214,6 +214,13 @@
                 android:name="com.nvidia.rawCursorInput"
                 android:value="true" />
         </activity>
+        <activity
+            android:name=".InputOverlayEditorActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenLayout|orientation|screenSize|smallestScreenSize"
+            android:screenOrientation="sensorLandscape"
+            android:excludeFromRecents="true"
+            android:label="@string/overlay_editor_title"
+            android:theme="@style/StreamTheme" />
 
         <service
             android:name=".discovery.DiscoveryService"

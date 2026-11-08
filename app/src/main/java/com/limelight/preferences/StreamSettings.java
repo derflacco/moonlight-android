@@ -1263,6 +1263,10 @@ public class StreamSettings extends AppCompatActivity {
 
             // hide on-screen controls category on non touch screen devices
             if (!pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
+                PreferenceCategory overlayCategory = findPreference("category_input_overlay");
+                if (overlayCategory != null) {
+                    screen.removePreference(overlayCategory);
+                }
                 PreferenceCategory category = findPreference("category_onscreen_controls");
                 if (category != null) {
                     screen.removePreference(category);
@@ -1664,6 +1668,14 @@ public class StreamSettings extends AppCompatActivity {
             if (_pref != null) {
                 _pref.setOnPreferenceClickListener(preference -> {
                     showBackupDialog();
+                    return true;
+                });
+            }
+
+            _pref = findPreference("open_input_overlay_editor");
+            if (_pref != null) {
+                _pref.setOnPreferenceClickListener(preference -> {
+                    startActivity(new Intent(getActivity(), com.limelight.InputOverlayEditorActivity.class));
                     return true;
                 });
             }

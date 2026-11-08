@@ -11,21 +11,22 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.DisplayMetrics;
-import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.Toast;
 
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.input.ControllerHandler;
+import com.limelight.binding.input.overlay.ButtonStyle;
+import com.limelight.binding.input.overlay.EditableOverlay;
+import com.limelight.binding.input.overlay.LayoutSlots;
 import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class VirtualController {
+public class VirtualController implements EditableOverlay {
     public static class ControllerInputContext {
 //        public short inputMap = 0x0000;
         public int inputMap = 0;
@@ -35,13 +36,6 @@ public class VirtualController {
         public short rightStickY = 0x0000;
         public short leftStickX = 0x0000;
         public short leftStickY = 0x0000;
-    }
-
-    public enum ControllerMode {
-        Active,
-        MoveButtons,
-        ResizeButtons,
-        DisableEnableButtons
     }
 
     private static final boolean _PRINT_DEBUG_INFORMATION = false;
@@ -59,10 +53,10 @@ public class VirtualController {
 
     private FrameLayout frame_layout = null;
 
-    ControllerMode currentMode = ControllerMode.Active;
     ControllerInputContext inputContext = new ControllerInputContext();
 
     private Button buttonConfigure = null;
+    private Runnable onConfigureListener;
 
     private List<VirtualControllerElement> elements = new ArrayList<>();
 
@@ -70,11 +64,19 @@ public class VirtualController {
 
     private final VibrationEffect defaultVibrationEffect;
 
+    private boolean editing = false;
+    private boolean shown = true;
+    private ButtonStyle buttonStyle;
+
+    /**
+     * @param controllerHandler may be null when the overlay is only displayed by the layout editor
+     */
     public VirtualController(final ControllerHandler controllerHandler, FrameLayout layout, final Context context) {
         this.controllerHandler = controllerHandler;
         this.frame_layout = layout;
         this.context = context;
         this.handler = new Handler(Looper.getMainLooper());
+        this.buttonStyle = ButtonStyle.fromPreferences(context);
 
         this.vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -87,45 +89,33 @@ public class VirtualController {
         buttonConfigure.setAlpha(0.25f);
         buttonConfigure.setFocusable(false);
         buttonConfigure.setBackgroundResource(R.drawable.ic_settings);
+        buttonConfigure.setContentDescription(context.getString(R.string.overlay_editor_title));
         buttonConfigure.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                String message;
-
-                if (currentMode == ControllerMode.Active) {
-                    currentMode = ControllerMode.DisableEnableButtons;
-                    showElements();
-                    message = context.getString(R.string.configuration_mode_disable_enable_buttons);
-                } else if (currentMode == ControllerMode.DisableEnableButtons){
-                    currentMode = ControllerMode.MoveButtons;
-                    showEnabledElements();
-                    message = context.getString(R.string.configuration_mode_move_buttons);
-                } else if (currentMode == ControllerMode.MoveButtons) {
-                    currentMode = ControllerMode.ResizeButtons;
-                    message = context.getString(R.string.configuration_mode_resize_buttons);
-                } else {
-                    currentMode = ControllerMode.Active;
-                    VirtualControllerConfigurationLoader.saveProfile(VirtualController.this, context);
-                    message = context.getString(R.string.configuration_mode_exiting);
-                }
-
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
-
-                buttonConfigure.invalidate();
-
-                for (VirtualControllerElement element : elements) {
-                    element.invalidate();
+                if (onConfigureListener != null) {
+                    onConfigureListener.run();
                 }
             }
         });
+    }
 
+    /** Called when the user taps the overlay's configure button (opens the layout editor). */
+    public void setOnConfigureListener(Runnable listener) {
+        this.onConfigureListener = listener;
+        updateConfigureButtonVisibility();
     }
 
     Handler getHandler() {
         return handler;
     }
 
+    public ButtonStyle getButtonStyle() {
+        return buttonStyle;
+    }
+
     public void hide() {
+        shown = false;
         for (VirtualControllerElement element : elements) {
             element.setVisibility(View.GONE);
         }
@@ -134,13 +124,17 @@ public class VirtualController {
     }
 
     public void show() {
+        shown = true;
         showEnabledElements();
+        updateConfigureButtonVisibility();
+    }
 
-        buttonConfigure.setVisibility(View.VISIBLE);
+    public boolean isShown() {
+        return shown;
     }
 
     public int switchShowHide() {
-        if (buttonConfigure.getVisibility() == View.VISIBLE) {
+        if (shown) {
             hide();
             return 0;
         } else {
@@ -149,16 +143,15 @@ public class VirtualController {
         }
     }
 
-    public void showElements(){
-        for(VirtualControllerElement element : elements){
-            element.setVisibility(View.VISIBLE);
+    public void showEnabledElements() {
+        for (VirtualControllerElement element : elements) {
+            element.getEditState().editing = editing;
+            element.getEditState().applyVisibility(element);
         }
     }
 
-    public void showEnabledElements(){
-        for(VirtualControllerElement element: elements){
-            element.setVisibility( element.enabled ? View.VISIBLE : View.GONE );
-        }
+    private void updateConfigureButtonVisibility() {
+        buttonConfigure.setVisibility(shown && !editing && onConfigureListener != null ? View.VISIBLE : View.GONE);
     }
 
     public void removeElements() {
@@ -182,6 +175,8 @@ public class VirtualController {
         FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(width, height);
         layoutParams.setMargins(x, y, 0, 0);
 
+        element.getEditState().defaultBounds.set(x, y, x + width, y + height);
+
         frame_layout.addView(element, layoutParams);
     }
 
@@ -198,6 +193,8 @@ public class VirtualController {
     public void refreshLayout() {
         removeElements();
 
+        buttonStyle = ButtonStyle.fromPreferences(context);
+
         DisplayMetrics screen = context.getResources().getDisplayMetrics();
 
         int buttonSize = (int)(screen.heightPixels*0.06f);
@@ -211,11 +208,68 @@ public class VirtualController {
 
         // Apply user preferences onto the default layout
         VirtualControllerConfigurationLoader.loadFromPreferences(this, context);
+
+        if (shown) {
+            show();
+        } else {
+            hide();
+        }
     }
 
-    public ControllerMode getControllerMode() {
-        return currentMode;
+    // ------------------------------------------------------------------------------------
+    // EditableOverlay
+    // ------------------------------------------------------------------------------------
+
+    @Override
+    public LayoutSlots.Kind getKind() {
+        return LayoutSlots.Kind.GAMEPAD;
     }
+
+    @Override
+    public String getTitle(Context context) {
+        return context.getString(R.string.overlay_editor_tab_gamepad);
+    }
+
+    @Override
+    public List<VirtualControllerElement> getEditableElements() {
+        return elements;
+    }
+
+    @Override
+    public void setEditing(boolean editing) {
+        this.editing = editing;
+        if (editing) {
+            // Release anything that may be held when the editor opens
+            inputContext = new ControllerInputContext();
+            sendControllerInputContextInternal();
+        }
+        if (shown) {
+            showEnabledElements();
+        }
+        updateConfigureButtonVisibility();
+        for (VirtualControllerElement element : elements) {
+            element.invalidate();
+        }
+    }
+
+    @Override
+    public boolean isEditing() {
+        return editing;
+    }
+
+    @Override
+    public void saveLayout() {
+        VirtualControllerConfigurationLoader.saveProfile(this, context);
+    }
+
+    @Override
+    public void reloadLayout() {
+        refreshLayout();
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Input
+    // ------------------------------------------------------------------------------------
 
     public ControllerInputContext getControllerInputContext() {
         return inputContext;
@@ -242,6 +296,11 @@ public class VirtualController {
     }
 
     public void sendControllerInputContext(long vibrationDuration, int vibrationAmplitude) {
+        if (controllerHandler == null) {
+            // Preview only (layout editor)
+            return;
+        }
+
         // Cancel retransmissions of prior gamepad inputs
         handler.removeCallbacks(delayedRetransmitRunnable);
 

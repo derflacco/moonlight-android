@@ -235,12 +235,9 @@ public class AnalogStickFree extends VirtualControllerElement {
 
     @Override
     protected void onElementDraw(Canvas canvas) {
-        boolean bIsMoving = virtualController.getControllerMode() == VirtualController.ControllerMode.MoveButtons;
-        boolean bIsResizing = virtualController.getControllerMode() == VirtualController.ControllerMode.ResizeButtons;
-        boolean bIsEnable = virtualController.getControllerMode() == VirtualController.ControllerMode.DisableEnableButtons;
-
-        if (bIsMoving || bIsResizing || bIsEnable) {
-            canvas.drawColor(getDefaultColor());
+        if (isEditorPreview()) {
+            // The free stick only shows up under the finger: show its touch area in the editor
+            canvas.drawColor((getDefaultColor() & 0x00FFFFFF) | 0x66000000);
             paint.setColor(Color.WHITE);
             int nWidth = getWidth();
             int nHeight = getHeight();

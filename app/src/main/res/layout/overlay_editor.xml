@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <com.limelight.binding.input.overlay.editor.EditorCanvasView
+        android:id="@+id/oe_canvas"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Toolbar -->
+    <HorizontalScrollView
+        android:id="@+id/oe_toolbar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_margin="8dp"
+        android:background="@drawable/oe_bar_bg"
+        android:fillViewport="false"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="4dp">
+
+            <TextView
+                android:id="@+id/oe_close"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_close"
+                android:text="@string/overlay_editor_close" />
+
+            <View style="@style/OverlayEditorDivider" />
+
+            <TextView
+                android:id="@+id/oe_tab_gamepad"
+                style="@style/OverlayEditorTab"
+                android:text="@string/overlay_editor_tab_gamepad" />
+
+            <TextView
+                android:id="@+id/oe_tab_keyboard"
+                style="@style/OverlayEditorTab"
+                android:text="@string/overlay_editor_tab_keyboard" />
+
+            <TextView
+                android:id="@+id/oe_slot"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_layers"
+                android:text="@string/overlay_editor_slot" />
+
+            <View style="@style/OverlayEditorDivider" />
+
+            <TextView
+                android:id="@+id/oe_undo"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_undo"
+                android:text="@string/overlay_editor_undo" />
+
+            <TextView
+                android:id="@+id/oe_redo"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_redo"
+                android:text="@string/overlay_editor_redo" />
+
+            <View style="@style/OverlayEditorDivider" />
+
+            <TextView
+                android:id="@+id/oe_add"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_add"
+                android:text="@string/overlay_editor_add" />
+
+            <TextView
+                android:id="@+id/oe_options"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_palette"
+                android:text="@string/overlay_editor_style_short" />
+
+            <TextView
+                android:id="@+id/oe_more"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_more"
+                android:text="@string/overlay_editor_more" />
+
+            <View style="@style/OverlayEditorDivider" />
+
+            <TextView
+                android:id="@+id/oe_save"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_check"
+                android:text="@string/overlay_editor_save" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <!-- Properties of the selected control -->
+    <LinearLayout
+        android:id="@+id/oe_panel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_margin="8dp"
+        android:background="@drawable/oe_bar_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:paddingLeft="12dp"
+        android:paddingTop="6dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/oe_panel_title"
+                android:layout_width="150dp"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/oe_panel_visible"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_visibility"
+                android:text="@string/overlay_editor_shown" />
+
+            <TextView
+                android:id="@+id/oe_panel_lock"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_lock"
+                android:text="@string/overlay_editor_keep_ratio" />
+
+            <TextView
+                android:id="@+id/oe_panel_reset"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_reset"
+                android:text="@string/overlay_editor_reset_element" />
+
+            <TextView
+                android:id="@+id/oe_panel_remove"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_delete"
+                android:text="@string/overlay_editor_remove" />
+
+            <TextView
+                android:id="@+id/oe_panel_done"
+                style="@style/OverlayEditorAction"
+                android:drawableTop="@drawable/ic_oe_check"
+                android:text="@string/overlay_editor_done" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/oe_row_size"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/OverlayEditorLabel"
+                        android:text="@string/overlay_editor_size" />
+
+                    <SeekBar
+                        android:id="@+id/oe_size"
+                        style="@style/OverlayEditorSeekBar" />
+
+                    <TextView
+                        android:id="@+id/oe_size_value"
+                        style="@style/OverlayEditorValue" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/oe_row_width"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/OverlayEditorLabel"
+                        android:text="@string/overlay_editor_width" />
+
+                    <SeekBar
+                        android:id="@+id/oe_width"
+                        style="@style/OverlayEditorSeekBar" />
+
+                    <TextView
+                        android:id="@+id/oe_width_value"
+                        style="@style/OverlayEditorValue" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/oe_row_height"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/OverlayEditorLabel"
+                        android:text="@string/overlay_editor_height" />
+
+                    <SeekBar
+                        android:id="@+id/oe_height"
+                        style="@style/OverlayEditorSeekBar" />
+
+                    <TextView
+                        android:id="@+id/oe_height_value"
+                        style="@style/OverlayEditorValue" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/OverlayEditorLabel"
+                        android:text="@string/overlay_editor_opacity" />
+
+                    <SeekBar
+                        android:id="@+id/oe_opacity"
+                        style="@style/OverlayEditorSeekBar" />
+
+                    <TextView
+                        android:id="@+id/oe_opacity_value"
+                        style="@style/OverlayEditorValue" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Nudge pad -->
+            <GridLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="12dp"
+                android:columnCount="3"
+                android:rowCount="2">
+
+                <Space
+                    android:layout_width="36dp"
+                    android:layout_height="36dp" />
+
+                <ImageView
+                    android:id="@+id/oe_nudge_up"
+                    style="@style/OverlayEditorNudge"
+                    android:contentDescription="@string/overlay_editor_nudge_up" />
+
+                <Space
+                    android:layout_width="36dp"
+                    android:layout_height="36dp" />
+
+                <ImageView
+                    android:id="@+id/oe_nudge_left"
+                    style="@style/OverlayEditorNudge"
+                    android:contentDescription="@string/overlay_editor_nudge_left"
+                    android:rotation="270" />
+
+                <ImageView
+                    android:id="@+id/oe_nudge_down"
+                    style="@style/OverlayEditorNudge"
+                    android:contentDescription="@string/overlay_editor_nudge_down"
+                    android:rotation="180" />
+
+                <ImageView
+                    android:id="@+id/oe_nudge_right"
+                    style="@style/OverlayEditorNudge"
+                    android:contentDescription="@string/overlay_editor_nudge_right"
+                    android:rotation="90" />
+            </GridLayout>
+        </LinearLayout>
+    </LinearLayout>
+</merge>
