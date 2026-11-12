@@ -30,7 +30,8 @@ public final class CpuAffinity {
 
     private static boolean ensureLoaded() {
         if (sNativeLoaded) return true;
-        if (sTriedLoad) return false;
+        // sTriedLoad may already be true while another worker is still loading JNI.
+        // Wait for that worker before interpreting the attempt as a failure.
         synchronized (CpuAffinity.class) {
             if (sNativeLoaded) return true;
             if (!sTriedLoad) {
