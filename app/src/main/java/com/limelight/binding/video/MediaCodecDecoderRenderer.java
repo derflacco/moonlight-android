@@ -19,6 +19,7 @@ import com.limelight.R;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.NvidiaLatencyRecoveryEligibility;
 import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.TrafficStatsHelper;
 import java.util.concurrent.atomic.AtomicLongArray;
@@ -63,6 +64,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // stats
     private final DecodeLatencyTracker decodeLatencyTracker = new DecodeLatencyTracker();
+    private volatile NvidiaLatencyRecoveryController nvidiaLatencyRecoveryController;
 
     // Offload heavy perf overlay formatting off the decode thread
     private final Handler perfOverlayHandler = new Handler(Looper.getMainLooper());
@@ -1212,6 +1214,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
             // This is the final thread to quiesce, so let's perform the codec recovery now.
             if (codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL) {
+                final NvidiaLatencyRecoveryController recovery = nvidiaLatencyRecoveryController;
+                if (recovery != null) recovery.recoveryBegin(codecRecoveryType.get());
                 // Input and output buffers are invalidated by stop() and reset().
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
@@ -1738,6 +1742,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         }
                     }
 
+                    // Keep runtime eligibility current; this never mutates user settings.
+                    final NvidiaLatencyRecoveryController recoveryController = nvidiaLatencyRecoveryController;
+                    if (recoveryController != null && recoveryController.isActive()) {
+                        recoveryController.updateMode(nvidiaLatencyRecoveryModeMask(),
+                                prefs != null ? prefs.fps : 0f);
+                    }
                     // Throttle cleanup to avoid performance spikes
                     final long nowNs = System.nanoTime();
                     if (nowNs - lastCleanupNs > CLEANUP_INTERVAL_NS) {
@@ -1851,10 +1861,31 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     lastFlags = nanoLatest.flags;
                                     lastDequeueTimeNs = nanoLatest.dequeueNs;
                                 }
-                                // Present/release newest buffer
-                                releaseBufferAccordingToMode(lastIndex, presentationTimeUs);
-
-                                activeWindowVideoStats.totalFramesRendered++;
+                                // Bounded automatic stale-output recovery. Normal rendering is unchanged when no action is due.
+                                final NvidiaLatencyRecoveryController recovery = nvidiaLatencyRecoveryController;
+                                final boolean recoveryActive = recovery != null && recovery.isActive();
+                                final long recoveryEpoch = recoveryActive ? recovery.epoch() : 0L;
+                                final NvidiaLatencyRecoveryGate.Decision recoveryDecision = recoveryActive
+                                        ? recovery.decide(recoveryEpoch, presentationTimeUs, lastFlags) : null;
+                                final boolean recoveryDrop = recoveryDecision != null && recoveryDecision.drop;
+                                boolean releaseSucceeded = false;
+                                try {
+                                    if (recoveryDrop) {
+                                        final MediaCodec recoveryCodec = videoDecoder;
+                                        if (recoveryCodec == null) {
+                                            throw new IllegalStateException("NVIDIA recovery codec disappeared before release");
+                                        }
+                                        releaseOutputBufferNoRenderLocked(recoveryCodec, lastIndex);
+                                    } else {
+                                        releaseBufferAccordingToMode(lastIndex, presentationTimeUs);
+                                        activeWindowVideoStats.totalFramesRendered++;
+                                    }
+                                    releaseSucceeded = true;
+                                } finally {
+                                    if (recoveryActive && recoveryDecision != null) {
+                                        recovery.released(recoveryDecision, releaseSucceeded);
+                                    }
+                                }
 
                                 // EOS must be handled only after the last buffer is released
                                 if (eos) {
@@ -2106,12 +2137,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Ensure initial frame pacing reflects settings (overlay-first, UI fallback)
         initFramePacingFromSettings();
+        // NVIDIA latency recovery is a strict opt-in. When disabled or statically incompatible,
+        // do not instantiate the controller; all hot-path hooks remain null checks only.
+        if (isNvidiaLatencyRecoveryRequestedAndStaticallyEligible()) {
+            nvidiaLatencyRecoveryController = NvidiaLatencyRecoveryController.open(videoDecoder != null ? videoDecoder.getName() : null);
+        } else {
+            nvidiaLatencyRecoveryController = null;
+        }
         startRendererThread();
         startChoreographerThread();
     }
 
     // !!! May be called even if setup()/start() fails !!!
     public void prepareForStop() {
+        final NvidiaLatencyRecoveryController recovery = nvidiaLatencyRecoveryController;
+        if (recovery != null) recovery.stop();
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
 
@@ -2514,6 +2554,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void cleanup() {
+        final NvidiaLatencyRecoveryController recovery = nvidiaLatencyRecoveryController;
+        if (recovery != null) recovery.stop();
 
         // Clear decode latency tracking to prevent memory leaks
         decodeLatencyTracker.clear();
@@ -2590,9 +2632,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         boolean codecRecovered;
 
         try {
+            final NvidiaLatencyRecoveryController recovery = nvidiaLatencyRecoveryController;
+            final boolean recoveryActive = recovery != null && recovery.isActive();
             videoDecoder.queueInputBuffer(nextInputBufferIndex,
                     0, nextInputBuffer.position(),
                     timestampUs, codecFlags);
+            if (recoveryActive && timestampUs > 0) {
+                recovery.queued(timestampUs, System.nanoTime());
+            }
 
             // Track enqueue time for this PTS
             if (timestampUs != 0) { // Don't track config buffers with timestamp 0
@@ -3502,12 +3549,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return MediaCodec.INFO_TRY_AGAIN_LATER;
         }
 
+        final NvidiaLatencyRecoveryController recovery = nvidiaLatencyRecoveryController;
+        final boolean recoveryActive = recovery != null && recovery.isActive();
+        final long recoveryEpoch = recoveryActive ? recovery.epoch() : 0L;
+
         if (!useAsyncCodec) {
             asyncCodec.resetLastOutputReadyNs();
-            return codec.dequeueOutputBuffer(outInfo, timeoutUs);
+            final int outputIndex = codec.dequeueOutputBuffer(outInfo, timeoutUs);
+            if (recoveryActive && outputIndex >= 0) {
+                recovery.output(recoveryEpoch, System.nanoTime(), outInfo.presentationTimeUs);
+            }
+            return outputIndex;
         }
 
-        return asyncCodec.dequeueOutputIndex(codec, outInfo, timeoutUs, asyncOutputRelease);
+        final int outputIndex = asyncCodec.dequeueOutputIndex(codec, outInfo, timeoutUs, asyncOutputRelease);
+        if (recoveryActive && outputIndex >= 0) {
+            recovery.output(recoveryEpoch, asyncCodec.getLastOutputReadyNs(), outInfo.presentationTimeUs);
+        }
+        return outputIndex;
     }
 
 
@@ -3549,6 +3608,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
    // Async Decoding Helpers End
 
+
+    // Shared static scope gate. Zero means recovery is statically eligible. The same policy
+    // class is used by StreamSettings so UI and renderer cannot silently diverge.
+    private boolean isNvidiaLatencyRecoveryRequestedAndStaticallyEligible() {
+        if (prefs == null || !prefs.nvidiaLatencyRecoveryEnabled) return false;
+        return NvidiaLatencyRecoveryEligibility.staticModeMask(
+                prefs.framePacing, useAsyncCodec, syncLfrEnabled, prefs.fastVsync) == 0;
+    }
+
+    private int nvidiaLatencyRecoveryModeMask() {
+        final int pacing = (prefs != null) ? prefs.framePacing : Integer.MIN_VALUE;
+        int mask = NvidiaLatencyRecoveryEligibility.staticModeMask(
+                pacing, useAsyncCodec, syncLfrEnabled, prefs != null && prefs.fastVsync);
+        if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) mask |= NvidiaLatencyRecoveryController.MODE_CODEC_RECOVERY;
+        if (stopping) mask |= NvidiaLatencyRecoveryController.MODE_STOPPING;
+        if (videoDecoder == null) mask |= NvidiaLatencyRecoveryController.MODE_NO_CODEC;
+        if (useAsyncCodec && !asyncCodec.isActive()) mask |= NvidiaLatencyRecoveryController.MODE_ASYNC_NOT_READY;
+        return mask;
+    }
 
     // Helper method for buffer release based on mode
     private void releaseBufferAccordingToMode(int bufferIndex, long presentationTimeUs) {

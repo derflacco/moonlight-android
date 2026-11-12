@@ -276,6 +276,12 @@
             seekbar:min="0"
             seekbar:step="250"
             seekbar:keyStep="250" />
+        <CheckBoxPreference
+            android:key="checkbox_nvidia_latency_recovery"
+            android:title="NVIDIA latency recovery"
+            android:summary="Automatically recovers persistent NVIDIA decoder latency on supported streaming modes."
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
             android:key="checkbox_gpu_path_mode"

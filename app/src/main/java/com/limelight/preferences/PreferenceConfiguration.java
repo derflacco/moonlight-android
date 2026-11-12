@@ -20,6 +20,11 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_IMMEDIATE_FRAME_DELIVERY = false;
     // Async decoder callback mode (UI toggle)
     public boolean asyncDecodeEnabled = true;
+
+    // NVIDIA MediaCodec latency recovery (opt-in)
+    public boolean nvidiaLatencyRecoveryEnabled = false;
+    private static final String NVIDIA_LATENCY_RECOVERY_PREF_STRING = "checkbox_nvidia_latency_recovery";
+    private static final boolean DEFAULT_NVIDIA_LATENCY_RECOVERY = false;
     private static final String ASYNC_DECODE_ENABLED_PREF_STRING = "checkbox_async_decode";
     private static final boolean DEFAULT_ASYNC_DECODE_ENABLED = true;
 
@@ -1178,6 +1183,8 @@ public class PreferenceConfiguration {
         config.snappyInput = prefs.getBoolean(SNAPPY_INPUT_PREF_STRING, DEFAULT_SNAPPY_INPUT);
         config.immediateFrameDelivery = prefs.getBoolean(IMMEDIATE_FRAME_DELIVERY_PREF_STRING, DEFAULT_IMMEDIATE_FRAME_DELIVERY);
         config.asyncDecodeEnabled = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) && prefs.getBoolean(ASYNC_DECODE_ENABLED_PREF_STRING, DEFAULT_ASYNC_DECODE_ENABLED);
+        config.nvidiaLatencyRecoveryEnabled = prefs.getBoolean(
+                NVIDIA_LATENCY_RECOVERY_PREF_STRING, DEFAULT_NVIDIA_LATENCY_RECOVERY);
         config.syncLfrEnabled = prefs.getBoolean(SYNC_LFR_ENABLED_PREF_STRING, DEFAULT_SYNC_LFR_ENABLED);
         config.decoderOutputDequeueTimeoutCustom = prefs.getBoolean(
                 DECODER_OUTPUT_DEQUEUE_TIMEOUT_CUSTOM_PREF_STRING,

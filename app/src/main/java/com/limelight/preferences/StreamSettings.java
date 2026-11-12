@@ -199,6 +199,7 @@ public class StreamSettings extends AppCompatActivity {
                             // Vsync \ FastVsync
                             || "checkbox_Vsync".equals(key)
                             || "checkbox_fastVsync".equals(key)
+                            || "checkbox_nvidia_latency_recovery".equals(key)
                             || "checkbox_gpu_path_mode".equals(key)          // GPUPath (actual key)
                             || "checkbox_gpupath".equals(key)                // GPUPath (legacy key, keep)
                             || "pref_video_upscale_enable".equals(key)       // Upscaling enable
@@ -519,7 +520,26 @@ public class StreamSettings extends AppCompatActivity {
                 }
                 decoderOutputDequeueTimeout.setEnabled(dequeueCustomEnabled);
             }
+            updateNvidiaLatencyRecoveryUi(sp);
         }
+
+        private void updateNvidiaLatencyRecoveryUi(SharedPreferences sp) {
+            final Preference recovery = findPreference("checkbox_nvidia_latency_recovery");
+            if (recovery == null) return;
+
+            // Compatibility never mutates the user's choice or any conflicting setting.
+            final PreferenceConfiguration current =
+                    PreferenceConfiguration.readPreferences(requireContext(), sp);
+            final int mask = NvidiaLatencyRecoveryEligibility.staticModeMask(
+                    current.framePacing, current.asyncDecodeEnabled,
+                    current.syncLfrEnabled, current.fastVsync);
+            final String base = "Automatically recovers persistent NVIDIA decoder latency on supported streaming modes.";
+            final boolean requested = sp.getBoolean("checkbox_nvidia_latency_recovery", false);
+            final String reason = requested ? NvidiaLatencyRecoveryEligibility.primaryInactiveReason(mask) : null;
+            recovery.setEnabled(true);
+            recovery.setSummary(reason == null ? base : base + " Inactive with current settings: " + reason + ".");
+        }
+
 
         @Override
         public void onResume() {
