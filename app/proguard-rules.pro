@@ -50,7 +50,6 @@
 -keep class com.github.mikephil.charting.** { *; }
 -dontwarn com.github.mikephil.charting.**
 # Flacco edits
--keep class com.limelight.binding.input.InputSender { *; }
 -keep class com.limelight.binding.video.AsyncCodecAdapter { *; }
 -keep class com.limelight.binding.video.GlUpscalerBridge { *; }
 -keep class com.limelight.binding.video.PerfOverlayComposer { *; }

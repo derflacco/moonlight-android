@@ -1,6 +1,5 @@
 package com.limelight.binding.input;
 
-import com.limelight.binding.input.InputSender;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
@@ -148,24 +147,12 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final Handler mainThreadHandler;
     private final HandlerThread backgroundHandlerThread;
     private final Handler backgroundThreadHandler;
-    private final InputSender inputSender;
     private boolean hasGameController;
     private boolean stopped = false;
 
     private final PreferenceConfiguration prefConfig;
 
-private static final int MAX_CONTROLLERS = 4;
-// Thresholds to avoid spamming tiny changes
-private static final int AXIS_DELTA_MIN = 64; // ~0.2% of full scale
-private static final int TRIGGER_DELTA_MIN = 2; // 0-255
-
-private final short[] lastSentLeftStickX = new short[MAX_CONTROLLERS];
-private final short[] lastSentLeftStickY = new short[MAX_CONTROLLERS];
-private final short[] lastSentRightStickX = new short[MAX_CONTROLLERS];
-private final short[] lastSentRightStickY = new short[MAX_CONTROLLERS];
-private final byte[] lastSentLeftTrigger = new byte[MAX_CONTROLLERS];
-private final byte[] lastSentRightTrigger = new byte[MAX_CONTROLLERS];
-private final int[] lastSentInputMap = new int[MAX_CONTROLLERS];
+    private final SnappyInputFilter snappyInputFilter;
 
     private short currentControllers, initialControllers;
 
@@ -185,13 +172,9 @@ private final int[] lastSentInputMap = new int[MAX_CONTROLLERS];
         this.backgroundHandlerThread.start();
         this.backgroundThreadHandler = new Handler(backgroundHandlerThread.getLooper());
 
-// Initialize snappy input sender if enabled
-if (this.prefConfig != null && this.prefConfig.snappyInput) {
-    this.inputSender = new InputSender(null);
-} else {
-    this.inputSender = null;
-}
-
+        this.snappyInputFilter = prefConfig != null && prefConfig.snappyInput
+                ? new SnappyInputFilter(MAX_GAMEPADS)
+                : null;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             this.deviceVibratorManager = (VibratorManager) activityContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
@@ -342,7 +325,6 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         }
 
         sceManager.stop();
-        if (inputSender != null) { try { inputSender.shutdown(); } catch (Throwable ignored) {} }
         backgroundHandlerThread.quit();
     }
 
@@ -469,6 +451,10 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                     (byte) 0, (byte) 0,
                     (short) 0, (short) 0,
                     (short) 0, (short) 0);
+
+            if (snappyInputFilter != null) {
+                snappyInputFilter.reset(context.controllerNumber);
+            }
         }
     }
 
@@ -1345,36 +1331,16 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             // Map A/B to left/right mouse buttons
             if ((changedMask & ControllerPacket.A_FLAG) != 0) {
                 if (aDown) {
-                    if (inputSender != null) {
-                        inputSender.post(() ->
-                                conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT));
-                    } else {
-                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
-                    }
+                    conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
                 } else {
-                    if (inputSender != null) {
-                        inputSender.post(() ->
-                                conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT));
-                    } else {
-                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
-                    }
+                    conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
                 }
             }
             if ((changedMask & ControllerPacket.B_FLAG) != 0) {
                 if (bDown) {
-                    if (inputSender != null) {
-                        inputSender.post(() ->
-                                conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT));
-                    } else {
-                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
-                    }
+                    conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
                 } else {
-                    if (inputSender != null) {
-                        inputSender.post(() ->
-                                conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT));
-                    } else {
-                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
-                    }
+                    conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
                 }
             }
 
@@ -1387,45 +1353,25 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             // D-pad mapped to scroll while in mouse emulation
             if ((changedMask & ControllerPacket.UP_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.UP_FLAG) != 0) {
-                    if (inputSender != null) {
-                        final byte step = scrollStep;
-                        inputSender.post(() -> conn.sendMouseScroll(step));
-                    } else {
-                        conn.sendMouseScroll(scrollStep);
-                    }
+                    conn.sendMouseScroll(scrollStep);
                 }
             }
 
             if ((changedMask & ControllerPacket.DOWN_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.DOWN_FLAG) != 0) {
-                    if (inputSender != null) {
-                        final byte step = negScrollStep;
-                        inputSender.post(() -> conn.sendMouseScroll(step));
-                    } else {
-                        conn.sendMouseScroll(negScrollStep);
-                    }
+                    conn.sendMouseScroll(negScrollStep);
                 }
             }
 
             if ((changedMask & ControllerPacket.RIGHT_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.RIGHT_FLAG) != 0) {
-                    if (inputSender != null) {
-                        final byte step = scrollStep;
-                        inputSender.post(() -> conn.sendMouseHScroll(step));
-                    } else {
-                        conn.sendMouseHScroll(scrollStep);
-                    }
+                    conn.sendMouseHScroll(scrollStep);
                 }
             }
 
             if ((changedMask & ControllerPacket.LEFT_FLAG) != 0) {
                 if ((inputMap & ControllerPacket.LEFT_FLAG) != 0) {
-                    if (inputSender != null) {
-                        final byte step = negScrollStep;
-                        inputSender.post(() -> conn.sendMouseHScroll(step));
-                    } else {
-                        conn.sendMouseHScroll(negScrollStep);
-                    }
+                    conn.sendMouseHScroll(negScrollStep);
                 }
             }
 
@@ -1436,30 +1382,10 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                     (short) 0, (short) 0);
         }
         else {
-            // === SNAPPY INPUT: delta-threshold gating (controller mode only) ===
-            if (inputSender != null) {
-                final int ci = Math.max(0, Math.min(MAX_CONTROLLERS - 1, controllerNumber));
-                boolean mapChanged = (inputMap != lastSentInputMap[ci]);
-                boolean axesChanged =
-                        Math.abs(leftStickX - lastSentLeftStickX[ci]) >= AXIS_DELTA_MIN ||
-                                Math.abs(leftStickY - lastSentLeftStickY[ci]) >= AXIS_DELTA_MIN ||
-                                Math.abs(rightStickX - lastSentRightStickX[ci]) >= AXIS_DELTA_MIN ||
-                                Math.abs(rightStickY - lastSentRightStickY[ci]) >= AXIS_DELTA_MIN ||
-                                Math.abs((leftTrigger & 0xFF) - (lastSentLeftTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN ||
-                                Math.abs((rightTrigger & 0xFF) - (lastSentRightTrigger[ci] & 0xFF)) >= TRIGGER_DELTA_MIN;
-
-                if (!mapChanged && !axesChanged) {
-                    // No significant change: skip sending a new packet
-                    return;
-                }
-
-                lastSentInputMap[ci] = inputMap;
-                lastSentLeftStickX[ci] = leftStickX;
-                lastSentLeftStickY[ci] = leftStickY;
-                lastSentRightStickX[ci] = rightStickX;
-                lastSentRightStickY[ci] = rightStickY;
-                lastSentLeftTrigger[ci] = leftTrigger;
-                lastSentRightTrigger[ci] = rightTrigger;
+            if (snappyInputFilter != null && !snappyInputFilter.shouldSend(
+                    controllerNumber, inputMap, leftTrigger, rightTrigger,
+                    leftStickX, leftStickY, rightStickX, rightStickY)) {
+                return;
             }
 
             conn.sendControllerInput(controllerNumber, getActiveControllerMask(),
@@ -2104,14 +2030,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                 dy = (short) applyMouseSpeedScale(rawDy);
             }
 
-            if (inputSender != null) {
-                final short fDx = dx;
-                final short fDy = dy;
-                // Route mouse moves through InputSender to keep input single-threaded
-                inputSender.post(() -> conn.sendMouseMove(fDx, fDy));
-            } else {
-                conn.sendMouseMove(dx, dy);
-            }
+            conn.sendMouseMove(dx, dy);
         }
     }
     private void sendEmulatedMouseScroll(short x, short y, boolean fastScroll) {
@@ -2134,18 +2053,8 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                 return;
             }
 
-            if (inputSender != null) {
-                final short fVY = vY;
-                final short fVX = vX;
-                // Route high-res scroll events through InputSender as well
-                inputSender.post(() -> {
-                    conn.sendMouseHighResScroll(fVY);
-                    conn.sendMouseHighResHScroll(fVX);
-                });
-            } else {
-                conn.sendMouseHighResScroll(vY);
-                conn.sendMouseHighResHScroll(vX);
-            }
+            conn.sendMouseHighResScroll(vY);
+            conn.sendMouseHighResHScroll(vX);
         }
     }
 
@@ -3265,6 +3174,14 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         public void toggleMouseEmulation() {
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
             mouseEmulationActive = !mouseEmulationActive;
+
+            // Mouse emulation sends a neutral gamepad state. Force the first real
+            // gamepad state after switching modes to be sent instead of comparing
+            // it with stale state from before the mode change.
+            if (snappyInputFilter != null) {
+                snappyInputFilter.reset(controllerNumber);
+            }
+
             Toast.makeText(activityContext, "Mouse emulation is: " + (mouseEmulationActive ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
 
             if (mouseEmulationActive) {
