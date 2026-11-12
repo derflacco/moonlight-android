@@ -10,17 +10,12 @@ import java.util.Locale;
 /**
  * CpuWarmUp: multi-thread warm-up to gently nudge DVFS.
  *
- * This helper can be driven by app settings (SharedPreferences) so users can tune how aggressive
- * the "boost" is (workers, duty cycle, affinity, bursts, thermal gating, PerfHint override).
- *
- * Added:
- *  - Exposed thread count (KEY_WORKERS)
- *  - Exposed core-tier selection with combinations (KEY_CORE_SET):
- *      all, big, prime, little, big_prime, big_little, prime_little
+ * The selected profile owns the duty cycle and burst policy. App settings only select the profile,
+ * worker count, and CPU tiers; thermal protection is always enabled when a Context is available.
  *
  * Usage:
  *   CpuWarmUp w = new CpuWarmUp();
- *   w.start(context, adpf, false); // if context != null, will auto-load prefs (or defaults)
+ *   w.start(context, config);
  *   ...
  *   w.stop();
  */
@@ -28,62 +23,25 @@ public final class CpuWarmUp {
     // ---------------- Public configuration ----------------
 
     public static final class Config {
-        // Boost profiles (keep these coarse; advanced knobs are optional)
+        // Boost profiles
         public static final int MODE_OFF        = 0;
         public static final int MODE_LITE       = 1;
         public static final int MODE_MEDIUM     = 2;
         public static final int MODE_AGGRESSIVE = 3;
 
-        // Burst execution policy
-        public static final int BURST_WORKERS_ALL          = 0;
-        public static final int BURST_WORKERS_PRIMARY_ONLY = 1;
-
         // Preference keys (must match preferences.xml)
-        public static final String KEY_MODE                = "pref_cpu_warmup_boost";
-        public static final String KEY_OVERRIDE_PERF_HINT  = "pref_cpu_warmup_override_perf_hint";
-        public static final String KEY_AFFINITY            = "pref_cpu_warmup_affinity";
-        public static final String KEY_WORKERS             = "pref_cpu_warmup_workers";
-        public static final String KEY_THERMALS            = "pref_cpu_warmup_thermals";
-
-        // New: tier/core selection (combinations)
-        public static final String KEY_CORE_SET            = "pref_cpu_warmup_core_set";
-
-        // Advanced (optional)
-        public static final String KEY_SPIN_US             = "pref_cpu_warmup_spin_us";
-        public static final String KEY_SLEEP_MS            = "pref_cpu_warmup_sleep_ms";
-        public static final String KEY_BURSTS              = "pref_cpu_warmup_bursts";
-        public static final String KEY_BURST_PERIOD_MS     = "pref_cpu_warmup_burst_period_ms";
-        public static final String KEY_BURST_SPIN_MS       = "pref_cpu_warmup_burst_spin_ms";
-        public static final String KEY_BURST_WORKERS       = "pref_cpu_warmup_burst_workers";
+        public static final String KEY_MODE     = "pref_cpu_warmup_boost";
+        public static final String KEY_WORKERS  = "pref_cpu_warmup_workers";
+        public static final String KEY_CORE_SET = "pref_cpu_warmup_core_set";
 
         // Parsed config
         public int mode = MODE_OFF;
 
-        // If true, allow running even when ADPF/PerfHint is active.
-        public boolean overridePerfHint = false;
-
         // 0 = auto (all available cores); otherwise clamped [1..min(cpu, MAX_AUTO_WORKERS)]
         public int workers = 0;
 
-        // Uses CpuWarmUp affinity constants (AFFINITY_*)
-        // NOTE: BIG_ONLY is treated as "performance tiers only" (Prime+Big on 3-tier, Big on 2-tier).
-        public int affinityMode = AFFINITY_SPREAD;
-
-        // New: selected tiers mask (Prime/Big/Little) with combinations
-        // Default: all tiers enabled.
+        // Selected tiers mask (Prime/Big/Little), including combinations. Defaults to all tiers.
         public int coreSetMask = CORESET_ALL;
-
-        public boolean thermalAware = true;
-
-        // Base duty cycle knobs (0 / negative means "use preset for selected mode")
-        public int baseSpinMicros  = 0;
-        public int baseSleepMillis = -1;
-
-        // Burst knobs (0 means "use preset for selected mode")
-        public boolean burstsEnabled = false;
-        public int burstPeriodMs = 0;
-        public int burstSpinMs   = 0;
-        public int burstWorkersMode = BURST_WORKERS_ALL;
 
         public static Config defaults() {
             return new Config();
@@ -101,15 +59,8 @@ public final class CpuWarmUp {
 
             if (p == null) return c;
 
-            // mode
             String mode = getPrefString(p, KEY_MODE, "off");
             c.mode = parseMode(mode);
-
-            c.overridePerfHint = getPrefBoolean(p, KEY_OVERRIDE_PERF_HINT, false);
-
-            // affinity
-            String aff = getPrefString(p, KEY_AFFINITY, "spread");
-            c.affinityMode = parseAffinity(aff);
 
             // workers (int or string)
             c.workers = getPrefInt(p, KEY_WORKERS, 0);
@@ -117,20 +68,6 @@ public final class CpuWarmUp {
             // core set (string -> mask)
             String cs = getPrefString(p, KEY_CORE_SET, "all");
             c.coreSetMask = parseCoreSetMask(cs);
-
-            // Safety: thermals must always be enabled (not user-configurable).
-            c.thermalAware = true;
-
-            // advanced knobs
-            c.baseSpinMicros  = getPrefInt(p, KEY_SPIN_US, 0);
-            c.baseSleepMillis = getPrefInt(p, KEY_SLEEP_MS, -1);
-
-            c.burstsEnabled   = getPrefBoolean(p, KEY_BURSTS, false);
-            c.burstPeriodMs   = getPrefInt(p, KEY_BURST_PERIOD_MS, 0);
-            c.burstSpinMs     = getPrefInt(p, KEY_BURST_SPIN_MS, 0);
-
-            String bw = getPrefString(p, KEY_BURST_WORKERS, "all");
-            c.burstWorkersMode = parseBurstWorkersMode(bw);
 
             return c;
         }
@@ -173,15 +110,6 @@ public final class CpuWarmUp {
             }
         }
 
-        private static boolean getPrefBoolean(SharedPreferences p, String key, boolean def) {
-            try {
-                return p.getBoolean(key, def);
-            } catch (ClassCastException cce) {
-                String s = getPrefString(p, key, String.valueOf(def));
-                return "1".equals(s) || "true".equalsIgnoreCase(s) || "yes".equalsIgnoreCase(s);
-            }
-        }
-
         private static int getPrefInt(SharedPreferences p, String key, int def) {
             try {
                 return p.getInt(key, def);
@@ -200,22 +128,6 @@ public final class CpuWarmUp {
             if ("2".equals(v) || "medium".equals(v) || "normal".equals(v) || "default".equals(v)) return MODE_MEDIUM;
             if ("3".equals(v) || "aggressive".equals(v) || "high".equals(v) || "turbo".equals(v)) return MODE_AGGRESSIVE;
             return MODE_OFF;
-        }
-
-        private static int parseAffinity(String v) {
-            if (v == null) return AFFINITY_SPREAD;
-            v = v.trim().toLowerCase(Locale.ROOT);
-            if ("0".equals(v) || "big".equals(v) || "big_only".equals(v) || "bigonly".equals(v)) return AFFINITY_BIG_ONLY;
-            if ("1".equals(v) || "spread".equals(v) || "auto".equals(v) || "default".equals(v)) return AFFINITY_SPREAD;
-            if ("2".equals(v) || "none".equals(v) || "off".equals(v) || "disabled".equals(v)) return AFFINITY_NONE;
-            return AFFINITY_SPREAD;
-        }
-
-        private static int parseBurstWorkersMode(String v) {
-            if (v == null) return BURST_WORKERS_ALL;
-            v = v.trim().toLowerCase(Locale.ROOT);
-            if ("primary".equals(v) || "primary_only".equals(v) || "single".equals(v)) return BURST_WORKERS_PRIMARY_ONLY;
-            return BURST_WORKERS_ALL;
         }
 
         private static int parseCoreSetMask(String v) {
@@ -262,11 +174,13 @@ public final class CpuWarmUp {
 
     // Thermal sampling period
     private static final int THERMAL_SAMPLE_MS = 2_000;
+    private static final long THERMAL_RELEASE_MS = 8_000L;
 
-    // Battery temperature thresholds (°C) used as fallback when thermal status is unavailable
+    // Battery temperature thresholds (°C), also used as a secondary thermal signal.
     private static final float T_WARM     = 42.0f;
     private static final float T_HOT      = 45.0f;
     private static final float T_CRITICAL = 48.0f;
+    private static final float T_HYSTERESIS = 2.0f;
 
     // ---- Architecture detection constants ----
     private static final int ARCH_3_TIER = 3;
@@ -274,11 +188,6 @@ public final class CpuWarmUp {
 
     // Detected architecture (cached)
     private static volatile int detectedArchitecture = -1;
-
-    // ---- Affinity policy ----
-    private static final int AFFINITY_BIG_ONLY = 0;
-    private static final int AFFINITY_SPREAD   = 1;
-    private static final int AFFINITY_NONE     = 2;
 
     // ---- Tier selection mask (Prime/Big/Little) ----
     private static final int CORESET_PRIME  = 1 << 0;
@@ -294,38 +203,39 @@ public final class CpuWarmUp {
     // ---- Configured knobs (per-instance) ----
     private volatile int workersCount = defaultWorkersAuto();
 
-    private volatile int affinityMode = AFFINITY_SPREAD;
-
-    // New: tier selection mask (Prime/Big/Little)
+    // Tier selection mask (Prime/Big/Little)
     private volatile int coreSetMask = CORESET_ALL;
 
     private volatile int prioPrime  = DEFAULT_PRIO_PRIME;
     private volatile int prioBig    = DEFAULT_PRIO_BIG;
     private volatile int prioLittle = DEFAULT_PRIO_LITTLE;
 
-    private volatile boolean thermalAware = true;
-
-    // Base knobs (from config / preset)
+    // Base knobs from the selected preset
     private volatile int baseSpinMicros  = DEFAULT_BASE_SPIN_MICROS;
     private volatile int baseSleepMillis = DEFAULT_BASE_SLEEP_MILLIS;
 
     private volatile boolean burstsEnabled = true;
     private volatile int burstPeriodMs = DEFAULT_BURST_PERIOD_MS;
     private volatile int burstSpinMs   = DEFAULT_BURST_SPIN_MS;
-    private volatile int burstWorkersMode = Config.BURST_WORKERS_ALL;
+    private volatile boolean burstPrimaryOnly = false;
 
     // Dynamic thermal-aware knobs (shared by workers)
     private volatile int  spinMicros  = DEFAULT_BASE_SPIN_MICROS;
     private volatile int  sleepMillis = DEFAULT_BASE_SLEEP_MILLIS;
     private volatile boolean skipBursts = false;
     private volatile boolean thermalPaused = false;
+    private volatile int lastThermalLevel = -1;
+    private final ThermalRecovery platformRecovery = new ThermalRecovery();
+    private final ThermalRecovery batteryRecovery = new ThermalRecovery();
 
     // Optional context for thermal reading (can be null)
     private volatile Context appContext = null;
 
-    // Only worker-0 samples thermals; guard avoids duplicate sampling
+    // Workers share the sampling deadline; only one sample may be in flight.
     private final java.util.concurrent.atomic.AtomicLong thermalGuard =
             new java.util.concurrent.atomic.AtomicLong(0L);
+    private final java.util.concurrent.atomic.AtomicBoolean thermalSampling =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     // --- DEBUG (best-effort) ---
     private static void logI(String m) {
@@ -337,15 +247,7 @@ public final class CpuWarmUp {
         catch (Throwable t) { android.util.Log.e("CpuWarmUp", m, e); }
     }
 
-    public synchronized boolean start(Object perfHint, boolean overridePerfHint) {
-        return start(null, perfHint, overridePerfHint, null);
-    }
-
-    public synchronized boolean start(Context context, Object perfHint, boolean overridePerfHint) {
-        return start(context, perfHint, overridePerfHint, null);
-    }
-
-    public synchronized boolean start(Context context, Object perfHint, boolean overridePerfHint, Config config) {
+    public synchronized boolean start(Context context, Config config) {
         if (!ENABLE) { logI("start(): ENABLE=false"); return false; }
         if (running) {
             logI("start(): already running; workers=" + workers.size());
@@ -369,12 +271,11 @@ public final class CpuWarmUp {
 
         applyConfigLocked(cfg);
 
-        final boolean override = overridePerfHint || cfg.overridePerfHint;
-
-        if (!override && isPerfHintActive(perfHint)) {
-            logI("start(): gated by PerfHint active");
-            appContext = null;
-            return false;
+        // Apply the thermal policy before starting any synthetic load. This avoids a short
+        // full-load window when a stream starts on an already hot device.
+        if (ctx != null) {
+            thermalGuard.set(android.os.SystemClock.uptimeMillis());
+            applyThermalPolicy(sampleThermals(ctx));
         }
 
         running = true;
@@ -395,11 +296,11 @@ public final class CpuWarmUp {
         } catch (Throwable ignored) {}
 
         logI("start(): mode=" + profileName(cfg.mode) +
-                " affinity=" + modeName(affinityMode) +
                 " coreSet=" + coreSetName(effMask, arch) +
                 " workers=" + workersCount +
+                " duty=" + baseSpinMicros + "us/" + baseSleepMillis + "ms" +
                 " bursts=" + (burstsEnabled ? "on" : "off") +
-                " thermals=" + (thermalAware && ctx != null ? "on" : "off") +
+                " thermals=" + (ctx != null ? "on" : "off") +
                 " arch=" + arch + "-tier");
 
         for (int i = 0; i < workersCount; i++) {
@@ -410,21 +311,34 @@ public final class CpuWarmUp {
                 try { android.os.Process.setThreadPriority(priorityForBucket(bucket, arch)); }
                 catch (Throwable ignored) {}
 
-                pinWorkerToBucket(bucket, arch);
+                final String affinityResult = pinWorkerToBucket(bucket, arch);
 
                 final String original = Thread.currentThread().getName();
                 try { Thread.currentThread().setName("CpuWarmUp-" + id + "-" + bucketName(bucket, arch)); }
                 catch (Throwable ignored) {}
 
                 long lastBurstMs = android.os.SystemClock.uptimeMillis();
-                logI("worker-" + id + " started -> bucket=" + bucketName(bucket, arch));
+                logI("worker-" + id + " started -> bucket=" + bucketName(bucket, arch) +
+                        " affinity=" + affinityResult);
 
                 while (running && !Thread.currentThread().isInterrupted()) {
-                    if (id == 0 && thermalAware && appContext != null) {
+                    // Any surviving worker may perform the sample. The atomic guard still limits
+                    // this to one read per interval and preserves protection if worker-0 fails.
+                    final Context thermalContext = appContext;
+                    if (thermalContext != null) {
                         long nowMs = android.os.SystemClock.uptimeMillis();
                         long prev  = thermalGuard.get();
-                        if (nowMs - prev >= THERMAL_SAMPLE_MS && thermalGuard.compareAndSet(prev, nowMs)) {
-                            applyThermalPolicy(sampleThermals(appContext));
+                        if (nowMs - prev >= THERMAL_SAMPLE_MS && thermalSampling.compareAndSet(false, true)) {
+                            try {
+                                // Recheck after acquiring ownership: another worker may have
+                                // completed a sample since we read prev.
+                                if (nowMs - thermalGuard.get() >= THERMAL_SAMPLE_MS) {
+                                    thermalGuard.set(nowMs);
+                                    applyThermalPolicy(sampleThermals(thermalContext));
+                                }
+                            } finally {
+                                thermalSampling.set(false);
+                            }
                         }
                     }
 
@@ -445,11 +359,12 @@ public final class CpuWarmUp {
                     }
                     BH = sink;
 
-                    try { Thread.sleep(sleepMillis); }
-                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                    if (sleepMillis > 0) {
+                        try { Thread.sleep(sleepMillis); }
+                        catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                    }
 
-                    final boolean burstAllowedWorker =
-                            (burstWorkersMode == Config.BURST_WORKERS_ALL) || (id == 0);
+                    final boolean burstAllowedWorker = !burstPrimaryOnly || id == 0;
 
                     if (burstsEnabled && burstAllowedWorker && !skipBursts) {
                         long now = android.os.SystemClock.uptimeMillis();
@@ -521,37 +436,25 @@ public final class CpuWarmUp {
         sleepMillis = baseSleepMillis;
         skipBursts  = !burstsEnabled;
         thermalPaused = false;
+        lastThermalLevel = -1;
+        platformRecovery.reset();
+        batteryRecovery.reset();
         thermalGuard.set(0L);
 
         logI("stop(): done");
     }
 
     private void applyConfigLocked(Config cfg) {
+        platformRecovery.reset();
+        batteryRecovery.reset();
         // Load preset (duty-cycle/bursts defaults).
         applyPresetLocked(cfg.mode);
 
         // Respect user-configured workers (0 = auto/all).
         workersCount = (cfg.workers > 0) ? clampWorkers(cfg.workers) : defaultWorkersAuto();
 
-        // Respect affinity policy.
-        affinityMode = clampAffinity(cfg.affinityMode);
-
-        // New: respect tier selection mask (combinations).
+        // Respect tier selection mask (combinations).
         coreSetMask = clampCoreSetMask(cfg.coreSetMask);
-
-        thermalAware = true;
-
-        // Advanced knobs (override preset).
-        if (cfg.baseSpinMicros > 0) baseSpinMicros = clampSpinUs(cfg.baseSpinMicros);
-        if (cfg.baseSleepMillis >= 0) baseSleepMillis = clampSleepMs(cfg.baseSleepMillis);
-
-        burstsEnabled = cfg.burstsEnabled;
-        if (cfg.burstPeriodMs > 0) burstPeriodMs = clampBurstPeriodMs(cfg.burstPeriodMs);
-        if (cfg.burstSpinMs > 0)   burstSpinMs   = clampBurstSpinMs(cfg.burstSpinMs);
-
-        burstWorkersMode = (cfg.burstWorkersMode == Config.BURST_WORKERS_PRIMARY_ONLY)
-                ? Config.BURST_WORKERS_PRIMARY_ONLY
-                : Config.BURST_WORKERS_ALL;
 
         // Priorities unchanged
         prioPrime  = DEFAULT_PRIO_PRIME;
@@ -576,17 +479,19 @@ public final class CpuWarmUp {
                 baseSleepMillis = 6;
 
                 burstsEnabled = true;
-                burstWorkersMode = Config.BURST_WORKERS_PRIMARY_ONLY;
+                burstPrimaryOnly = true;
                 burstPeriodMs = 3_000;
                 burstSpinMs   = 4;
                 break;
 
             case Config.MODE_AGGRESSIVE:
-                baseSpinMicros  = 3_000;
-                baseSleepMillis = 2;
+                // Continuous synthetic load. This asks the governor for peak performance but
+                // cannot override kernel/vendor frequency or thermal caps.
+                baseSpinMicros  = 10_000;
+                baseSleepMillis = 0;
 
-                burstsEnabled = true;
-                burstWorkersMode = Config.BURST_WORKERS_ALL;
+                burstsEnabled = false;
+                burstPrimaryOnly = false;
                 burstPeriodMs = 1_250;
                 burstSpinMs   = 18;
                 break;
@@ -597,7 +502,7 @@ public final class CpuWarmUp {
                 baseSleepMillis = DEFAULT_BASE_SLEEP_MILLIS;
 
                 burstsEnabled = true;
-                burstWorkersMode = Config.BURST_WORKERS_ALL;
+                burstPrimaryOnly = false;
                 burstPeriodMs = DEFAULT_BURST_PERIOD_MS;
                 burstSpinMs   = DEFAULT_BURST_SPIN_MS;
                 break;
@@ -634,11 +539,6 @@ public final class CpuWarmUp {
         catch (Throwable ignored) {}
         int max = Math.max(1, Math.min(MAX_AUTO_WORKERS, cpu));
         return Math.max(1, Math.min(max, w));
-    }
-
-    private static int clampAffinity(int m) {
-        if (m == AFFINITY_BIG_ONLY || m == AFFINITY_SPREAD || m == AFFINITY_NONE) return m;
-        return AFFINITY_SPREAD;
     }
 
     private static int clampCoreSetMask(int m) {
@@ -681,12 +581,6 @@ public final class CpuWarmUp {
 
     private int effectiveCoreSetMaskForArch(int arch) {
         int mask = normalizeCoreSetMaskForArch(coreSetMask, arch);
-
-        // Back-compat: "BIG_ONLY" affinity means "performance tiers only"
-        if (affinityMode == AFFINITY_BIG_ONLY) {
-            mask = (arch == ARCH_3_TIER) ? (CORESET_PRIME | CORESET_BIG) : CORESET_BIG;
-            mask = normalizeCoreSetMaskForArch(mask, arch);
-        }
 
         // If prime requested but not actually available, remap prime -> big
         if (arch == ARCH_3_TIER && (mask & CORESET_PRIME) != 0 && getPrimeCoreCountBestEffort() <= 0) {
@@ -832,15 +726,6 @@ public final class CpuWarmUp {
         }
     }
 
-    private static String modeName(int m) {
-        switch (m) {
-            case AFFINITY_BIG_ONLY: return "BIG_ONLY";
-            case AFFINITY_SPREAD:   return "SPREAD";
-            case AFFINITY_NONE:     return "NONE";
-        }
-        return "UNK";
-    }
-
     private static String bucketName(int b, int arch) {
         if (arch == ARCH_3_TIER) {
             switch (b) {
@@ -894,8 +779,8 @@ public final class CpuWarmUp {
 
             // If fewer workers than enabled tiers, prefer performance tiers first.
             if (totalWorkers < enabled) {
-                if (allowPrime) return 0;
-                if (allowBig) return 1;
+                if (allowPrime && id-- == 0) return 0;
+                if (allowBig && id-- == 0) return 1;
                 return 2;
             }
 
@@ -982,34 +867,32 @@ public final class CpuWarmUp {
         return prioBig;
     }
 
-    private void pinWorkerToBucket(int bucket, int arch) {
-        if (affinityMode == AFFINITY_NONE) return;
-
+    private String pinWorkerToBucket(int bucket, int arch) {
         if (arch == ARCH_3_TIER) {
             switch (bucket) {
                 case 0:
-                    if (tryCallCpuAffinity("pinCurrentThreadToPrimeCoresIf", true)) return;
-                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                    if (tryCallCpuAffinity("pinCurrentThreadToPrimeCoresIf", true)) return "prime-ok";
+                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return "prime-to-big";
                     break;
                 case 1:
-                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return "big-ok";
                     break;
                 case 2:
-                    if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return;
+                    if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return "little-ok";
                     break;
             }
         } else {
             switch (bucket) {
                 case 0:
-                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return;
+                    if (tryCallCpuAffinity("pinCurrentThreadToBigCoresIf", true)) return "big-ok";
                     break;
                 case 1:
-                    if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return;
+                    if (tryCallCpuAffinity("pinCurrentThreadToLittleCoresIf", true)) return "little-ok";
                     break;
             }
         }
 
-        tryCallCpuAffinity("pinCurrentThreadToAllCoresIf", true);
+        return tryCallCpuAffinity("pinCurrentThreadToAllCoresIf", true) ? "fallback-all" : "failed";
     }
 
     private static boolean tryCallCpuAffinity(String methodName, boolean arg) {
@@ -1083,84 +966,135 @@ public final class CpuWarmUp {
         return new ThermalSnapshot(status, battC);
     }
 
+    private static final class ThermalRecovery {
+        int level;
+        long lowerSinceMs = -1L;
+
+        int update(int observed, long nowMs) {
+            if (observed < 0) {
+                // A failed read is not evidence of cooling.
+                lowerSinceMs = -1L;
+            } else if (observed >= level) {
+                level = observed;
+                lowerSinceMs = -1L;
+            } else {
+                if (lowerSinceMs < 0L) lowerSinceMs = nowMs;
+                if (nowMs - lowerSinceMs >= THERMAL_RELEASE_MS) {
+                    level = observed;
+                    lowerSinceMs = -1L;
+                }
+            }
+            return level;
+        }
+
+        void reset() {
+            level = 0;
+            lowerSinceMs = -1L;
+        }
+    }
+
     private void applyThermalPolicy(ThermalSnapshot snap) {
+        applyThermalPolicy(snap, android.os.SystemClock.uptimeMillis());
+    }
+
+    private void applyThermalPolicy(ThermalSnapshot snap, long nowMs) {
         int newSpinMicros = baseSpinMicros;
         int newSleepMs    = baseSleepMillis;
         boolean newSkipBursts = !burstsEnabled;
         boolean newThermalPaused = false;
+        int thermalLevel = 0;
 
-        if (snap.thermalStatus >= 0) {
-            int s = snap.thermalStatus;
-            if (s >= PowerManager.THERMAL_STATUS_SEVERE) {
-                // Synthetic load is counterproductive once Android reports severe throttling.
-                newThermalPaused = true;
-                newSkipBursts = true;
-            } else if (s >= PowerManager.THERMAL_STATUS_MODERATE) {
-                newSpinMicros = baseSpinMicros / 2;
-                newSleepMs    = Math.max(baseSleepMillis, 10);
-                newSkipBursts = true;
-            } else if (s >= PowerManager.THERMAL_STATUS_LIGHT) {
-                newSpinMicros = (int) (baseSpinMicros * 0.75f);
-                newSleepMs    = Math.max(baseSleepMillis, 5);
-                newSkipBursts = true;
-            }
+        int observedPlatform = snap.thermalStatus < 0 ? -1 :
+                Math.min(snap.thermalStatus, PowerManager.THERMAL_STATUS_SEVERE);
+        int platformLevel = platformRecovery.update(observedPlatform, nowMs);
+        if (platformLevel >= PowerManager.THERMAL_STATUS_SEVERE) {
+            // Synthetic load is counterproductive once Android reports severe throttling.
+            thermalLevel = 3;
+            newThermalPaused = true;
+            newSkipBursts = true;
+        } else if (platformLevel >= PowerManager.THERMAL_STATUS_MODERATE) {
+            thermalLevel = 2;
+            newSpinMicros = baseSpinMicros / 2;
+            newSleepMs    = Math.max(baseSleepMillis, 10);
+            newSkipBursts = true;
+        } else if (platformLevel >= PowerManager.THERMAL_STATUS_LIGHT) {
+            thermalLevel = 1;
+            newSpinMicros = (int) (baseSpinMicros * 0.75f);
+            newSleepMs    = Math.max(baseSleepMillis, 5);
+            newSkipBursts = true;
         }
 
         // Some devices report THERMAL_STATUS_NONE permanently, so retain battery temperature
         // as a conservative secondary signal even when the platform API is available.
-        if (!java.lang.Float.isNaN(snap.batteryC)) {
+        int observedBattery = -1;
+        if (!Float.isNaN(snap.batteryC)) {
             float t = snap.batteryC;
-            if (t >= T_CRITICAL) {
-                newThermalPaused = true;
-                newSkipBursts = true;
-            } else if (t >= T_HOT) {
-                newSpinMicros = Math.min(newSpinMicros, baseSpinMicros / 2);
-                newSleepMs    = Math.max(newSleepMs, 40);
-                newSkipBursts = true;
-            } else if (t >= T_WARM) {
-                newSpinMicros = Math.min(newSpinMicros, (int) (baseSpinMicros * 0.75f));
-                newSleepMs    = Math.max(newSleepMs, 10);
-                newSkipBursts = true;
+            if (t >= T_CRITICAL || (batteryRecovery.level >= 3 && t >= T_CRITICAL - T_HYSTERESIS)) {
+                observedBattery = 3;
+            } else if (t >= T_HOT || (batteryRecovery.level >= 2 && t >= T_HOT - T_HYSTERESIS)) {
+                observedBattery = 2;
+            } else if (t >= T_WARM || (batteryRecovery.level >= 1 && t >= T_WARM - T_HYSTERESIS)) {
+                observedBattery = 1;
+            } else {
+                observedBattery = 0;
             }
+        }
+        int batteryLevel = batteryRecovery.update(observedBattery, nowMs);
+        if (batteryLevel >= 3) {
+            thermalLevel = Math.max(thermalLevel, 3);
+            newThermalPaused = true;
+            newSkipBursts = true;
+        } else if (batteryLevel >= 2) {
+            thermalLevel = Math.max(thermalLevel, 2);
+            newSpinMicros = Math.min(newSpinMicros, baseSpinMicros / 2);
+            newSleepMs    = Math.max(newSleepMs, 40);
+            newSkipBursts = true;
+        } else if (batteryLevel >= 1) {
+            thermalLevel = Math.max(thermalLevel, 1);
+            newSpinMicros = Math.min(newSpinMicros, (int) (baseSpinMicros * 0.75f));
+            newSleepMs    = Math.max(newSleepMs, 10);
+            newSkipBursts = true;
         }
 
         spinMicros  = clampSpinUs(newSpinMicros);
         sleepMillis = clampSleepMs(newSleepMs);
         skipBursts  = newSkipBursts;
         thermalPaused = newThermalPaused;
+
+        if (lastThermalLevel != thermalLevel) {
+            lastThermalLevel = thermalLevel;
+            String battery = Float.isNaN(snap.batteryC)
+                    ? "n/a"
+                    : String.format(Locale.ROOT, "%.1fC", snap.batteryC);
+            logI("thermal: level=" + thermalLevelName(thermalLevel) +
+                    " status=" + thermalStatusName(snap.thermalStatus) +
+                    " battery=" + battery +
+                    " duty=" + spinMicros + "us/" + sleepMillis + "ms" +
+                    " bursts=" + (skipBursts ? "off" : "on") +
+                    " paused=" + thermalPaused);
+        }
     }
 
-    private static boolean isPerfHintActive(Object perfHint) {
-        if (perfHint == null) return false;
-
-        final String[] candidates = new String[] { "isActive", "isActiveNow", "isEnabled" };
-        for (String name : candidates) {
-            try {
-                java.lang.reflect.Method m;
-                try { m = perfHint.getClass().getMethod(name); }
-                catch (NoSuchMethodException nsme) {
-                    m = perfHint.getClass().getDeclaredMethod(name);
-                    m.setAccessible(true);
-                }
-                Object r = m.invoke(perfHint);
-                if (r instanceof Boolean && (Boolean) r) return true;
-            } catch (Throwable ignored) {}
+    private static String thermalLevelName(int level) {
+        switch (level) {
+            case 1: return "LIGHT";
+            case 2: return "MODERATE";
+            case 3: return "PAUSED";
+            default: return "NORMAL";
         }
-
-        final String[] fields = new String[] { "active", "enabled" };
-        for (String fname : fields) {
-            try {
-                java.lang.reflect.Field f;
-                try { f = perfHint.getClass().getField(fname); }
-                catch (NoSuchFieldException nsfe) {
-                    f = perfHint.getClass().getDeclaredField(fname);
-                    f.setAccessible(true);
-                }
-                Object r = f.get(perfHint);
-                if (r instanceof Boolean && (Boolean) r) return true;
-            } catch (Throwable ignored) {}
-        }
-
-        return false;
     }
+
+    private static String thermalStatusName(int status) {
+        switch (status) {
+            case PowerManager.THERMAL_STATUS_NONE: return "NONE";
+            case PowerManager.THERMAL_STATUS_LIGHT: return "LIGHT";
+            case PowerManager.THERMAL_STATUS_MODERATE: return "MODERATE";
+            case PowerManager.THERMAL_STATUS_SEVERE: return "SEVERE";
+            case PowerManager.THERMAL_STATUS_CRITICAL: return "CRITICAL";
+            case PowerManager.THERMAL_STATUS_EMERGENCY: return "EMERGENCY";
+            case PowerManager.THERMAL_STATUS_SHUTDOWN: return "SHUTDOWN";
+            default: return "UNKNOWN(" + status + ")";
+        }
+    }
+
 }

@@ -290,6 +290,9 @@
     <string name="analogscroll_left">Stick analogico sinistro</string>
     <string name="title_enable_commit_text">Abilita input commit-text (swipe/voce)</string>
     <string name="summary_enable_commit_text">Invia al PC testi multi-carattere provenienti dalle tastiere software (scrittura a gesto, suggerimenti, dettatura vocale). Può causare problemi ai giochi che richiedono la pressione singola dei tasti.</string>
+    <string name="pref_cpu_warmup_warning_title">Avviso CPU Boost</string>
+    <string name="pref_cpu_warmup_warning_message">CPU Boost genera un carico aggiuntivo sulla CPU. Può scaldare sensibilmente il dispositivo, consumare più batteria e, su alcuni dispositivi, peggiorare le prestazioni a causa del thermal throttling. Le protezioni termiche di Android restano attive, ma il comportamento dipende dal firmware del dispositivo.</string>
+    <string name="pref_cpu_warmup_warning_enable">Attiva comunque</string>
 
     <!-- Settings backup -->
     <string name="backup_category">Backup e ripristino</string>

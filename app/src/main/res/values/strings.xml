@@ -815,24 +815,10 @@
 
     <string name="pref_cpu_warmup_boost_title">Boost profile</string>
     <string name="pref_cpu_warmup_boost_summary">Profile: %s</string>
+    <string name="pref_cpu_warmup_warning_title">CPU Boost warning</string>
+    <string name="pref_cpu_warmup_warning_message">CPU Boost generates additional CPU load. It can noticeably heat the device, consume more battery, and on some devices reduce performance due to thermal throttling. Android thermal protections remain active, but behavior depends on the device firmware.</string>
+    <string name="pref_cpu_warmup_warning_enable">Enable anyway</string>
 
-    <string name="pref_cpu_warmup_override_perf_hint_title">Override ADPF gate</string>
-    <string name="pref_cpu_warmup_override_perf_hint_summary">Run warm-up even when ADPF/PerfHint is active</string>
-
-    <string name="pref_cpu_warmup_bursts_title">Enable bursts</string>
-    <string name="pref_cpu_warmup_bursts_summary">Short periodic bursts to push DVFS</string>
-
-    <string name="pref_cpu_warmup_spin_us_title">Spin time (µs)</string>
-    <string name="pref_cpu_warmup_spin_us_summary">0 = preset (100..10000)</string>
-
-    <string name="pref_cpu_warmup_sleep_ms_title">Sleep time (ms)</string>
-    <string name="pref_cpu_warmup_sleep_ms_summary">0 = preset (0..250)</string>
-
-    <string name="pref_cpu_warmup_burst_period_ms_title">Burst period (ms)</string>
-    <string name="pref_cpu_warmup_burst_period_ms_summary">0 = preset (0..10000)</string>
-
-    <string name="pref_cpu_warmup_burst_spin_ms_title">Burst duration (ms)</string>
-    <string name="pref_cpu_warmup_burst_spin_ms_summary">0 = preset (0..50)</string>
     <string-array name="pref_cpu_warmup_boost_entries">
         <item>Off</item>
         <item>Lite</item>

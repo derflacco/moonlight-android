@@ -53,6 +53,7 @@ import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardControllerConfigurationLoader;
 import com.limelight.binding.video.MediaCodecHelper;
+import com.limelight.perf.CpuWarmUp;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.FileUriUtils;
 import com.limelight.utils.PerformanceDataTracker;
@@ -1263,6 +1264,7 @@ public class StreamSettings extends AppCompatActivity {
         @Override
         public void onCreatePreferences(Bundle bundle, String s) {
             initializePreferences();
+            configureCpuBoostWarning();
             final Preference gpuPathPref = findPreference("checkbox_gpu_path_mode");
             if (gpuPathPref != null) {
                 gpuPathPref.setOnPreferenceChangeListener((preference, newValue) -> {
@@ -1272,6 +1274,45 @@ public class StreamSettings extends AppCompatActivity {
                 });
             }
 
+        }
+
+        private void configureCpuBoostWarning() {
+            final ListPreference cpuBoostPref = findPreference(CpuWarmUp.Config.KEY_MODE);
+            if (cpuBoostPref == null) {
+                return;
+            }
+
+            cpuBoostPref.setOnPreferenceChangeListener((preference, newValue) -> {
+                final String currentValue = cpuBoostPref.getValue();
+                final String requestedValue = String.valueOf(newValue);
+
+                // Warn only when CPU Boost transitions from disabled to enabled. Switching
+                // between enabled profiles does not create a second activation.
+                if (isCpuBoostDisabled(currentValue) && isCpuBoostEnabled(requestedValue)) {
+                    new AlertDialog.Builder(requireContext())
+                            .setTitle(R.string.pref_cpu_warmup_warning_title)
+                            .setMessage(R.string.pref_cpu_warmup_warning_message)
+                            .setPositiveButton(R.string.pref_cpu_warmup_warning_enable, (dialog, which) ->
+                                    cpuBoostPref.setValue(requestedValue))
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .show();
+
+                    // Persist only after the user explicitly confirms the warning.
+                    return false;
+                }
+
+                return true;
+            });
+        }
+
+        private static boolean isCpuBoostDisabled(String value) {
+            return value == null || "off".equalsIgnoreCase(value) || "0".equals(value);
+        }
+
+        private static boolean isCpuBoostEnabled(String value) {
+            return "lite".equalsIgnoreCase(value)
+                    || "medium".equalsIgnoreCase(value)
+                    || "aggressive".equalsIgnoreCase(value);
         }
 
         public void initializePreferences() {

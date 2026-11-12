@@ -2132,7 +2132,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         LimeLog.info("CpuWarmUp initialized");
                     }
 
-                    cpuWarmUpStarted = cpuWarmUp.start(activity, null, false, config);
+                    cpuWarmUpStarted = cpuWarmUp.start(activity, config);
                     if (cpuWarmUpStarted) {
                         LimeLog.info("CpuWarmUp started");
                     } else {

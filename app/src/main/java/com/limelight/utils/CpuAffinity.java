@@ -1,7 +1,5 @@
 package com.limelight.utils;
 
-import android.os.Process;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -106,11 +104,13 @@ public final class CpuAffinity {
         final int[] prime;   // 3-tier only
         final int[] big;
         final int[] little;
+        final String source;
 
-        Tiers(int[] prime, int[] big, int[] little) {
+        Tiers(int[] prime, int[] big, int[] little, String source) {
             this.prime = (prime != null) ? prime : new int[0];
             this.big = (big != null) ? big : new int[0];
             this.little = (little != null) ? little : new int[0];
+            this.source = (source != null) ? source : "unknown";
         }
     }
 
@@ -124,21 +124,34 @@ public final class CpuAffinity {
             c = sCachedTiers;
             if (c != null) return c;
             c = detectTiersOnce();
-            sCachedTiers = (c != null) ? c : new Tiers(new int[0], readAllowedCpusForCurrentThread(), readAllowedCpusForCurrentThread());
+            int[] allowed = readTopologyCpus();
+            sCachedTiers = (c != null) ? c : new Tiers(new int[0], allowed, allowed, "fallback");
             return sCachedTiers;
         }
     }
 
     private static Tiers detectTiersOnce() {
-        // Allowed CPUs for this thread (cpuset/cgroup restrictions)
-        final int[] allowed = readAllowedCpusForCurrentThread();
-        if (allowed.length == 0) return new Tiers(new int[0], new int[0], new int[0]);
+        // Cache hardware topology independently of the initializing thread's affinity/cpuset.
+        // Native affinity application intersects online CPUs; the kernel enforces cpusets.
+        final int[] allowed = readTopologyCpus();
+        if (allowed.length == 0) {
+            return new Tiers(new int[0], new int[0], new int[0], "none");
+        }
 
-        // 1) Preferred: topology cluster_id / core_group_id
-        final Tiers topo = detectTiersFromTopology(allowed);
-        if (topo != null) return topo;
+        // cpufreq policies describe DVFS domains directly and are more reliable than topology IDs
+        // on kernels that expose core_group_id as 2+6 for an actual 4+4 SoC.
+        final Tiers cpufreq = detectTiersFromCpufreq(allowed);
+        if (cpufreq != null) return cpufreq;
 
-        // 2) Fallback: cpufreq policy bins (existing behavior)
+        // Fall back to topology, merging clusters that share the same maximum frequency.
+        final Tiers topology = detectTiersFromTopology(allowed);
+        if (topology != null) return topology;
+
+        // Unknown topology: allow the scheduler to use all permitted CPUs for either bucket.
+        return new Tiers(new int[0], allowed, allowed, "fallback");
+    }
+
+    private static Tiers detectTiersFromCpufreq(int[] allowed) {
         final TreeMap<Long, TreeSet<Integer>> byFreq = new TreeMap<>();
         try {
             File base = new File("/sys/devices/system/cpu/cpufreq");
@@ -167,9 +180,30 @@ public final class CpuAffinity {
             }
         } catch (Throwable ignored) {}
 
-        if (byFreq.isEmpty()) {
-            return new Tiers(new int[0], allowed, allowed);
+        return buildTiersFromFrequencyGroups(byFreq, allowed, "cpufreq");
+    }
+
+    private static Tiers buildTiersFromFrequencyGroups(TreeMap<Long, TreeSet<Integer>> rawGroups,
+                                                       int[] allowed,
+                                                       String source) {
+        if (rawGroups == null || rawGroups.isEmpty() || allowed == null || allowed.length == 0) {
+            return null;
         }
+
+        // Merge tiny maximum-frequency differences so per-core policy files don't create fake tiers.
+        final TreeMap<Long, TreeSet<Integer>> byFreq = new TreeMap<>();
+        Long currentBin = null;
+        for (Long freq : rawGroups.keySet()) {
+            if (freq == null || freq <= 0) continue;
+            if (currentBin == null || !frequenciesMatch(currentBin, freq)) {
+                currentBin = freq;
+                byFreq.put(currentBin, new TreeSet<>());
+            }
+            TreeSet<Integer> cpus = rawGroups.get(freq);
+            if (cpus != null) byFreq.get(currentBin).addAll(cpus);
+        }
+
+        if (byFreq.size() < 2) return null;
 
         final ArrayList<Long> freqs = new ArrayList<>(byFreq.keySet());
 
@@ -191,28 +225,26 @@ public final class CpuAffinity {
             long lowF = freqs.get(0);
             bigSet.addAll(byFreq.get(bigF));
             littleSet.addAll(byFreq.get(lowF));
-        } else {
-            return new Tiers(new int[0], allowed, allowed);
         }
 
         int[] prime = intersect(toIntArray(primeSet), allowed);
         int[] big   = intersect(toIntArray(bigSet), allowed);
         int[] little= intersect(toIntArray(littleSet), allowed);
 
-        if (big.length == 0) big = allowed;
+        // A valid classification must be disjoint and cover every CPU in the topology.
+        big = subtract(big, prime);
+        little = subtract(little, union(prime, big));
+        int[] classified = union(union(prime, big), little);
+        if (big.length == 0 || little.length == 0 || classified.length != allowed.length) return null;
+        if (freqs.size() >= 3 && prime.length == 0) return null;
 
-        if (little.length == 0) {
-            int[] perf = union(big, prime);
-            little = subtract(allowed, perf);
-            if (little.length == 0) little = allowed;
-        }
+        return new Tiers(prime, big, little, source);
+    }
 
-        if (prime.length > 0) {
-            big = subtract(big, prime);
-            if (big.length == 0) big = allowed;
-        }
-
-        return new Tiers(prime, big, little);
+    private static boolean frequenciesMatch(long a, long b) {
+        long lower = Math.min(a, b);
+        long tolerance = Math.max(20_000L, Math.round(lower * 0.02d));
+        return Math.abs(a - b) <= tolerance;
     }
 
     private static Tiers detectTiersFromTopology(int[] allowed) {
@@ -232,15 +264,7 @@ public final class CpuAffinity {
 
             if (clusters.size() < 2) return null; // topology not useful (missing or single cluster)
 
-            // Compute max freq per cluster (kHz)
-            final class C {
-                final int cid;
-                final int[] cpus;
-                final long maxKHz;
-                C(int cid, int[] cpus, long maxKHz) { this.cid = cid; this.cpus = cpus; this.maxKHz = maxKHz; }
-            }
-
-            ArrayList<C> list = new ArrayList<>(clusters.size());
+            TreeMap<Long, TreeSet<Integer>> byFreq = new TreeMap<>();
             for (Integer cid : clusters.keySet()) {
                 int[] cpus = toIntArray(clusters.get(cid));
                 long max = 0L;
@@ -248,37 +272,17 @@ public final class CpuAffinity {
                     long k = readCpuMaxKHz(c);
                     if (k > max) max = k;
                 }
-                list.add(new C(cid, cpus, max));
-            }
+                if (max <= 0) return null;
 
-            // Sort by max freq ascending
-            list.sort((a, b) -> Long.compare(a.maxKHz, b.maxKHz));
-
-            if (list.size() >= 3) {
-                int[] prime = list.get(list.size() - 1).cpus;
-                int[] big   = list.get(list.size() - 2).cpus;
-
-                // little = union of the rest
-                TreeSet<Integer> littleSet = new TreeSet<>();
-                for (int i = 0; i < list.size() - 2; i++) {
-                    for (int c : list.get(i).cpus) littleSet.add(c);
+                TreeSet<Integer> set = byFreq.get(max);
+                if (set == null) {
+                    set = new TreeSet<>();
+                    byFreq.put(max, set);
                 }
-                int[] little = toIntArray(littleSet);
-
-                // Guard: if freq data missing, still consider it 3-tier by topology
-                if (big.length == 0) big = allowed;
-                if (little.length == 0) little = subtract(allowed, union(big, prime));
-
-                return new Tiers(prime, big, (little.length > 0) ? little : allowed);
-            } else {
-                // 2-tier topology
-                int[] big = list.get(list.size() - 1).cpus;
-                int[] little = list.get(0).cpus;
-                if (big.length == 0) big = allowed;
-                if (little.length == 0) little = subtract(allowed, big);
-                if (little.length == 0) little = allowed;
-                return new Tiers(new int[0], big, little);
+                for (int cpu : cpus) set.add(cpu);
             }
+
+            return buildTiersFromFrequencyGroups(byFreq, allowed, "topology+freq");
         } catch (Throwable ignored) {
             return null;
         }
@@ -303,31 +307,19 @@ public final class CpuAffinity {
         return readLong("/sys/devices/system/cpu/cpu" + cpu + "/cpufreq/scaling_max_freq");
     }
 
-    // ---- /proc allowed CPUs ----
+    // ---- Hardware CPU inventory ----
 
-    private static int[] readAllowedCpusForCurrentThread() {
-        int tid = -1;
-        try { tid = Process.myTid(); } catch (Throwable ignored) {}
-        if (tid <= 0) return fallbackAllCpus();
+    private static int[] readTopologyCpus() {
+        return readTopologyCpus(new File("/sys/devices/system/cpu"));
+    }
 
-        String path = "/proc/self/task/" + tid + "/status";
-        BufferedReader br = null;
-        try {
-            br = new BufferedReader(new FileReader(path));
-            String line;
-            while ((line = br.readLine()) != null) {
-                if (line.startsWith("Cpus_allowed_list:")) {
-                    String v = line.substring("Cpus_allowed_list:".length()).trim();
-                    int[] parsed = parseCpuList(v);
-                    return (parsed.length > 0) ? parsed : fallbackAllCpus();
-                }
-            }
-        } catch (Throwable ignored) {
-            // fall through
-        } finally {
-            try { if (br != null) br.close(); } catch (Throwable ignored) {}
+    static int[] readTopologyCpus(File cpuDirectory) {
+        // Include temporarily offline CPUs so a first read during hotplug cannot permanently
+        // remove a tier from the process-wide cache.
+        for (String inventory : new String[] { "present", "possible", "online" }) {
+            int[] cpus = parseCpuList(readFirstLine(new File(cpuDirectory, inventory).getPath()));
+            if (cpus.length > 0) return cpus;
         }
-
         return fallbackAllCpus();
     }
 
@@ -476,7 +468,8 @@ public final class CpuAffinity {
     public static String describeTiers() {
         final Tiers t = detectTiersCached();
         if (t == null) return "tiers=null";
-        return "prime=" + Arrays.toString(t.prime) +
+        return "source=" + t.source +
+                " prime=" + Arrays.toString(t.prime) +
                 " big=" + Arrays.toString(t.big) +
                 " little=" + Arrays.toString(t.little);
     }
