@@ -55,11 +55,6 @@ public class MediaCodecHelper {
     private static boolean isAdreno620 = false;
     private static boolean initialized = false;
 
-    // Shield/Tegra diagnostic policy: keep the decoder on the fixed-format path.
-    // Some NVIDIA codec implementations may retain additional internal buffering when
-    // adaptive playback is enabled, which can make latency debt persist after reconnects.
-    private static final boolean DISABLE_NVIDIA_ADAPTIVE_PLAYBACK = true;
-
     static {
         directSubmitPrefixes = new LinkedList<>();
 
@@ -762,11 +757,6 @@ public class MediaCodecHelper {
     }
 
     public static boolean decoderSupportsFusedIdrFrame(MediaCodecInfo decoderInfo, String mimeType) {
-        if (DISABLE_NVIDIA_ADAPTIVE_PLAYBACK && isNvidiaDecoder(decoderInfo.getName())) {
-            LimeLog.info("Fused IDR frames disabled for NVIDIA fixed-format playback");
-            return false;
-        }
-
         // If adaptive playback is supported, we can submit new CSD together with a keyframe
         try {
             if (decoderInfo.getCapabilitiesForType(mimeType).
@@ -783,11 +773,6 @@ public class MediaCodecHelper {
     }
 
     public static boolean decoderSupportsAdaptivePlayback(MediaCodecInfo decoderInfo, String mimeType) {
-        if (DISABLE_NVIDIA_ADAPTIVE_PLAYBACK && isNvidiaDecoder(decoderInfo.getName())) {
-            LimeLog.info("Adaptive playback disabled for NVIDIA decoder");
-            return false;
-        }
-
         if (isDecoderInList(blacklistedAdaptivePlaybackPrefixes, decoderInfo.getName())) {
             LimeLog.info("Decoder blacklisted for adaptive playback");
             return false;
