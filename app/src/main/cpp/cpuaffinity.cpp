@@ -67,10 +67,6 @@ static void build_safe_affinity_mask(cpu_set_t* out, const std::vector<int>& des
         if (c >= 0 && c < CPU_SETSIZE) CPU_SET(c, &wanted);
     }
 
-    cpu_set_t allowed;
-    CPU_ZERO(&allowed);
-    (void)sched_getaffinity(mytid(), sizeof(cpu_set_t), &allowed);
-
     cpu_set_t online;
     CPU_ZERO(&online);
     auto online_list = read_online_cpus();
@@ -83,19 +79,17 @@ static void build_safe_affinity_mask(cpu_set_t* out, const std::vector<int>& des
 
     for (int c = 0; c < CPU_SETSIZE; ++c) {
         if (CPU_ISSET(c, &wanted) && CPU_ISSET(c, &online)) {
-            if (CPU_COUNT(&allowed) == 0 || CPU_ISSET(c, &allowed)) {
-                CPU_SET(c, out);
-            }
+            CPU_SET(c, out);
         }
     }
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_limelight_utils_CpuAffinity_nativeSetAffinity(JNIEnv* env, jclass, jintArray cores) {
-    if (!cores) return;
+    if (!cores) return JNI_FALSE;
 
     jsize n = env->GetArrayLength(cores);
-    if (n <= 0) return;
+    if (n <= 0) return JNI_FALSE;
 
     std::vector<jint> tmp((size_t)n);
     env->GetIntArrayRegion(cores, 0, n, tmp.data());
@@ -106,12 +100,12 @@ Java_com_limelight_utils_CpuAffinity_nativeSetAffinity(JNIEnv* env, jclass, jint
 
     cpu_set_t set;
     build_safe_affinity_mask(&set, desired);
-    if (CPU_COUNT(&set) == 0) return;
+    if (CPU_COUNT(&set) == 0) return JNI_FALSE;
 
-    (void)sched_setaffinity(mytid(), sizeof(cpu_set_t), &set);
+    return sched_setaffinity(mytid(), sizeof(cpu_set_t), &set) == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_limelight_utils_CpuAffinity_nativeClearCurrentThreadAffinityAllOnline(JNIEnv*, jclass) {
     auto online_list = read_online_cpus();
     if (online_list.empty()) {
@@ -122,7 +116,7 @@ Java_com_limelight_utils_CpuAffinity_nativeClearCurrentThreadAffinityAllOnline(J
 
     cpu_set_t set;
     build_safe_affinity_mask(&set, online_list);
-    if (CPU_COUNT(&set) == 0) return;
+    if (CPU_COUNT(&set) == 0) return JNI_FALSE;
 
-    (void)sched_setaffinity(mytid(), sizeof(cpu_set_t), &set);
+    return sched_setaffinity(mytid(), sizeof(cpu_set_t), &set) == 0 ? JNI_TRUE : JNI_FALSE;
 }

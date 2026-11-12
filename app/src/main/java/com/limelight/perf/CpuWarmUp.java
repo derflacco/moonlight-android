@@ -2,7 +2,10 @@ package com.limelight.perf;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.PowerManager;
 import android.os.Process;
+
+import java.util.Locale;
 
 /**
  * CpuWarmUp: multi-thread warm-up to gently nudge DVFS.
@@ -54,7 +57,7 @@ public final class CpuWarmUp {
         public static final String KEY_BURST_WORKERS       = "pref_cpu_warmup_burst_workers";
 
         // Parsed config
-        public int mode = MODE_MEDIUM;
+        public int mode = MODE_OFF;
 
         // If true, allow running even when ADPF/PerfHint is active.
         public boolean overridePerfHint = false;
@@ -87,14 +90,19 @@ public final class CpuWarmUp {
         }
 
         public static Config fromPrefs(Context ctx) {
-            Config c = new Config();
-            if (ctx == null) return c;
+            if (ctx == null) return new Config();
 
-            SharedPreferences p = getDefaultPrefs(ctx);
+            return fromPrefs(getDefaultPrefs(ctx));
+        }
+
+        /** Builds a config from the exact preference view supplied by the caller. */
+        public static Config fromPrefs(SharedPreferences p) {
+            Config c = new Config();
+
             if (p == null) return c;
 
             // mode
-            String mode = getPrefString(p, KEY_MODE, "medium");
+            String mode = getPrefString(p, KEY_MODE, "off");
             c.mode = parseMode(mode);
 
             c.overridePerfHint = getPrefBoolean(p, KEY_OVERRIDE_PERF_HINT, false);
@@ -185,18 +193,18 @@ public final class CpuWarmUp {
         }
 
         private static int parseMode(String v) {
-            if (v == null) return MODE_MEDIUM;
-            v = v.trim().toLowerCase();
+            if (v == null) return MODE_OFF;
+            v = v.trim().toLowerCase(Locale.ROOT);
             if ("0".equals(v) || "off".equals(v) || "disabled".equals(v) || "false".equals(v)) return MODE_OFF;
             if ("1".equals(v) || "lite".equals(v) || "light".equals(v)) return MODE_LITE;
             if ("2".equals(v) || "medium".equals(v) || "normal".equals(v) || "default".equals(v)) return MODE_MEDIUM;
             if ("3".equals(v) || "aggressive".equals(v) || "high".equals(v) || "turbo".equals(v)) return MODE_AGGRESSIVE;
-            return MODE_MEDIUM;
+            return MODE_OFF;
         }
 
         private static int parseAffinity(String v) {
             if (v == null) return AFFINITY_SPREAD;
-            v = v.trim().toLowerCase();
+            v = v.trim().toLowerCase(Locale.ROOT);
             if ("0".equals(v) || "big".equals(v) || "big_only".equals(v) || "bigonly".equals(v)) return AFFINITY_BIG_ONLY;
             if ("1".equals(v) || "spread".equals(v) || "auto".equals(v) || "default".equals(v)) return AFFINITY_SPREAD;
             if ("2".equals(v) || "none".equals(v) || "off".equals(v) || "disabled".equals(v)) return AFFINITY_NONE;
@@ -205,14 +213,14 @@ public final class CpuWarmUp {
 
         private static int parseBurstWorkersMode(String v) {
             if (v == null) return BURST_WORKERS_ALL;
-            v = v.trim().toLowerCase();
+            v = v.trim().toLowerCase(Locale.ROOT);
             if ("primary".equals(v) || "primary_only".equals(v) || "single".equals(v)) return BURST_WORKERS_PRIMARY_ONLY;
             return BURST_WORKERS_ALL;
         }
 
         private static int parseCoreSetMask(String v) {
             if (v == null) return CORESET_ALL;
-            v = v.trim().toLowerCase();
+            v = v.trim().toLowerCase(Locale.ROOT);
 
             if ("all".equals(v)) return CORESET_ALL;
             if ("big".equals(v)) return CORESET_BIG;
@@ -234,8 +242,8 @@ public final class CpuWarmUp {
     private final java.util.List<Thread> workers = new java.util.ArrayList<>();
     private volatile boolean running = false;
 
-    // Blackhole to prevent JIT from optimizing away FP work
-    private static volatile double BH = 0.0;
+    // Blackhole to keep the synthetic integer work observable to the JIT.
+    private static volatile long BH = 0L;
 
     // Master switch (build-time kill switch if needed)
     private static final boolean ENABLE = true;
@@ -244,9 +252,9 @@ public final class CpuWarmUp {
     // NOTE: 0=auto maps to availableProcessors() clamped by this hard cap.
     private static final int MAX_AUTO_WORKERS = 32;
 
-    // Default base duty-cycle: ~2.5 ms spin + 2 ms sleep ≈ ~50%
-    private static final int DEFAULT_BASE_SPIN_MICROS  = 2_500;
-    private static final int DEFAULT_BASE_SLEEP_MILLIS = 2;
+    // Default base duty-cycle: ~1.5 ms spin + 4 ms sleep ≈ ~27%.
+    private static final int DEFAULT_BASE_SPIN_MICROS  = 1_500;
+    private static final int DEFAULT_BASE_SLEEP_MILLIS = 4;
 
     // Default burst every 2 seconds: 10 ms
     private static final int DEFAULT_BURST_PERIOD_MS = 2_000;
@@ -310,7 +318,7 @@ public final class CpuWarmUp {
     private volatile int  spinMicros  = DEFAULT_BASE_SPIN_MICROS;
     private volatile int  sleepMillis = DEFAULT_BASE_SLEEP_MILLIS;
     private volatile boolean skipBursts = false;
-    private volatile long lastThermalSampleMs = 0L;
+    private volatile boolean thermalPaused = false;
 
     // Optional context for thermal reading (can be null)
     private volatile Context appContext = null;
@@ -329,19 +337,19 @@ public final class CpuWarmUp {
         catch (Throwable t) { android.util.Log.e("CpuWarmUp", m, e); }
     }
 
-    public synchronized void start(Object perfHint, boolean overridePerfHint) {
-        start(null, perfHint, overridePerfHint, null);
+    public synchronized boolean start(Object perfHint, boolean overridePerfHint) {
+        return start(null, perfHint, overridePerfHint, null);
     }
 
-    public synchronized void start(Context context, Object perfHint, boolean overridePerfHint) {
-        start(context, perfHint, overridePerfHint, null);
+    public synchronized boolean start(Context context, Object perfHint, boolean overridePerfHint) {
+        return start(context, perfHint, overridePerfHint, null);
     }
 
-    public synchronized void start(Context context, Object perfHint, boolean overridePerfHint, Config config) {
-        if (!ENABLE) { logI("start(): ENABLE=false"); return; }
+    public synchronized boolean start(Context context, Object perfHint, boolean overridePerfHint, Config config) {
+        if (!ENABLE) { logI("start(): ENABLE=false"); return false; }
         if (running) {
             logI("start(): already running; workers=" + workers.size());
-            return;
+            return !workers.isEmpty();
         }
 
         final Context ctx = (context != null) ? context.getApplicationContext() : null;
@@ -356,7 +364,7 @@ public final class CpuWarmUp {
         if (cfg.mode == Config.MODE_OFF) {
             logI("start(): mode=OFF");
             appContext = null;
-            return;
+            return false;
         }
 
         applyConfigLocked(cfg);
@@ -366,7 +374,7 @@ public final class CpuWarmUp {
         if (!override && isPerfHintActive(perfHint)) {
             logI("start(): gated by PerfHint active");
             appContext = null;
-            return;
+            return false;
         }
 
         running = true;
@@ -374,6 +382,10 @@ public final class CpuWarmUp {
 
         final int arch = getArchitecture();
         final int effMask = effectiveCoreSetMaskForArch(arch);
+        final int selectedCores = selectedCoreCountBestEffort(effMask, arch);
+        if (selectedCores > 0) {
+            workersCount = Math.min(workersCount, selectedCores);
+        }
 
         try {
             Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
@@ -412,17 +424,24 @@ public final class CpuWarmUp {
                         long nowMs = android.os.SystemClock.uptimeMillis();
                         long prev  = thermalGuard.get();
                         if (nowMs - prev >= THERMAL_SAMPLE_MS && thermalGuard.compareAndSet(prev, nowMs)) {
-                            lastThermalSampleMs = nowMs;
                             applyThermalPolicy(sampleThermals(appContext));
                         }
                     }
 
+                    if (thermalPaused) {
+                        try { Thread.sleep(100); }
+                        catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                        continue;
+                    }
+
                     final long startNs = System.nanoTime();
                     final long targetSpinNs = (long) spinMicros * 1_000L;
-                    double sink = 0.0;
+                    long sink = (((long) id) + 1L) * 0x9E3779B97F4A7C15L;
                     while ((System.nanoTime() - startNs) < targetSpinNs) {
                         if (!running || Thread.currentThread().isInterrupted()) break;
-                        sink += Math.sin(sink + 1.0);
+                        sink ^= sink << 13;
+                        sink ^= sink >>> 7;
+                        sink ^= sink << 17;
                     }
                     BH = sink;
 
@@ -437,11 +456,12 @@ public final class CpuWarmUp {
                         if ((now - lastBurstMs) >= burstPeriodMs) {
                             final long until = System.nanoTime() + ((long) burstSpinMs * 1_000_000L);
 
-                            double bs = BH;
+                            long bs = BH ^ (((long) id) << 32);
                             while (System.nanoTime() < until) {
                                 if (!running || Thread.currentThread().isInterrupted()) break;
-                                bs = bs * 1.000001 + 1.0;
-                                if (bs > 1e9) bs = 0.0;
+                                bs ^= bs << 13;
+                                bs ^= bs >>> 7;
+                                bs ^= bs << 17;
                             }
                             BH = bs;
 
@@ -456,9 +476,22 @@ public final class CpuWarmUp {
             }, "CpuWarmUp-" + i);
 
             try { t.setDaemon(true); } catch (Throwable ignored) {}
-            try { t.start(); } catch (Throwable e) { logE("worker-" + id + " start failed", e); }
-            workers.add(t);
+            try {
+                t.start();
+                workers.add(t);
+            } catch (Throwable e) {
+                logE("worker-" + id + " start failed", e);
+            }
         }
+
+        if (workers.isEmpty()) {
+            running = false;
+            appContext = null;
+            logI("start(): no workers started");
+            return false;
+        }
+
+        return true;
     }
 
     public synchronized void stop() {
@@ -472,9 +505,12 @@ public final class CpuWarmUp {
                 try { t.interrupt(); } catch (Throwable e) { logE("interrupt failed", e); }
             }
         }
+        final long joinDeadlineMs = android.os.SystemClock.uptimeMillis() + 500L;
         for (Thread t : workers) {
             if (t != null) {
-                try { t.join(300); } catch (Throwable e) { logE("join failed", e); }
+                long remainingMs = joinDeadlineMs - android.os.SystemClock.uptimeMillis();
+                if (remainingMs <= 0) break;
+                try { t.join(remainingMs); } catch (Throwable e) { logE("join failed", e); }
             }
         }
 
@@ -484,7 +520,7 @@ public final class CpuWarmUp {
         spinMicros  = baseSpinMicros;
         sleepMillis = baseSleepMillis;
         skipBursts  = !burstsEnabled;
-        lastThermalSampleMs = 0L;
+        thermalPaused = false;
         thermalGuard.set(0L);
 
         logI("stop(): done");
@@ -536,8 +572,8 @@ public final class CpuWarmUp {
         switch (mode) {
             case Config.MODE_LITE:
                 // Light continuous activity, still across selected tiers.
-                baseSpinMicros  = 1_000;
-                baseSleepMillis = 4;
+                baseSpinMicros  = 750;
+                baseSleepMillis = 6;
 
                 burstsEnabled = true;
                 burstWorkersMode = Config.BURST_WORKERS_PRIMARY_ONLY;
@@ -546,8 +582,8 @@ public final class CpuWarmUp {
                 break;
 
             case Config.MODE_AGGRESSIVE:
-                baseSpinMicros  = 4_500;
-                baseSleepMillis = 1;
+                baseSpinMicros  = 3_000;
+                baseSleepMillis = 2;
 
                 burstsEnabled = true;
                 burstWorkersMode = Config.BURST_WORKERS_ALL;
@@ -821,6 +857,22 @@ public final class CpuWarmUp {
         return "any";
     }
 
+    private static int selectedCoreCountBestEffort(int mask, int arch) {
+        int selected = 0;
+
+        if (arch == ARCH_3_TIER && (mask & CORESET_PRIME) != 0) {
+            selected += getPrimeCoreCountBestEffort();
+        }
+        if ((mask & CORESET_BIG) != 0) {
+            selected += getBigCoreCountBestEffort();
+        }
+        if ((mask & CORESET_LITTLE) != 0) {
+            selected += getLittleCoreCountBestEffort();
+        }
+
+        return selected;
+    }
+
     private int chooseBucketForWorker(int id, int arch) {
         final int totalWorkers = workersCount;
         if (totalWorkers <= 0) return (arch == ARCH_3_TIER) ? 1 : 0;
@@ -964,8 +1016,8 @@ public final class CpuWarmUp {
         try {
             Class<?> cls = Class.forName("com.limelight.utils.CpuAffinity");
             java.lang.reflect.Method m = cls.getMethod(methodName, boolean.class);
-            m.invoke(null, arg);
-            return true;
+            Object result = m.invoke(null, arg);
+            return result instanceof Boolean && (Boolean) result;
         } catch (Throwable ignored) {
             return false;
         }
@@ -1012,30 +1064,10 @@ public final class CpuWarmUp {
         float battC = Float.NaN;
 
         if (ctx != null && android.os.Build.VERSION.SDK_INT >= 29) {
-            Object svc = null;
-
             try {
-                Class<?> tmClass = Class.forName("android.os.ThermalManager");
-                java.lang.reflect.Method getByClass =
-                        android.content.Context.class.getMethod("getSystemService", Class.class);
-                svc = getByClass.invoke(ctx, tmClass);
+                PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                if (pm != null) status = pm.getCurrentThermalStatus();
             } catch (Throwable ignored) {}
-
-            if (svc == null) {
-                try {
-                    java.lang.reflect.Method getByString =
-                            android.content.Context.class.getMethod("getSystemService", String.class);
-                    svc = getByString.invoke(ctx, "thermal");
-                } catch (Throwable ignored) {}
-            }
-
-            if (svc != null) {
-                try {
-                    java.lang.reflect.Method m = svc.getClass().getMethod("getCurrentThermalStatus");
-                    Object r = m.invoke(svc);
-                    if (r instanceof Integer) status = (Integer) r;
-                } catch (Throwable ignored) {}
-            }
         }
 
         try {
@@ -1055,44 +1087,47 @@ public final class CpuWarmUp {
         int newSpinMicros = baseSpinMicros;
         int newSleepMs    = baseSleepMillis;
         boolean newSkipBursts = !burstsEnabled;
+        boolean newThermalPaused = false;
 
         if (snap.thermalStatus >= 0) {
             int s = snap.thermalStatus;
-            if (s >= 4) {
-                newSpinMicros = baseSpinMicros / 4;
-                newSleepMs    = Math.max(baseSleepMillis, 100);
+            if (s >= PowerManager.THERMAL_STATUS_SEVERE) {
+                // Synthetic load is counterproductive once Android reports severe throttling.
+                newThermalPaused = true;
                 newSkipBursts = true;
-            } else if (s >= 3) {
+            } else if (s >= PowerManager.THERMAL_STATUS_MODERATE) {
                 newSpinMicros = baseSpinMicros / 2;
-                newSleepMs    = Math.max(baseSleepMillis, 40);
-                newSkipBursts = true;
-            } else if (s >= 2) {
-                newSpinMicros = (int) (baseSpinMicros * 0.75f);
                 newSleepMs    = Math.max(baseSleepMillis, 10);
-                newSkipBursts = !burstsEnabled;
+                newSkipBursts = true;
+            } else if (s >= PowerManager.THERMAL_STATUS_LIGHT) {
+                newSpinMicros = (int) (baseSpinMicros * 0.75f);
+                newSleepMs    = Math.max(baseSleepMillis, 5);
+                newSkipBursts = true;
             }
-        } else {
-            if (!java.lang.Float.isNaN(snap.batteryC)) {
-                float t = snap.batteryC;
-                if (t >= T_CRITICAL) {
-                    newSpinMicros = baseSpinMicros / 4;
-                    newSleepMs    = Math.max(baseSleepMillis, 100);
-                    newSkipBursts = true;
-                } else if (t >= T_HOT) {
-                    newSpinMicros = baseSpinMicros / 2;
-                    newSleepMs    = Math.max(baseSleepMillis, 40);
-                    newSkipBursts = true;
-                } else if (t >= T_WARM) {
-                    newSpinMicros = (int) (baseSpinMicros * 0.75f);
-                    newSleepMs    = Math.max(baseSleepMillis, 10);
-                    newSkipBursts = !burstsEnabled;
-                }
+        }
+
+        // Some devices report THERMAL_STATUS_NONE permanently, so retain battery temperature
+        // as a conservative secondary signal even when the platform API is available.
+        if (!java.lang.Float.isNaN(snap.batteryC)) {
+            float t = snap.batteryC;
+            if (t >= T_CRITICAL) {
+                newThermalPaused = true;
+                newSkipBursts = true;
+            } else if (t >= T_HOT) {
+                newSpinMicros = Math.min(newSpinMicros, baseSpinMicros / 2);
+                newSleepMs    = Math.max(newSleepMs, 40);
+                newSkipBursts = true;
+            } else if (t >= T_WARM) {
+                newSpinMicros = Math.min(newSpinMicros, (int) (baseSpinMicros * 0.75f));
+                newSleepMs    = Math.max(newSleepMs, 10);
+                newSkipBursts = true;
             }
         }
 
         spinMicros  = clampSpinUs(newSpinMicros);
         sleepMillis = clampSleepMs(newSleepMs);
         skipBursts  = newSkipBursts;
+        thermalPaused = newThermalPaused;
     }
 
     private static boolean isPerfHintActive(Object perfHint) {

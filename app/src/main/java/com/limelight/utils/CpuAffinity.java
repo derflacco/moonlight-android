@@ -49,20 +49,21 @@ public final class CpuAffinity {
     }
 
     @SuppressWarnings("JniMissingFunction")
-    private static native void nativeSetAffinity(int[] cpuIds);
+    private static native boolean nativeSetAffinity(int[] cpuIds);
 
     @SuppressWarnings("JniMissingFunction")
-    private static native void nativeClearCurrentThreadAffinityAllOnline();
+    private static native boolean nativeClearCurrentThreadAffinityAllOnline();
 
-    private static void setAffinityBestEffort(int[] cpuIds) {
-        if (cpuIds == null || cpuIds.length == 0) return;
-        if (!ensureLoaded()) return;
-        try { nativeSetAffinity(cpuIds); } catch (Throwable ignored) {}
+    private static boolean setAffinityBestEffort(int[] cpuIds) {
+        if (cpuIds == null || cpuIds.length == 0) return false;
+        if (!ensureLoaded()) return false;
+        try { return nativeSetAffinity(cpuIds); } catch (Throwable ignored) { return false; }
     }
 
-    private static void clearAffinityBestEffort() {
-        if (!ensureLoaded()) return;
-        try { nativeClearCurrentThreadAffinityAllOnline(); } catch (Throwable ignored) {}
+    private static boolean clearAffinityBestEffort() {
+        if (!ensureLoaded()) return false;
+        try { return nativeClearCurrentThreadAffinityAllOnline(); }
+        catch (Throwable ignored) { return false; }
     }
 
     // ---- CpuWarmUp reflection API ----
@@ -73,30 +74,30 @@ public final class CpuAffinity {
         return (t != null && t.prime != null) ? t.prime.length : 0;
     }
 
-    public static void pinCurrentThreadToPrimeCoresIf(boolean enabled) {
-        if (!enabled) return;
+    public static boolean pinCurrentThreadToPrimeCoresIf(boolean enabled) {
+        if (!enabled) return false;
         final Tiers t = detectTiersCached();
-        if (t == null || t.prime.length == 0) return;
-        setAffinityBestEffort(t.prime);
+        if (t == null || t.prime.length == 0) return false;
+        return setAffinityBestEffort(t.prime);
     }
 
-    public static void pinCurrentThreadToBigCoresIf(boolean enabled) {
-        if (!enabled) return;
+    public static boolean pinCurrentThreadToBigCoresIf(boolean enabled) {
+        if (!enabled) return false;
         final Tiers t = detectTiersCached();
-        if (t == null || t.big.length == 0) return;
-        setAffinityBestEffort(t.big);
+        if (t == null || t.big.length == 0) return false;
+        return setAffinityBestEffort(t.big);
     }
 
-    public static void pinCurrentThreadToLittleCoresIf(boolean enabled) {
-        if (!enabled) return;
+    public static boolean pinCurrentThreadToLittleCoresIf(boolean enabled) {
+        if (!enabled) return false;
         final Tiers t = detectTiersCached();
-        if (t == null || t.little.length == 0) return;
-        setAffinityBestEffort(t.little);
+        if (t == null || t.little.length == 0) return false;
+        return setAffinityBestEffort(t.little);
     }
 
-    public static void pinCurrentThreadToAllCoresIf(boolean enabled) {
-        if (!enabled) return;
-        clearAffinityBestEffort();
+    public static boolean pinCurrentThreadToAllCoresIf(boolean enabled) {
+        if (!enabled) return false;
+        return clearAffinityBestEffort();
     }
 
     // ---- Minimal tier detection (sysfs + /proc) ----

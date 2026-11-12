@@ -51,9 +51,6 @@ public class PreferenceConfiguration {
         return v;
     }
 
-    // CpuWarmUp (read from prefs)
-    public boolean cpuWarmUpEnable;
-
     // Video upscaling (FSR-like)
     public boolean videoUpscaleEnable;
     public boolean gpuPathMode;
@@ -1007,9 +1004,6 @@ public class PreferenceConfiguration {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
-
-        // CpuWarmUp prefs (UI)
-        config.cpuWarmUpEnable = prefs.getBoolean("pref_cpu_warmup_enable", false);
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
         if (warpFactorStr.equals("warp")) {

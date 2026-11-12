@@ -2119,16 +2119,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void start() {
 
 
-        // Start CPU warm-up if enabled (lazy init; avoids overhead/log spam when disabled)
-        if (prefs != null && prefs.cpuWarmUpEnable && !cpuWarmUpStarted) {
+        // Build CpuWarmUp from the overlay-aware preference view used by the active profile.
+        if (!cpuWarmUpStarted) {
             try {
-                if (cpuWarmUp == null) {
-                    cpuWarmUp = new CpuWarmUp();
-                    LimeLog.info("CpuWarmUp initialized (enabled)");
+                SharedPreferences effectivePrefs =
+                        ProfilesManager.getInstance().getOverlayingSharedPreferences(activity);
+                CpuWarmUp.Config config = CpuWarmUp.Config.fromPrefs(effectivePrefs);
+
+                if (config.mode != CpuWarmUp.Config.MODE_OFF) {
+                    if (cpuWarmUp == null) {
+                        cpuWarmUp = new CpuWarmUp();
+                        LimeLog.info("CpuWarmUp initialized");
+                    }
+
+                    cpuWarmUpStarted = cpuWarmUp.start(activity, null, false, config);
+                    if (cpuWarmUpStarted) {
+                        LimeLog.info("CpuWarmUp started");
+                    } else {
+                        LimeLog.warning("CpuWarmUp requested but no worker started");
+                    }
                 }
-                cpuWarmUp.start(activity, null, false);
-                cpuWarmUpStarted = true;
-                LimeLog.info("CpuWarmUp started");
             } catch (Throwable t) {
                 LimeLog.warning("CpuWarmUp start failed: " + t);
             }
