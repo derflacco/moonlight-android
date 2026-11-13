@@ -594,34 +594,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Sauvegarde et restauration</string>
     <string name="backup_title">Exporter / importer les paramètres</string>
-    <string name="backup_summary">Enregistrez vos paramètres, profils, dispositions de la superposition, touches spéciales et éventuellement vos PC appairés dans un fichier, ou restaurez-les depuis un fichier</string>
+    <string name="backup_summary">Enregistrez vos paramètres, profils, dispositions de la superposition et touches spéciales dans un fichier, ou restaurez-les depuis un fichier</string>
     <string name="backup_export">Exporter</string>
     <string name="backup_import">Importer</string>
     <string name="backup_export_done">Paramètres exportés</string>
     <string name="backup_export_failed">Échec de l\'export : %1$s</string>
     <string name="backup_import_failed">Échec de l\'import : %1$s</string>
     <string name="backup_import_confirm_title">Remplacer les paramètres actuels ?</string>
-    <string name="backup_import_confirm">Tout (paramètres, profils, dispositions de la superposition, touches spéciales et PC appairés) sera remplacé par le contenu du fichier exporté le %1$s.\n\nL\'application redémarrera ensuite.</string>
     <string name="backup_import_button">Importer et redémarrer</string>
     <string name="backup_unknown_date">une date inconnue</string>
-    <string name="backup_dialog_message">L\'export enregistre tous les paramètres, profils, dispositions de la superposition et touches spéciales dans un fichier. Les PC appairés peuvent aussi être inclus.\n\nL\'import les remplace par le contenu d\'un fichier.</string>
-    <string name="backup_import_confirm_keep_pairing">Vos paramètres, profils, dispositions de la superposition et touches spéciales seront remplacés par le contenu du fichier exporté le %1$s. Vos PC appairés sont conservés.\n\nL\'application redémarrera ensuite.</string>
-    <string name="backup_export_title">Exporter les paramètres</string>
-    <string name="backup_export_always_included">Les paramètres, profils, dispositions de la superposition et touches spéciales sont toujours inclus.</string>
-    <string name="backup_include_pairing">Inclure les ordinateurs appairés</string>
-    <string name="backup_pairing_password_hint">L\'application importée pourra se connecter à vos PC sans nouvel appairage. Protégez cette partie du fichier par un mot de passe :</string>
-    <string name="backup_password">Mot de passe</string>
-    <string name="backup_password_confirm">Confirmer le mot de passe</string>
-    <string name="backup_password_mismatch">Les mots de passe ne correspondent pas</string>
-    <string name="backup_no_password_title">Exporter les ordinateurs appairés sans mot de passe ?</string>
-    <string name="backup_no_password_message">Le fichier contiendra la clé d\'appairage de cette application sans protection. Toute personne en possédant une copie pourra se connecter à vos PC appairés, les diffuser et les contrôler sans votre accord et sans appairage.\n\nComprenez-vous les risques de sécurité et voulez-vous quand même exporter sans mot de passe ?</string>
-    <string name="backup_no_password_proceed">Je comprends, exporter quand même</string>
-    <string name="backup_no_password_back">Définir un mot de passe</string>
-    <string name="backup_password_required_title">Protégé par mot de passe</string>
-    <string name="backup_password_required_message">Les ordinateurs appairés de ce fichier sont protégés par un mot de passe.</string>
-    <string name="backup_unlock">Déverrouiller</string>
-    <string name="backup_import_without_pairing">Ignorer les PC appairés</string>
-    <string name="backup_wrong_password">Mot de passe incorrect</string>
+    <string name="backup_dialog_message">L\'export enregistre tous les paramètres, profils, dispositions de la superposition et touches spéciales dans un fichier. Les PC appairés ne sont pas inclus.\n\nL\'import les remplace par le contenu d\'un fichier.</string>
+    <string name="backup_import_confirm">Vos paramètres, profils, dispositions de la superposition et touches spéciales seront remplacés par le contenu du fichier exporté le %1$s. Vos PC appairés sont conservés.\n\nL\'application redémarrera ensuite.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Certains éléments ne peuvent pas être importés</string>

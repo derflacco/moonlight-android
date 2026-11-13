@@ -146,34 +146,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Архивиране и възстановяване</string>
     <string name="backup_title">Експорт / импорт на настройките</string>
-    <string name="backup_summary">Запазете настройките, профилите, подредбите на наслагването, специалните клавиши и по желание сдвоените компютри във файл или ги възстановете от файл</string>
+    <string name="backup_summary">Запазете настройките, профилите, подредбите на наслагването и специалните клавиши във файл или ги възстановете от файл</string>
     <string name="backup_export">Експорт</string>
     <string name="backup_import">Импорт</string>
     <string name="backup_export_done">Настройките са експортирани</string>
     <string name="backup_export_failed">Експортът е неуспешен: %1$s</string>
     <string name="backup_import_failed">Импортът е неуспешен: %1$s</string>
     <string name="backup_import_confirm_title">Да се заменят ли текущите настройки?</string>
-    <string name="backup_import_confirm">Това заменя всичко (настройки, профили, подредби на наслагването, специални клавиши и сдвоени компютри) със съдържанието на файла, експортиран на %1$s.\n\nПриложението ще се рестартира след това.</string>
     <string name="backup_import_button">Импорт и рестарт</string>
     <string name="backup_unknown_date">неизвестна дата</string>
-    <string name="backup_dialog_message">Експортът записва всички настройки, профили, подредби на наслагването и специални клавиши във файл. Могат да се включат и сдвоените компютри.\n\nИмпортът ги заменя със съдържанието на файл.</string>
-    <string name="backup_import_confirm_keep_pairing">Това заменя настройките, профилите, подредбите на наслагването и специалните клавиши със съдържанието на файла, експортиран на %1$s. Сдвоените компютри се запазват.\n\nПриложението ще се рестартира след това.</string>
-    <string name="backup_export_title">Експорт на настройките</string>
-    <string name="backup_export_always_included">Настройките, профилите, подредбите на наслагването и специалните клавиши винаги се включват.</string>
-    <string name="backup_include_pairing">Включване на сдвоените компютри</string>
-    <string name="backup_pairing_password_hint">Импортираното приложение ще може да се свързва с компютрите ви без ново сдвояване. Защитете тази част от файла с парола:</string>
-    <string name="backup_password">Парола</string>
-    <string name="backup_password_confirm">Потвърдете паролата</string>
-    <string name="backup_password_mismatch">Паролите не съвпадат</string>
-    <string name="backup_no_password_title">Експорт на сдвоените компютри без парола?</string>
-    <string name="backup_no_password_message">Файлът ще съдържа незащитен ключа за сдвояване на това приложение. Всеки, който получи копие, може да се свърже със сдвоените ви компютри, да ги стриймва и управлява без ваше одобрение и без сдвояване.\n\nРазбирате ли рисковете за сигурността и искате ли все пак да експортирате без парола?</string>
-    <string name="backup_no_password_proceed">Разбирам, експортирай въпреки това</string>
-    <string name="backup_no_password_back">Задай парола</string>
-    <string name="backup_password_required_title">Защитено с парола</string>
-    <string name="backup_password_required_message">Сдвоените компютри в този файл са защитени с парола.</string>
-    <string name="backup_unlock">Отключи</string>
-    <string name="backup_import_without_pairing">Пропусни сдвоените компютри</string>
-    <string name="backup_wrong_password">Грешна парола</string>
+    <string name="backup_dialog_message">Експортът записва всички настройки, профили, подредби на наслагването и специални клавиши във файл. Сдвоените компютри не се включват.\n\nИмпортът ги заменя със съдържанието на файл.</string>
+    <string name="backup_import_confirm">Това заменя настройките, профилите, подредбите на наслагването и специалните клавиши със съдържанието на файла, експортиран на %1$s. Сдвоените компютри се запазват.\n\nПриложението ще се рестартира след това.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Някои елементи не могат да бъдат импортирани</string>

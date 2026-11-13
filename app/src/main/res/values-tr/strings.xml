@@ -278,34 +278,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Yedekleme ve geri yükleme</string>
     <string name="backup_title">Ayarları dışa / içe aktar</string>
-    <string name="backup_summary">Ayarlarınızı, profillerinizi, kaplama düzenlerinizi, özel tuşlarınızı ve isteğe bağlı olarak eşleştirilmiş bilgisayarlarınızı bir dosyaya kaydedin veya bir dosyadan geri yükleyin</string>
+    <string name="backup_summary">Ayarlarınızı, profillerinizi, kaplama düzenlerinizi ve özel tuşlarınızı bir dosyaya kaydedin veya bir dosyadan geri yükleyin</string>
     <string name="backup_export">Dışa aktar</string>
     <string name="backup_import">İçe aktar</string>
     <string name="backup_export_done">Ayarlar dışa aktarıldı</string>
     <string name="backup_export_failed">Dışa aktarma başarısız: %1$s</string>
     <string name="backup_import_failed">İçe aktarma başarısız: %1$s</string>
     <string name="backup_import_confirm_title">Mevcut ayarlar değiştirilsin mi?</string>
-    <string name="backup_import_confirm">Bu işlem her şeyi (ayarlar, profiller, kaplama düzenleri, özel tuşlar ve eşleştirilmiş bilgisayarlar) %1$s tarihinde dışa aktarılan dosyanın içeriğiyle değiştirir.\n\nUygulama ardından yeniden başlatılır.</string>
     <string name="backup_import_button">İçe aktar ve yeniden başlat</string>
     <string name="backup_unknown_date">bilinmeyen bir tarih</string>
-    <string name="backup_dialog_message">Dışa aktarma tüm ayarları, profilleri, kaplama düzenlerini ve özel tuşları bir dosyaya kaydeder. Eşleştirilmiş bilgisayarlar da eklenebilir.\n\nİçe aktarma bunları bir dosyanın içeriğiyle değiştirir.</string>
-    <string name="backup_import_confirm_keep_pairing">Bu işlem ayarlarınızı, profillerinizi, kaplama düzenlerinizi ve özel tuşlarınızı %1$s tarihinde dışa aktarılan dosyanın içeriğiyle değiştirir. Eşleştirilmiş bilgisayarlarınız korunur.\n\nUygulama ardından yeniden başlatılır.</string>
-    <string name="backup_export_title">Ayarları dışa aktar</string>
-    <string name="backup_export_always_included">Ayarlar, profiller, kaplama düzenleri ve özel tuşlar her zaman dahil edilir.</string>
-    <string name="backup_include_pairing">Eşleştirilmiş bilgisayarları dahil et</string>
-    <string name="backup_pairing_password_hint">İçe aktaran uygulama, yeniden eşleştirme yapmadan bilgisayarlarınıza bağlanabilir. Dosyanın bu bölümünü bir parolayla koruyun:</string>
-    <string name="backup_password">Parola</string>
-    <string name="backup_password_confirm">Parolayı onaylayın</string>
-    <string name="backup_password_mismatch">Parolalar eşleşmiyor</string>
-    <string name="backup_no_password_title">Eşleştirilmiş bilgisayarlar parolasız dışa aktarılsın mı?</string>
-    <string name="backup_no_password_message">Dosya, bu uygulamanın eşleştirme anahtarını korumasız olarak içerecek. Bir kopyasını ele geçiren herkes, onayınız olmadan ve eşleştirme yapmadan eşleştirilmiş bilgisayarlarınıza bağlanabilir, onları yayınlayabilir ve kontrol edebilir.\n\nGüvenlik risklerini anlıyor ve yine de parolasız dışa aktarmak istiyor musunuz?</string>
-    <string name="backup_no_password_proceed">Anlıyorum, yine de dışa aktar</string>
-    <string name="backup_no_password_back">Parola belirle</string>
-    <string name="backup_password_required_title">Parola korumalı</string>
-    <string name="backup_password_required_message">Bu dosyadaki eşleştirilmiş bilgisayarlar bir parolayla korunuyor.</string>
-    <string name="backup_unlock">Kilidi aç</string>
-    <string name="backup_import_without_pairing">Eşleştirilmiş bilgisayarları atla</string>
-    <string name="backup_wrong_password">Yanlış parola</string>
+    <string name="backup_dialog_message">Dışa aktarma tüm ayarları, profilleri, kaplama düzenlerini ve özel tuşları bir dosyaya kaydeder. Eşleştirilmiş bilgisayarlar dahil edilmez.\n\nİçe aktarma bunları bir dosyanın içeriğiyle değiştirir.</string>
+    <string name="backup_import_confirm">Bu işlem ayarlarınızı, profillerinizi, kaplama düzenlerinizi ve özel tuşlarınızı %1$s tarihinde dışa aktarılan dosyanın içeriğiyle değiştirir. Eşleştirilmiş bilgisayarlarınız korunur.\n\nUygulama ardından yeniden başlatılır.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Bazı öğeler içe aktarılamıyor</string>

@@ -313,34 +313,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Sichern &amp; Wiederherstellen</string>
     <string name="backup_title">Einstellungen exportieren / importieren</string>
-    <string name="backup_summary">Einstellungen, Profile, Overlay-Layouts, Sondertasten und optional gekoppelte PCs in einer Datei speichern oder daraus wiederherstellen</string>
+    <string name="backup_summary">Einstellungen, Profile, Overlay-Layouts und Sondertasten in einer Datei speichern oder daraus wiederherstellen</string>
     <string name="backup_export">Exportieren</string>
     <string name="backup_import">Importieren</string>
     <string name="backup_export_done">Einstellungen exportiert</string>
     <string name="backup_export_failed">Export fehlgeschlagen: %1$s</string>
     <string name="backup_import_failed">Import fehlgeschlagen: %1$s</string>
     <string name="backup_import_confirm_title">Aktuelle Einstellungen ersetzen?</string>
-    <string name="backup_import_confirm">Dadurch wird alles (Einstellungen, Profile, Overlay-Layouts, Sondertasten und gekoppelte PCs) durch den Inhalt der am %1$s exportierten Datei ersetzt.\n\nDie App wird danach neu gestartet.</string>
     <string name="backup_import_button">Importieren und neu starten</string>
     <string name="backup_unknown_date">einem unbekannten Datum</string>
-    <string name="backup_dialog_message">Beim Export werden alle Einstellungen, Profile, Overlay-Layouts und Sondertasten in einer Datei gespeichert. Gekoppelte PCs können ebenfalls enthalten sein.\n\nBeim Import werden sie durch den Inhalt einer Datei ersetzt.</string>
-    <string name="backup_import_confirm_keep_pairing">Dadurch werden Einstellungen, Profile, Overlay-Layouts und Sondertasten durch den Inhalt der am %1$s exportierten Datei ersetzt. Gekoppelte PCs bleiben erhalten.\n\nDie App wird danach neu gestartet.</string>
-    <string name="backup_export_title">Einstellungen exportieren</string>
-    <string name="backup_export_always_included">Einstellungen, Profile, Overlay-Layouts und Sondertasten sind immer enthalten.</string>
-    <string name="backup_include_pairing">Gekoppelte Computer einbeziehen</string>
-    <string name="backup_pairing_password_hint">Die importierte App kann sich ohne erneutes Koppeln mit deinen PCs verbinden. Schütze diesen Teil der Datei mit einem Passwort:</string>
-    <string name="backup_password">Passwort</string>
-    <string name="backup_password_confirm">Passwort bestätigen</string>
-    <string name="backup_password_mismatch">Die Passwörter stimmen nicht überein</string>
-    <string name="backup_no_password_title">Gekoppelte Computer ohne Passwort exportieren?</string>
-    <string name="backup_no_password_message">Die Datei enthält den Kopplungsschlüssel dieser App ungeschützt. Jeder, der eine Kopie erhält, kann sich mit deinen gekoppelten PCs verbinden, sie streamen und steuern – ohne deine Zustimmung und ohne Kopplung.\n\nVerstehst du die Sicherheitsrisiken und möchtest du trotzdem ohne Passwort exportieren?</string>
-    <string name="backup_no_password_proceed">Verstanden, trotzdem exportieren</string>
-    <string name="backup_no_password_back">Passwort festlegen</string>
-    <string name="backup_password_required_title">Passwortgeschützt</string>
-    <string name="backup_password_required_message">Die gekoppelten Computer in dieser Datei sind passwortgeschützt.</string>
-    <string name="backup_unlock">Entsperren</string>
-    <string name="backup_import_without_pairing">Gekoppelte PCs überspringen</string>
-    <string name="backup_wrong_password">Falsches Passwort</string>
+    <string name="backup_dialog_message">Beim Export werden alle Einstellungen, Profile, Overlay-Layouts und Sondertasten in einer Datei gespeichert. Gekoppelte PCs sind nicht enthalten.\n\nBeim Import werden sie durch den Inhalt einer Datei ersetzt.</string>
+    <string name="backup_import_confirm">Dadurch werden Einstellungen, Profile, Overlay-Layouts und Sondertasten durch den Inhalt der am %1$s exportierten Datei ersetzt. Gekoppelte PCs bleiben erhalten.\n\nDie App wird danach neu gestartet.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Einige Elemente können nicht importiert werden</string>

@@ -277,34 +277,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Säkerhetskopiering och återställning</string>
     <string name="backup_title">Exportera / importera inställningar</string>
-    <string name="backup_summary">Spara dina inställningar, profiler, överläggslayouter, specialtangenter och eventuellt parkopplade datorer till en fil, eller återställ dem från en fil</string>
+    <string name="backup_summary">Spara dina inställningar, profiler, överläggslayouter och specialtangenter till en fil, eller återställ dem från en fil</string>
     <string name="backup_export">Exportera</string>
     <string name="backup_import">Importera</string>
     <string name="backup_export_done">Inställningarna har exporterats</string>
     <string name="backup_export_failed">Exporten misslyckades: %1$s</string>
     <string name="backup_import_failed">Importen misslyckades: %1$s</string>
     <string name="backup_import_confirm_title">Ersätta nuvarande inställningar?</string>
-    <string name="backup_import_confirm">Detta ersätter allt (inställningar, profiler, överläggslayouter, specialtangenter och parkopplade datorer) med innehållet i filen som exporterades %1$s.\n\nAppen startas om efteråt.</string>
     <string name="backup_import_button">Importera och starta om</string>
     <string name="backup_unknown_date">ett okänt datum</string>
-    <string name="backup_dialog_message">Export sparar alla inställningar, profiler, överläggslayouter och specialtangenter i en fil. Parkopplade datorer kan också inkluderas.\n\nImport ersätter dem med innehållet i en fil.</string>
-    <string name="backup_import_confirm_keep_pairing">Detta ersätter dina inställningar, profiler, överläggslayouter och specialtangenter med innehållet i filen som exporterades %1$s. Dina parkopplade datorer behålls.\n\nAppen startas om efteråt.</string>
-    <string name="backup_export_title">Exportera inställningar</string>
-    <string name="backup_export_always_included">Inställningar, profiler, överläggslayouter och specialtangenter ingår alltid.</string>
-    <string name="backup_include_pairing">Inkludera parkopplade datorer</string>
-    <string name="backup_pairing_password_hint">Appen som importerar kan ansluta till dina datorer utan ny parkoppling. Skydda den här delen av filen med ett lösenord:</string>
-    <string name="backup_password">Lösenord</string>
-    <string name="backup_password_confirm">Bekräfta lösenordet</string>
-    <string name="backup_password_mismatch">Lösenorden matchar inte</string>
-    <string name="backup_no_password_title">Exportera parkopplade datorer utan lösenord?</string>
-    <string name="backup_no_password_message">Filen kommer att innehålla appens parkopplingsnyckel oskyddad. Vem som helst som får en kopia kan ansluta till dina parkopplade datorer, strömma och styra dem utan ditt godkännande och utan parkoppling.\n\nFörstår du säkerhetsriskerna och vill du ändå exportera utan lösenord?</string>
-    <string name="backup_no_password_proceed">Jag förstår, exportera ändå</string>
-    <string name="backup_no_password_back">Ange ett lösenord</string>
-    <string name="backup_password_required_title">Lösenordsskyddat</string>
-    <string name="backup_password_required_message">De parkopplade datorerna i den här filen är skyddade med ett lösenord.</string>
-    <string name="backup_unlock">Lås upp</string>
-    <string name="backup_import_without_pairing">Hoppa över parkopplade datorer</string>
-    <string name="backup_wrong_password">Fel lösenord</string>
+    <string name="backup_dialog_message">Export sparar alla inställningar, profiler, överläggslayouter och specialtangenter i en fil. Parkopplade datorer ingår inte.\n\nImport ersätter dem med innehållet i en fil.</string>
+    <string name="backup_import_confirm">Detta ersätter dina inställningar, profiler, överläggslayouter och specialtangenter med innehållet i filen som exporterades %1$s. Dina parkopplade datorer behålls.\n\nAppen startas om efteråt.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Vissa objekt kan inte importeras</string>

@@ -294,34 +294,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Backup e ripristino</string>
     <string name="backup_title">Esporta / importa impostazioni</string>
-    <string name="backup_summary">Salva le impostazioni, i profili, i layout dell\'overlay, i tasti speciali e facoltativamente i PC associati in un file, o ripristinali da un file</string>
+    <string name="backup_summary">Salva le impostazioni, i profili, i layout dell\'overlay e i tasti speciali in un file, o ripristinali da un file</string>
     <string name="backup_export">Esporta</string>
     <string name="backup_import">Importa</string>
     <string name="backup_export_done">Impostazioni esportate</string>
     <string name="backup_export_failed">Esportazione non riuscita: %1$s</string>
     <string name="backup_import_failed">Importazione non riuscita: %1$s</string>
     <string name="backup_import_confirm_title">Sostituire le impostazioni attuali?</string>
-    <string name="backup_import_confirm">Tutto (impostazioni, profili, layout dell\'overlay, tasti speciali e PC associati) verrà sostituito con il contenuto del file esportato il %1$s.\n\nL\'app verrà poi riavviata.</string>
     <string name="backup_import_button">Importa e riavvia</string>
     <string name="backup_unknown_date">una data sconosciuta</string>
-    <string name="backup_dialog_message">L\'esportazione salva tutte le impostazioni, i profili, i layout dell\'overlay e i tasti speciali in un file. Si possono includere anche i PC associati.\n\nL\'importazione li sostituisce con il contenuto di un file.</string>
-    <string name="backup_import_confirm_keep_pairing">Impostazioni, profili, layout dell\'overlay e tasti speciali verranno sostituiti con il contenuto del file esportato il %1$s. I PC associati vengono mantenuti.\n\nL\'app verrà poi riavviata.</string>
-    <string name="backup_export_title">Esporta impostazioni</string>
-    <string name="backup_export_always_included">Impostazioni, profili, layout dell\'overlay e tasti speciali sono sempre inclusi.</string>
-    <string name="backup_include_pairing">Includi i computer associati</string>
-    <string name="backup_pairing_password_hint">L\'app importata potrà connettersi ai tuoi PC senza una nuova associazione. Proteggi questa parte del file con una password:</string>
-    <string name="backup_password">Password</string>
-    <string name="backup_password_confirm">Conferma password</string>
-    <string name="backup_password_mismatch">Le password non corrispondono</string>
-    <string name="backup_no_password_title">Esportare i computer associati senza password?</string>
-    <string name="backup_no_password_message">Il file conterrà la chiave di associazione di questa app senza protezione. Chiunque ne ottenga una copia potrà connettersi ai tuoi PC associati, trasmetterli e controllarli senza la tua approvazione e senza associazione.\n\nComprendi i rischi per la sicurezza e vuoi comunque esportare senza password?</string>
-    <string name="backup_no_password_proceed">Ho capito, esporta comunque</string>
-    <string name="backup_no_password_back">Imposta una password</string>
-    <string name="backup_password_required_title">Protetto da password</string>
-    <string name="backup_password_required_message">I computer associati in questo file sono protetti da una password.</string>
-    <string name="backup_unlock">Sblocca</string>
-    <string name="backup_import_without_pairing">Salta i PC associati</string>
-    <string name="backup_wrong_password">Password errata</string>
+    <string name="backup_dialog_message">L\'esportazione salva tutte le impostazioni, i profili, i layout dell\'overlay e i tasti speciali in un file. I PC associati non sono inclusi.\n\nL\'importazione li sostituisce con il contenuto di un file.</string>
+    <string name="backup_import_confirm">Impostazioni, profili, layout dell\'overlay e tasti speciali verranno sostituiti con il contenuto del file esportato il %1$s. I PC associati vengono mantenuti.\n\nL\'app verrà poi riavviata.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Alcuni elementi non possono essere importati</string>

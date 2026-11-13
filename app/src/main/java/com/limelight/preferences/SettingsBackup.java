@@ -22,9 +22,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,23 +36,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
-import javax.crypto.Cipher;
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.PBEKeySpec;
-import javax.crypto.spec.SecretKeySpec;
-
 /**
  * Exports / imports everything the user configured to a single JSON file:
  * <ul>
  *     <li>every SharedPreferences file: all settings, input overlay layouts (all slots),
  *     special keys, hidden apps...</li>
  *     <li>settings profiles</li>
- *     <li>optionally, paired computers and this app's pairing identity (certificate and
- *     private key), so that an imported installation is already paired with the same PCs.
- *     This part can be encrypted with a password (PBKDF2 + AES-GCM).</li>
  * </ul>
- * Only device specific caches are left out. The file uses logical names, so it can be
+ * Paired computers and the pairing identity (certificate and private key) are never
+ * exported, and an import keeps the current ones. Device specific caches are left out too. The file uses logical names, so it can be
  * imported in another build of the app (different application id / signature).
  *
  * <p>Importing only applies the settings of the settings screen (read from
@@ -90,37 +79,16 @@ public final class SettingsBackup {
 
     /** Top level sections of a backup file this version understands. */
     private static final Set<String> KNOWN_SECTIONS = new HashSet<>(Arrays.asList(
-            "format", "version", "appId", "appVersion", "exportedAt", "prefs", "data", "files", "pairing"));
+            "format", "version", "appId", "appVersion", "exportedAt", "prefs", "data", "files"));
 
-    /** Non sensitive files, relative to the app's data directory. */
+    /** Files carried by backups, relative to the app's data directory. */
     private static final List<String> DATA_FILES = Collections.singletonList(
             "files/profiles/profiles.json");
-
-    /** Paired computers: pairing identity and computer database. */
-    private static final List<String> PAIRING_FILES = Arrays.asList(
-            "files/client.crt",
-            "files/client.key",
-            "databases/computers4.db",
-            "databases/computers4.db-journal",
-            "databases/computers4.db-wal",
-            "databases/computers4.db-shm");
 
     /** Version 1 stored the profiles file under this name, as text. */
     private static final String V1_PROFILES_FILE = "profiles/profiles.json";
 
-    private static final String CIPHER = "AES/GCM/NoPadding";
-    private static final int KDF_ITERATIONS = 150_000;
-    private static final int KEY_BITS = 256;
-    private static final int GCM_TAG_BITS = 128;
-
     private SettingsBackup() {
-    }
-
-    /** Thrown when the password of the paired computers section is wrong. */
-    public static class WrongPasswordException extends Exception {
-        WrongPasswordException(Throwable cause) {
-            super("Wrong password", cause);
-        }
     }
 
     public static String suggestedFileName() {
@@ -224,12 +192,7 @@ public final class SettingsBackup {
     // Export
     // ------------------------------------------------------------------------------------
 
-    /**
-     * @param includePairing include paired computers and the pairing identity
-     * @param password       encrypts the paired computers section; null or empty for none
-     */
-    public static JSONObject export(Context context, boolean includePairing, String password)
-            throws JSONException, IOException, GeneralSecurityException {
+    public static JSONObject export(Context context) throws JSONException, IOException {
         JSONObject prefs = new JSONObject();
         for (String name : supportedGroups()) {
             SharedPreferences sp = openPrefs(context, name);
@@ -246,18 +209,6 @@ public final class SettingsBackup {
         root.put("exportedAt", new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(new Date()));
         root.put("prefs", prefs);
         root.put("data", exportFiles(context, DATA_FILES));
-
-        if (includePairing) {
-            JSONObject files = exportFiles(context, PAIRING_FILES);
-            JSONObject pairing = new JSONObject();
-            if (password == null || password.isEmpty()) {
-                pairing.put("encrypted", false);
-                pairing.put("files", files);
-            } else {
-                encrypt(pairing, files.toString().getBytes(StandardCharsets.UTF_8), password);
-            }
-            root.put("pairing", pairing);
-        }
         return root;
     }
 
@@ -306,70 +257,6 @@ public final class SettingsBackup {
     }
 
     // ------------------------------------------------------------------------------------
-    // Encryption
-    // ------------------------------------------------------------------------------------
-
-    private static SecretKeySpec deriveKey(String password, byte[] salt, String kdf, int iterations)
-            throws GeneralSecurityException {
-        PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, iterations, KEY_BITS);
-        try {
-            byte[] key = SecretKeyFactory.getInstance(kdf).generateSecret(spec).getEncoded();
-            return new SecretKeySpec(key, "AES");
-        } finally {
-            spec.clearPassword();
-        }
-    }
-
-    private static String availableKdf() {
-        try {
-            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
-            return "PBKDF2WithHmacSHA256";
-        } catch (NoSuchAlgorithmException e) {
-            // Android < 8
-            return "PBKDF2WithHmacSHA1";
-        }
-    }
-
-    private static void encrypt(JSONObject out, byte[] plaintext, String password)
-            throws GeneralSecurityException, JSONException {
-        SecureRandom random = new SecureRandom();
-        byte[] salt = new byte[16];
-        byte[] iv = new byte[12];
-        random.nextBytes(salt);
-        random.nextBytes(iv);
-        String kdf = availableKdf();
-
-        Cipher cipher = Cipher.getInstance(CIPHER);
-        cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt, kdf, KDF_ITERATIONS),
-                new GCMParameterSpec(GCM_TAG_BITS, iv));
-        byte[] ciphertext = cipher.doFinal(plaintext);
-
-        out.put("encrypted", true);
-        out.put("cipher", CIPHER);
-        out.put("kdf", kdf);
-        out.put("iterations", KDF_ITERATIONS);
-        out.put("salt", Base64.encodeToString(salt, Base64.NO_WRAP));
-        out.put("iv", Base64.encodeToString(iv, Base64.NO_WRAP));
-        out.put("ciphertext", Base64.encodeToString(ciphertext, Base64.NO_WRAP));
-    }
-
-    /** Whether this device can decrypt a protected paired computers section. */
-    private static boolean canDecrypt(JSONObject pairing) {
-        if (!CIPHER.equals(pairing.optString("cipher", CIPHER))
-                || pairing.optInt("iterations", 0) <= 0
-                || !pairing.has("salt") || !pairing.has("iv") || !pairing.has("ciphertext")) {
-            return false;
-        }
-        try {
-            SecretKeyFactory.getInstance(pairing.getString("kdf"));
-            Cipher.getInstance(CIPHER);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------------------------------
     // Import
     // ------------------------------------------------------------------------------------
 
@@ -399,7 +286,6 @@ public final class SettingsBackup {
         public final String appVersion;
         /** Human readable description of every skipped item, sorted. */
         public final List<String> unsupported = new ArrayList<>();
-        public boolean pairingSupported = true;
 
         final Map<String, Set<String>> acceptedKeys = new HashMap<>();
         final Set<String> acceptedData = new HashSet<>();
@@ -471,7 +357,10 @@ public final class SettingsBackup {
         Iterator<String> sections = backup.keys();
         while (sections.hasNext()) {
             String section = sections.next();
-            if (!KNOWN_SECTIONS.contains(section)) {
+            if ("pairing".equals(section)) {
+                // Paired computers (made by a build that exported them): never imported
+                unsupported.add(context.getString(R.string.backup_unsupported_pairing));
+            } else if (!KNOWN_SECTIONS.contains(section)) {
                 unsupported.add(context.getString(R.string.backup_unsupported_section, section));
             }
         }
@@ -524,10 +413,6 @@ public final class SettingsBackup {
             Iterator<String> paths = data.keys();
             while (paths.hasNext()) {
                 String path = paths.next();
-                if (PAIRING_FILES.contains(path)) {
-                    // Version 2 stored the paired computers with the other files
-                    continue;
-                }
                 if (!DATA_FILES.contains(path)) {
                     unsupported.add(context.getString(R.string.backup_unsupported_data, path));
                 } else if (!isBase64(data.optString(path, null))) {
@@ -538,129 +423,31 @@ public final class SettingsBackup {
             }
         }
 
-        // Paired computers
-        JSONObject pairing = backup.optJSONObject("pairing");
-        if (pairing != null) {
-            if (pairing.optBoolean("encrypted", false)) {
-                if (!canDecrypt(pairing)) {
-                    plan.pairingSupported = false;
-                    unsupported.add(context.getString(R.string.backup_unsupported_pairing));
-                }
-            } else {
-                JSONObject files = pairing.optJSONObject("files");
-                if (files == null) {
-                    plan.pairingSupported = false;
-                    unsupported.add(context.getString(R.string.backup_unsupported_pairing));
-                } else if (!files.has("files/client.key") || !files.has("files/client.crt")) {
-                    plan.pairingSupported = false;
-                    unsupported.add(context.getString(R.string.backup_unsupported_pairing));
-                } else {
-                    Iterator<String> paths = files.keys();
-                    while (paths.hasNext()) {
-                        String path = paths.next();
-                        if (!PAIRING_FILES.contains(path)) {
-                            unsupported.add(context.getString(R.string.backup_unsupported_data, path));
-                        }
-                    }
-                }
-            }
-        } else if (backup.has("pairing")) {
-            unsupported.add(context.getString(R.string.backup_unsupported_pairing));
-        }
-
         plan.unsupported.addAll(unsupported);
         return plan;
-    }
-
-    /** Whether the backup contains paired computers. */
-    public static boolean hasPairing(JSONObject backup) {
-        if (backup.optJSONObject("pairing") != null) {
-            return true;
-        }
-        // Version 2 stored them unencrypted with the other files
-        JSONObject data = backup.optJSONObject("data");
-        return data != null && data.has("files/client.key");
-    }
-
-    public static boolean isPairingEncrypted(JSONObject backup) {
-        JSONObject pairing = backup.optJSONObject("pairing");
-        return pairing != null && pairing.optBoolean("encrypted", false);
-    }
-
-    /**
-     * Returns the paired computers files of the backup, decrypting them if needed. Only the
-     * files this version knows are returned.
-     *
-     * @param password ignored when the section isn't encrypted
-     */
-    public static JSONObject openPairing(JSONObject backup, String password)
-            throws JSONException, WrongPasswordException, GeneralSecurityException {
-        JSONObject files;
-        JSONObject pairing = backup.optJSONObject("pairing");
-        if (pairing == null) {
-            // Version 2
-            files = backup.optJSONObject("data");
-        } else if (!pairing.optBoolean("encrypted", false)) {
-            files = pairing.getJSONObject("files");
-        } else {
-            byte[] salt = Base64.decode(pairing.getString("salt"), Base64.NO_WRAP);
-            byte[] iv = Base64.decode(pairing.getString("iv"), Base64.NO_WRAP);
-            byte[] ciphertext = Base64.decode(pairing.getString("ciphertext"), Base64.NO_WRAP);
-            SecretKeySpec key = deriveKey(password == null ? "" : password, salt,
-                    pairing.getString("kdf"), pairing.getInt("iterations"));
-            Cipher cipher = Cipher.getInstance(pairing.optString("cipher", CIPHER));
-            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
-            byte[] plaintext;
-            try {
-                plaintext = cipher.doFinal(ciphertext);
-            } catch (javax.crypto.AEADBadTagException e) {
-                throw new WrongPasswordException(e);
-            }
-            files = new JSONObject(new String(plaintext, StandardCharsets.UTF_8));
-        }
-
-        JSONObject known = new JSONObject();
-        if (files != null) {
-            for (String path : PAIRING_FILES) {
-                String content = files.optString(path, null);
-                if (content != null && isBase64(content)) {
-                    known.put(path, content);
-                }
-            }
-        }
-        if (!known.has("files/client.key") || !known.has("files/client.crt")) {
-            throw new JSONException("Incomplete paired computers data");
-        }
-        return known;
     }
 
     /**
      * Replaces the current configuration with what the plan accepts from the backup. The app
      * must be restarted right afterwards (open databases and in-memory state are stale).
-     * If anything fails, the previous configuration is restored and an exception is thrown.
-     *
-     * @param pairingFiles paired computers to restore (from {@link #openPairing}), or null
-     *                     to keep the current paired computers
+     * Paired computers are left untouched. If anything fails, the previous configuration is
+     * restored and an exception is thrown.
      */
-    public static void restore(Context context, JSONObject backup, JSONObject pairingFiles, ImportPlan plan)
-            throws IOException {
+    public static void restore(Context context, JSONObject backup, ImportPlan plan) throws IOException {
         // Keep the current configuration to roll back if something goes wrong
         JSONObject previous;
-        JSONObject previousPairing;
         try {
-            previous = export(context, true, null);
-            previousPairing = previous.getJSONObject("pairing").getJSONObject("files");
+            previous = export(context);
         } catch (Exception e) {
             throw new IOException("Unable to save the current settings: " + e.getMessage(), e);
         }
 
         try {
-            apply(context, backup, pairingFiles, plan);
+            apply(context, backup, plan);
         } catch (Exception e) {
             LimeLog.warning("Settings import failed, rolling back: " + e);
             try {
-                apply(context, previous, previousPairing.length() > 0 ? previousPairing : null,
-                        analyze(context, previous));
+                apply(context, previous, analyze(context, previous));
             } catch (Exception rollback) {
                 LimeLog.severe("Settings rollback failed: " + rollback);
             }
@@ -668,7 +455,7 @@ public final class SettingsBackup {
         }
     }
 
-    private static void apply(Context context, JSONObject backup, JSONObject pairingFiles, ImportPlan plan)
+    private static void apply(Context context, JSONObject backup, ImportPlan plan)
             throws JSONException, IOException {
         JSONObject prefs = backup.getJSONObject("prefs");
 
@@ -698,12 +485,6 @@ public final class SettingsBackup {
             if (files != null && files.has(V1_PROFILES_FILE)) {
                 writeFile(new File(context.getFilesDir(), V1_PROFILES_FILE),
                         files.getString(V1_PROFILES_FILE).getBytes(StandardCharsets.UTF_8));
-            }
-        }
-
-        if (pairingFiles != null) {
-            for (String path : PAIRING_FILES) {
-                writeOrDelete(context, path, pairingFiles.optString(path, null));
             }
         }
     }

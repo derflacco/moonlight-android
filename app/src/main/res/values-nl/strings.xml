@@ -228,34 +228,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Back-up en herstel</string>
     <string name="backup_title">Instellingen exporteren / importeren</string>
-    <string name="backup_summary">Sla je instellingen, profielen, overlay-indelingen, speciale toetsen en optioneel je gekoppelde pc\'s op in een bestand, of herstel ze uit een bestand</string>
+    <string name="backup_summary">Sla je instellingen, profielen, overlay-indelingen en speciale toetsen op in een bestand, of herstel ze uit een bestand</string>
     <string name="backup_export">Exporteren</string>
     <string name="backup_import">Importeren</string>
     <string name="backup_export_done">Instellingen geëxporteerd</string>
     <string name="backup_export_failed">Exporteren mislukt: %1$s</string>
     <string name="backup_import_failed">Importeren mislukt: %1$s</string>
     <string name="backup_import_confirm_title">Huidige instellingen vervangen?</string>
-    <string name="backup_import_confirm">Hiermee wordt alles (instellingen, profielen, overlay-indelingen, speciale toetsen en gekoppelde pc\'s) vervangen door de inhoud van het bestand dat op %1$s is geëxporteerd.\n\nDe app wordt daarna opnieuw gestart.</string>
     <string name="backup_import_button">Importeren en herstarten</string>
     <string name="backup_unknown_date">een onbekende datum</string>
-    <string name="backup_dialog_message">Exporteren slaat alle instellingen, profielen, overlay-indelingen en speciale toetsen op in een bestand. Gekoppelde pc\'s kunnen ook worden meegenomen.\n\nImporteren vervangt ze door de inhoud van een bestand.</string>
-    <string name="backup_import_confirm_keep_pairing">Hiermee worden je instellingen, profielen, overlay-indelingen en speciale toetsen vervangen door de inhoud van het bestand dat op %1$s is geëxporteerd. Je gekoppelde pc\'s blijven behouden.\n\nDe app wordt daarna opnieuw gestart.</string>
-    <string name="backup_export_title">Instellingen exporteren</string>
-    <string name="backup_export_always_included">Instellingen, profielen, overlay-indelingen en speciale toetsen worden altijd meegenomen.</string>
-    <string name="backup_include_pairing">Gekoppelde computers meenemen</string>
-    <string name="backup_pairing_password_hint">De app die importeert, kan zonder opnieuw koppelen verbinding maken met je pc\'s. Beveilig dit deel van het bestand met een wachtwoord:</string>
-    <string name="backup_password">Wachtwoord</string>
-    <string name="backup_password_confirm">Wachtwoord bevestigen</string>
-    <string name="backup_password_mismatch">De wachtwoorden komen niet overeen</string>
-    <string name="backup_no_password_title">Gekoppelde computers zonder wachtwoord exporteren?</string>
-    <string name="backup_no_password_message">Het bestand bevat de koppelingssleutel van deze app zonder beveiliging. Iedereen die een kopie krijgt, kan verbinding maken met je gekoppelde pc\'s en ze streamen en bedienen, zonder jouw toestemming en zonder koppeling.\n\nBegrijp je de beveiligingsrisico\'s en wil je toch zonder wachtwoord exporteren?</string>
-    <string name="backup_no_password_proceed">Ik begrijp het, toch exporteren</string>
-    <string name="backup_no_password_back">Wachtwoord instellen</string>
-    <string name="backup_password_required_title">Beveiligd met wachtwoord</string>
-    <string name="backup_password_required_message">De gekoppelde computers in dit bestand zijn beveiligd met een wachtwoord.</string>
-    <string name="backup_unlock">Ontgrendelen</string>
-    <string name="backup_import_without_pairing">Gekoppelde pc\'s overslaan</string>
-    <string name="backup_wrong_password">Onjuist wachtwoord</string>
+    <string name="backup_dialog_message">Exporteren slaat alle instellingen, profielen, overlay-indelingen en speciale toetsen op in een bestand. Gekoppelde pc\'s worden niet meegenomen.\n\nImporteren vervangt ze door de inhoud van een bestand.</string>
+    <string name="backup_import_confirm">Hiermee worden je instellingen, profielen, overlay-indelingen en speciale toetsen vervangen door de inhoud van het bestand dat op %1$s is geëxporteerd. Je gekoppelde pc\'s blijven behouden.\n\nDe app wordt daarna opnieuw gestart.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Sommige items kunnen niet worden geïmporteerd</string>

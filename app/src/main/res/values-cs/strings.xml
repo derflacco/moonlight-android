@@ -252,34 +252,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Záloha a obnovení</string>
     <string name="backup_title">Export / import nastavení</string>
-    <string name="backup_summary">Uložte nastavení, profily, rozložení překryvu, speciální klávesy a volitelně spárované počítače do souboru, nebo je ze souboru obnovte</string>
+    <string name="backup_summary">Uložte nastavení, profily, rozložení překryvu a speciální klávesy do souboru, nebo je ze souboru obnovte</string>
     <string name="backup_export">Exportovat</string>
     <string name="backup_import">Importovat</string>
     <string name="backup_export_done">Nastavení exportováno</string>
     <string name="backup_export_failed">Export se nezdařil: %1$s</string>
     <string name="backup_import_failed">Import se nezdařil: %1$s</string>
     <string name="backup_import_confirm_title">Nahradit současné nastavení?</string>
-    <string name="backup_import_confirm">Tímto se vše (nastavení, profily, rozložení překryvu, speciální klávesy a spárované počítače) nahradí obsahem souboru exportovaného %1$s.\n\nAplikace se poté restartuje.</string>
     <string name="backup_import_button">Importovat a restartovat</string>
     <string name="backup_unknown_date">neznámé datum</string>
-    <string name="backup_dialog_message">Export uloží všechna nastavení, profily, rozložení překryvu a speciální klávesy do souboru. Lze zahrnout i spárované počítače.\n\nImport je nahradí obsahem souboru.</string>
-    <string name="backup_import_confirm_keep_pairing">Tímto se nastavení, profily, rozložení překryvu a speciální klávesy nahradí obsahem souboru exportovaného %1$s. Spárované počítače zůstanou zachovány.\n\nAplikace se poté restartuje.</string>
-    <string name="backup_export_title">Export nastavení</string>
-    <string name="backup_export_always_included">Nastavení, profily, rozložení překryvu a speciální klávesy jsou zahrnuty vždy.</string>
-    <string name="backup_include_pairing">Zahrnout spárované počítače</string>
-    <string name="backup_pairing_password_hint">Importovaná aplikace se bude moci připojit k vašim počítačům bez nového párování. Chraňte tuto část souboru heslem:</string>
-    <string name="backup_password">Heslo</string>
-    <string name="backup_password_confirm">Potvrzení hesla</string>
-    <string name="backup_password_mismatch">Hesla se neshodují</string>
-    <string name="backup_no_password_title">Exportovat spárované počítače bez hesla?</string>
-    <string name="backup_no_password_message">Soubor bude obsahovat nechráněný párovací klíč této aplikace. Kdokoli získá jeho kopii, se může připojit k vašim spárovaným počítačům, streamovat je a ovládat bez vašeho souhlasu a bez párování.\n\nRozumíte bezpečnostním rizikům a chcete přesto exportovat bez hesla?</string>
-    <string name="backup_no_password_proceed">Rozumím, přesto exportovat</string>
-    <string name="backup_no_password_back">Nastavit heslo</string>
-    <string name="backup_password_required_title">Chráněno heslem</string>
-    <string name="backup_password_required_message">Spárované počítače v tomto souboru jsou chráněny heslem.</string>
-    <string name="backup_unlock">Odemknout</string>
-    <string name="backup_import_without_pairing">Přeskočit spárované počítače</string>
-    <string name="backup_wrong_password">Nesprávné heslo</string>
+    <string name="backup_dialog_message">Export uloží všechna nastavení, profily, rozložení překryvu a speciální klávesy do souboru. Spárované počítače nejsou zahrnuty.\n\nImport je nahradí obsahem souboru.</string>
+    <string name="backup_import_confirm">Tímto se nastavení, profily, rozložení překryvu a speciální klávesy nahradí obsahem souboru exportovaného %1$s. Spárované počítače zůstanou zachovány.\n\nAplikace se poté restartuje.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Některé položky nelze importovat</string>

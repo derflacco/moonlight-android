@@ -213,34 +213,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Sikkerhetskopi og gjenoppretting</string>
     <string name="backup_title">Eksporter / importer innstillinger</string>
-    <string name="backup_summary">Lagre innstillinger, profiler, overleggsoppsett, spesialtaster og eventuelt parede PC-er i en fil, eller gjenopprett dem fra en fil</string>
+    <string name="backup_summary">Lagre innstillinger, profiler, overleggsoppsett og spesialtaster i en fil, eller gjenopprett dem fra en fil</string>
     <string name="backup_export">Eksporter</string>
     <string name="backup_import">Importer</string>
     <string name="backup_export_done">Innstillingene er eksportert</string>
     <string name="backup_export_failed">Eksporten mislyktes: %1$s</string>
     <string name="backup_import_failed">Importen mislyktes: %1$s</string>
     <string name="backup_import_confirm_title">Erstatte gjeldende innstillinger?</string>
-    <string name="backup_import_confirm">Dette erstatter alt (innstillinger, profiler, overleggsoppsett, spesialtaster og parede PC-er) med innholdet i filen som ble eksportert %1$s.\n\nAppen startes på nytt etterpå.</string>
     <string name="backup_import_button">Importer og start på nytt</string>
     <string name="backup_unknown_date">en ukjent dato</string>
-    <string name="backup_dialog_message">Eksport lagrer alle innstillinger, profiler, overleggsoppsett og spesialtaster i en fil. Parede PC-er kan også tas med.\n\nImport erstatter dem med innholdet i en fil.</string>
-    <string name="backup_import_confirm_keep_pairing">Dette erstatter innstillingene, profilene, overleggsoppsettene og spesialtastene dine med innholdet i filen som ble eksportert %1$s. De parede PC-ene beholdes.\n\nAppen startes på nytt etterpå.</string>
-    <string name="backup_export_title">Eksporter innstillinger</string>
-    <string name="backup_export_always_included">Innstillinger, profiler, overleggsoppsett og spesialtaster er alltid med.</string>
-    <string name="backup_include_pairing">Ta med parede datamaskiner</string>
-    <string name="backup_pairing_password_hint">Appen som importerer, kan koble til PC-ene dine uten ny paring. Beskytt denne delen av filen med et passord:</string>
-    <string name="backup_password">Passord</string>
-    <string name="backup_password_confirm">Bekreft passordet</string>
-    <string name="backup_password_mismatch">Passordene samsvarer ikke</string>
-    <string name="backup_no_password_title">Eksportere parede datamaskiner uten passord?</string>
-    <string name="backup_no_password_message">Filen vil inneholde appens paringsnøkkel ubeskyttet. Alle som får en kopi kan koble til de parede PC-ene dine, strømme og styre dem uten din godkjenning og uten paring.\n\nForstår du sikkerhetsrisikoene og vil du likevel eksportere uten passord?</string>
-    <string name="backup_no_password_proceed">Jeg forstår, eksporter likevel</string>
-    <string name="backup_no_password_back">Angi et passord</string>
-    <string name="backup_password_required_title">Passordbeskyttet</string>
-    <string name="backup_password_required_message">De parede datamaskinene i denne filen er beskyttet med et passord.</string>
-    <string name="backup_unlock">Lås opp</string>
-    <string name="backup_import_without_pairing">Hopp over parede PC-er</string>
-    <string name="backup_wrong_password">Feil passord</string>
+    <string name="backup_dialog_message">Eksport lagrer alle innstillinger, profiler, overleggsoppsett og spesialtaster i en fil. Parede PC-er tas ikke med.\n\nImport erstatter dem med innholdet i en fil.</string>
+    <string name="backup_import_confirm">Dette erstatter innstillingene, profilene, overleggsoppsettene og spesialtastene dine med innholdet i filen som ble eksportert %1$s. De parede PC-ene beholdes.\n\nAppen startes på nytt etterpå.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Noen elementer kan ikke importeres</string>

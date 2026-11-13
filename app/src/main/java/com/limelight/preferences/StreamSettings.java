@@ -1970,19 +1970,11 @@ public class StreamSettings extends AppCompatActivity {
         private static final int BACKUP_EXPORT_REQUEST_CODE = 1003;
         private static final int BACKUP_IMPORT_REQUEST_CODE = 1004;
 
-        // Export options, kept while the file picker is open
-        private boolean pendingExportPairing;
-        private String pendingExportPassword;
-
-        private int dp(int value) {
-            return Math.round(value * getResources().getDisplayMetrics().density);
-        }
-
         private void showBackupDialog() {
             new AlertDialog.Builder(requireActivity())
                     .setTitle(R.string.backup_title)
                     .setMessage(R.string.backup_dialog_message)
-                    .setPositiveButton(R.string.backup_export, (dialog, which) -> showExportOptions())
+                    .setPositiveButton(R.string.backup_export, (dialog, which) -> pickExportFile())
                     .setNeutralButton(R.string.backup_import, (dialog, which) -> {
                         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -1994,90 +1986,7 @@ public class StreamSettings extends AppCompatActivity {
                     .show();
         }
 
-        private android.widget.EditText passwordField(int hintRes) {
-            android.widget.EditText field = new android.widget.EditText(requireActivity());
-            field.setHint(hintRes);
-            field.setSingleLine(true);
-            field.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            return field;
-        }
-
-        private void showExportOptions() {
-            Activity activity = requireActivity();
-            android.widget.LinearLayout content = new android.widget.LinearLayout(activity);
-            content.setOrientation(android.widget.LinearLayout.VERTICAL);
-            content.setPadding(dp(24), dp(8), dp(24), 0);
-
-            android.widget.TextView always = new android.widget.TextView(activity);
-            always.setText(R.string.backup_export_always_included);
-            content.addView(always);
-
-            android.widget.CheckBox includePairing = new android.widget.CheckBox(activity);
-            includePairing.setText(R.string.backup_include_pairing);
-            includePairing.setChecked(false);
-            android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.topMargin = dp(12);
-            content.addView(includePairing, lp);
-
-            android.widget.LinearLayout pairingOptions = new android.widget.LinearLayout(activity);
-            pairingOptions.setOrientation(android.widget.LinearLayout.VERTICAL);
-            pairingOptions.setVisibility(View.GONE);
-            android.widget.TextView pairingHint = new android.widget.TextView(activity);
-            pairingHint.setText(R.string.backup_pairing_password_hint);
-            pairingHint.setAlpha(0.8f);
-            pairingOptions.addView(pairingHint);
-            android.widget.EditText password = passwordField(R.string.backup_password);
-            android.widget.EditText confirm = passwordField(R.string.backup_password_confirm);
-            pairingOptions.addView(password);
-            pairingOptions.addView(confirm);
-            content.addView(pairingOptions);
-
-            includePairing.setOnCheckedChangeListener((button, checked) ->
-                    pairingOptions.setVisibility(checked ? View.VISIBLE : View.GONE));
-
-            android.widget.ScrollView scroll = new android.widget.ScrollView(activity);
-            scroll.addView(content);
-
-            AlertDialog dialog = new AlertDialog.Builder(activity)
-                    .setTitle(R.string.backup_export_title)
-                    .setView(scroll)
-                    .setPositiveButton(R.string.backup_export, null)
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .create();
-            dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                if (!includePairing.isChecked()) {
-                    dialog.dismiss();
-                    pickExportFile(false, null);
-                    return;
-                }
-                String pw = password.getText().toString();
-                if (!pw.isEmpty() && !pw.equals(confirm.getText().toString())) {
-                    confirm.setError(getString(R.string.backup_password_mismatch));
-                    return;
-                }
-                if (!pw.isEmpty()) {
-                    dialog.dismiss();
-                    pickExportFile(true, pw);
-                    return;
-                }
-                // No password: make sure the risk is understood
-                new AlertDialog.Builder(activity)
-                        .setTitle(R.string.backup_no_password_title)
-                        .setMessage(R.string.backup_no_password_message)
-                        .setPositiveButton(R.string.backup_no_password_proceed, (w, which) -> {
-                            dialog.dismiss();
-                            pickExportFile(true, null);
-                        })
-                        .setNegativeButton(R.string.backup_no_password_back, null)
-                        .show();
-            }));
-            dialog.show();
-        }
-
-        private void pickExportFile(boolean includePairing, String password) {
-            pendingExportPairing = includePairing;
-            pendingExportPassword = password;
+        private void pickExportFile() {
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType("application/json");
@@ -2088,14 +1997,11 @@ public class StreamSettings extends AppCompatActivity {
         private void exportBackup(Uri uri) {
             final Activity activity = requireActivity();
             final android.content.Context appContext = activity.getApplicationContext();
-            final boolean includePairing = pendingExportPairing;
-            final String password = pendingExportPassword;
-            pendingExportPassword = null;
-            // Key derivation takes a moment: don't block the UI
+            // Don't block the UI while writing (the destination may be slow, e.g. a cloud provider)
             new Thread(() -> {
                 String error = null;
                 try (java.io.OutputStream out = appContext.getContentResolver().openOutputStream(uri, "wt")) {
-                    SettingsBackup.write(SettingsBackup.export(appContext, includePairing, password), out);
+                    SettingsBackup.write(SettingsBackup.export(appContext), out);
                 } catch (Exception e) {
                     e.printStackTrace();
                     error = e.getMessage();
@@ -2122,7 +2028,7 @@ public class StreamSettings extends AppCompatActivity {
             if (plan.hasUnsupported()) {
                 showUnsupportedWarning(backup, plan);
             } else {
-                continueImport(backup, plan);
+                confirmImport(backup, plan);
             }
         }
 
@@ -2140,88 +2046,19 @@ public class StreamSettings extends AppCompatActivity {
             new AlertDialog.Builder(requireActivity())
                     .setTitle(R.string.backup_unsupported_title)
                     .setMessage(message.toString())
-                    .setPositiveButton(R.string.backup_import_rest, (d, w) -> continueImport(backup, plan))
+                    .setPositiveButton(R.string.backup_import_rest, (d, w) -> confirmImport(backup, plan))
                     .setNegativeButton(android.R.string.cancel, null)
                     .show();
         }
 
-        private void continueImport(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
-            if (!SettingsBackup.hasPairing(backup) || !plan.pairingSupported) {
-                confirmImport(backup, null, plan);
-            } else if (!SettingsBackup.isPairingEncrypted(backup)) {
-                try {
-                    confirmImport(backup, SettingsBackup.openPairing(backup, null), plan);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
-                }
-            } else {
-                askPairingPassword(backup, plan);
-            }
-        }
-
-        private void askPairingPassword(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
-            Activity activity = requireActivity();
-            android.widget.LinearLayout content = new android.widget.LinearLayout(activity);
-            content.setOrientation(android.widget.LinearLayout.VERTICAL);
-            content.setPadding(dp(24), dp(8), dp(24), 0);
-            android.widget.EditText password = passwordField(R.string.backup_password);
-            content.addView(password);
-
-            AlertDialog dialog = new AlertDialog.Builder(activity)
-                    .setTitle(R.string.backup_password_required_title)
-                    .setMessage(R.string.backup_password_required_message)
-                    .setView(content)
-                    .setPositiveButton(R.string.backup_unlock, null)
-                    .setNeutralButton(R.string.backup_import_without_pairing, (d, w) -> confirmImport(backup, null, plan))
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .create();
-            dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                final String pw = password.getText().toString();
-                final android.widget.Button unlock = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-                unlock.setEnabled(false);
-                new Thread(() -> {
-                    org.json.JSONObject pairing = null;
-                    String error = null;
-                    boolean wrongPassword = false;
-                    try {
-                        pairing = SettingsBackup.openPairing(backup, pw);
-                    } catch (SettingsBackup.WrongPasswordException e) {
-                        wrongPassword = true;
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        error = e.getMessage();
-                    }
-                    final org.json.JSONObject result = pairing;
-                    final boolean wrong = wrongPassword;
-                    final String failure = error;
-                    activity.runOnUiThread(() -> {
-                        unlock.setEnabled(true);
-                        if (wrong) {
-                            password.setError(getString(R.string.backup_wrong_password));
-                        } else if (failure != null) {
-                            dialog.dismiss();
-                            Toast.makeText(activity, getString(R.string.backup_import_failed, failure), Toast.LENGTH_LONG).show();
-                        } else {
-                            dialog.dismiss();
-                            confirmImport(backup, result, plan);
-                        }
-                    });
-                }).start();
-            }));
-            dialog.show();
-        }
-
-        private void confirmImport(org.json.JSONObject backup, org.json.JSONObject pairing,
-                                   SettingsBackup.ImportPlan plan) {
+        private void confirmImport(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
             String date = backup.optString("exportedAt", getString(R.string.backup_unknown_date));
             new AlertDialog.Builder(requireActivity())
                     .setTitle(R.string.backup_import_confirm_title)
-                    .setMessage(getString(pairing != null ? R.string.backup_import_confirm
-                            : R.string.backup_import_confirm_keep_pairing, date))
+                    .setMessage(getString(R.string.backup_import_confirm, date))
                     .setPositiveButton(R.string.backup_import_button, (d, w) -> {
                         try {
-                            SettingsBackup.restore(requireActivity(), backup, pairing, plan);
+                            SettingsBackup.restore(requireActivity(), backup, plan);
                         } catch (Exception e) {
                             e.printStackTrace();
                             Toast.makeText(getActivity(), getString(R.string.backup_import_rolled_back, e.getMessage()), Toast.LENGTH_LONG).show();

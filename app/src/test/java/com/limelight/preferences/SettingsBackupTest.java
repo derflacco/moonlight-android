@@ -26,7 +26,6 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashSet;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -69,14 +68,9 @@ public class SettingsBackupTest {
         // Unknown settings groups are exported but not imported, caches are not even exported
         context.getSharedPreferences("SomeFutureFeature", Context.MODE_PRIVATE).edit().putString("x", "y").commit();
         context.getSharedPreferences("GlPreferences", Context.MODE_PRIVATE).edit().putString("gl", "cache").commit();
-        // Paired PCs: pairing identity and computer database
-        File dataDir = context.getFilesDir().getParentFile();
-        writeFile(new File(dataDir, "files/client.key"), new byte[]{0, 1, 2, (byte) 0xFF});
-        writeFile(new File(dataDir, "files/client.crt"), "CERT".getBytes(StandardCharsets.UTF_8));
-        writeFile(new File(dataDir, "databases/computers4.db"), new byte[]{9, 8, 7});
 
         ByteArrayOutputStream file = new ByteArrayOutputStream();
-        SettingsBackup.write(SettingsBackup.export(context, true, null), file);
+        SettingsBackup.write(SettingsBackup.export(context), file);
 
         // Wipe everything, add junk that the import must remove
         defaults.edit().clear().putBoolean("junk", true).commit();
@@ -87,14 +81,11 @@ public class SettingsBackupTest {
         profiles.delete();
         context.getSharedPreferences("SomeFutureFeature", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences("GlPreferences", Context.MODE_PRIVATE).edit().putString("gl", "other device").commit();
-        new File(dataDir, "files/client.key").delete();
-        writeFile(new File(dataDir, "files/client.crt"), "OTHER".getBytes(StandardCharsets.UTF_8));
-        new File(dataDir, "databases/computers4.db").delete();
 
         JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(file.toByteArray()));
-        assertTrue(SettingsBackup.hasPairing(backup));
-        assertFalse(SettingsBackup.isPairingEncrypted(backup));
-        SettingsBackup.restore(context, backup, SettingsBackup.openPairing(backup, null), SettingsBackup.analyze(context, backup));
+        SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
+        assertFalse(String.join("\n", plan.unsupported), plan.hasUnsupported());
+        SettingsBackup.restore(context, backup, plan);
 
         assertTrue(defaults.getBoolean("checkbox_show_onscreen_controls", false));
         assertEquals(42, defaults.getInt("seekbar_osc_opacity", 0));
@@ -109,9 +100,6 @@ public class SettingsBackupTest {
         assertEquals("{\"profiles\":[]}", new String(Files.readAllBytes(profiles.toPath()), StandardCharsets.UTF_8));
         assertNull(context.getSharedPreferences("SomeFutureFeature", Context.MODE_PRIVATE).getString("x", null));
         assertEquals("other device", context.getSharedPreferences("GlPreferences", Context.MODE_PRIVATE).getString("gl", null));
-        assertArrayEquals(new byte[]{0, 1, 2, (byte) 0xFF}, Files.readAllBytes(new File(dataDir, "files/client.key").toPath()));
-        assertEquals("CERT", new String(Files.readAllBytes(new File(dataDir, "files/client.crt").toPath()), StandardCharsets.UTF_8));
-        assertArrayEquals(new byte[]{9, 8, 7}, Files.readAllBytes(new File(dataDir, "databases/computers4.db").toPath()));
     }
 
     private static void writeFile(File file, byte[] content) throws Exception {
@@ -130,7 +118,7 @@ public class SettingsBackupTest {
                         .put("list_fps", new JSONObject().put("t", "s").put("v", "120"))))
                 .put("files", new JSONObject().put("profiles/profiles.json", "{}"));
         JSONObject v1Backup = SettingsBackup.read(new ByteArrayInputStream(v1.toString().getBytes(StandardCharsets.UTF_8)));
-        SettingsBackup.restore(context, v1Backup, null, SettingsBackup.analyze(context, v1Backup));
+        SettingsBackup.restore(context, v1Backup, SettingsBackup.analyze(context, v1Backup));
         assertEquals("120", PreferenceManager.getDefaultSharedPreferences(context).getString("list_fps", null));
         assertEquals("{}", new String(Files.readAllBytes(new File(context.getFilesDir(), "profiles/profiles.json").toPath()), StandardCharsets.UTF_8));
     }
@@ -147,44 +135,50 @@ public class SettingsBackupTest {
         return new String(Files.readAllBytes(new File(dataDir, "files/client.key").toPath()), StandardCharsets.UTF_8);
     }
 
-    @Test
-    public void pairingIsLeftOutByDefaultAndKeptOnImport() throws Exception {
-        Context context = ApplicationProvider.getApplicationContext();
-        writePairing(context, "exported");
-        JSONObject backup = SettingsBackup.export(context, false, null);
-        assertFalse(SettingsBackup.hasPairing(backup));
-        assertFalse(backup.toString().contains(android.util.Base64.encodeToString(
-                "exported".getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP)));
-
-        writePairing(context, "local");
-        SettingsBackup.restore(context, backup, null, SettingsBackup.analyze(context, backup));
-        assertEquals("local", readPairingKey(context));
+    private static String base64(String text) {
+        return android.util.Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
     }
 
     @Test
-    public void encryptedPairingRoundTrip() throws Exception {
+    public void pairedComputersAreNeverExportedAndKeptOnImport() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
-        writePairing(context, "secret-key");
-        ByteArrayOutputStream file = new ByteArrayOutputStream();
-        SettingsBackup.write(SettingsBackup.export(context, true, "hunter2"), file);
-        String text = file.toString("UTF-8");
-        // The pairing files are not readable in the file
-        assertFalse(text.contains(android.util.Base64.encodeToString(
-                "secret-key".getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP)));
-
-        JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(file.toByteArray()));
-        assertTrue(SettingsBackup.hasPairing(backup));
-        assertTrue(SettingsBackup.isPairingEncrypted(backup));
-
-        try {
-            SettingsBackup.openPairing(backup, "wrong");
-            org.junit.Assert.fail("Wrong password accepted");
-        } catch (SettingsBackup.WrongPasswordException expected) {
-        }
+        writePairing(context, "exported");
+        JSONObject backup = SettingsBackup.export(context);
+        assertFalse(backup.has("pairing"));
+        String text = backup.toString();
+        assertFalse(text.contains(base64("exported")));
+        assertFalse(text.contains(base64("crt-exported")));
+        assertFalse(text.contains(base64("db-exported")));
+        assertFalse(text.contains("client.key"));
+        assertFalse(text.contains("computers4"));
 
         writePairing(context, "local");
-        SettingsBackup.restore(context, backup, SettingsBackup.openPairing(backup, "hunter2"), SettingsBackup.analyze(context, backup));
-        assertEquals("secret-key", readPairingKey(context));
+        SettingsBackup.restore(context, backup, SettingsBackup.analyze(context, backup));
+        assertEquals("local", readPairingKey(context));
+    }
+
+    /** Files made by builds that could export paired computers: everything else is imported. */
+    @Test
+    public void pairedComputersInAFileAreReportedAndSkipped() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        SharedPreferences defaults = PreferenceManager.getDefaultSharedPreferences(context);
+        defaults.edit().clear().putString("list_fps", "60").commit();
+        writePairing(context, "local");
+
+        JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(new JSONObject()
+                .put("format", SettingsBackup.FORMAT).put("version", 3)
+                .put("prefs", new JSONObject().put("default", new JSONObject().put("list_fps", typed("s", "120"))))
+                .put("pairing", new JSONObject().put("encrypted", false).put("files", new JSONObject()
+                        .put("files/client.key", base64("imported"))
+                        .put("files/client.crt", base64("crt-imported"))))
+                .toString().getBytes(StandardCharsets.UTF_8)));
+        SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
+        assertEquals(java.util.Collections.singletonList(context.getString(com.limelight.R.string.backup_unsupported_pairing)),
+                plan.unsupported);
+
+        SettingsBackup.restore(context, backup, plan);
+        assertEquals("120", defaults.getString("list_fps", null));
+        assertEquals("local", readPairingKey(context));
     }
 
     @Test(expected = JSONException.class)
@@ -234,7 +228,7 @@ public class SettingsBackupTest {
         assertFalse(report, report.contains("list_fps"));
         assertEquals(report, 7, plan.unsupported.size());
 
-        SettingsBackup.restore(context, backup, null, plan);
+        SettingsBackup.restore(context, backup, plan);
         assertEquals("120", defaults.getString("list_fps", null));
         assertTrue(defaults.getBoolean("checkbox_show_onscreen_controls", false));
         assertFalse(defaults.contains("future_setting"));
@@ -250,23 +244,34 @@ public class SettingsBackupTest {
         Context context = ApplicationProvider.getApplicationContext();
         SharedPreferences defaults = PreferenceManager.getDefaultSharedPreferences(context);
         defaults.edit().clear().putString("list_fps", "60").commit();
-        writePairing(context, "original");
 
         JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(new JSONObject()
                 .put("format", SettingsBackup.FORMAT).put("version", 3)
                 .put("prefs", new JSONObject().put("default", new JSONObject().put("list_fps", typed("s", "120"))))
+                .put("data", new JSONObject().put("files/profiles/profiles.json", base64("{}")))
                 .toString().getBytes(StandardCharsets.UTF_8)));
-        // Corrupt paired computers data makes the import fail after the settings were written
-        JSONObject brokenPairing = new JSONObject()
-                .put("files/client.crt", "not base64 !!!")
-                .put("files/client.key", "not base64 !!!");
+        // A file in the way of the profiles directory makes the import fail after the settings were written
+        File blocker = new File(context.getFilesDir(), "profiles");
+        deleteRecursively(blocker);
+        writeFile(blocker, new byte[]{1});
         try {
-            SettingsBackup.restore(context, backup, brokenPairing, SettingsBackup.analyze(context, backup));
+            SettingsBackup.restore(context, backup, SettingsBackup.analyze(context, backup));
             org.junit.Assert.fail("The import should have failed");
         } catch (java.io.IOException expected) {
+        } finally {
+            blocker.delete();
         }
         assertEquals("60", defaults.getString("list_fps", null));
-        assertEquals("original", readPairingKey(context));
+    }
+
+    private static void deleteRecursively(File file) {
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursively(child);
+            }
+        }
+        file.delete();
     }
 
     /** Files that aren't settings (library markers, caches...) are neither exported nor touched. */
@@ -278,14 +283,14 @@ public class SettingsBackupTest {
         PreferenceManager.getDefaultSharedPreferences(context).edit().putString("list_fps", "90").commit();
 
         JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(
-                SettingsBackup.export(context, false, null).toString().getBytes(StandardCharsets.UTF_8)));
+                SettingsBackup.export(context).toString().getBytes(StandardCharsets.UTF_8)));
         assertFalse(backup.getJSONObject("prefs").has("_has_set_default_values"));
         assertFalse(backup.getJSONObject("prefs").has("SomeLibrary"));
         SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
         assertTrue(plan.unsupported.toString(), plan.unsupported.isEmpty());
 
         context.getSharedPreferences("SomeLibrary", Context.MODE_PRIVATE).edit().putString("state", "changed").commit();
-        SettingsBackup.restore(context, backup, null, plan);
+        SettingsBackup.restore(context, backup, plan);
         assertEquals("changed", context.getSharedPreferences("SomeLibrary", Context.MODE_PRIVATE).getString("state", null));
         assertTrue(context.getSharedPreferences("_has_set_default_values", Context.MODE_PRIVATE).getBoolean("_has_set_default_values", false));
         assertEquals("90", PreferenceManager.getDefaultSharedPreferences(context).getString("list_fps", null));
@@ -320,12 +325,12 @@ public class SettingsBackupTest {
         assertTrue(typed > 100);
 
         JSONObject backup = SettingsBackup.read(new ByteArrayInputStream(
-                SettingsBackup.export(context, false, null).toString().getBytes(StandardCharsets.UTF_8)));
+                SettingsBackup.export(context).toString().getBytes(StandardCharsets.UTF_8)));
         defaults.edit().clear().commit();
         SettingsBackup.ImportPlan plan = SettingsBackup.analyze(context, backup);
         assertEquals(java.util.Collections.singletonList(
                 context.getString(com.limelight.R.string.backup_unsupported_setting, "number_zoom_scale")), plan.unsupported);
-        SettingsBackup.restore(context, backup, null, plan);
+        SettingsBackup.restore(context, backup, plan);
 
         for (java.util.Map.Entry<String, String> setting : screen.entrySet()) {
             if (setting.getValue() != null) {

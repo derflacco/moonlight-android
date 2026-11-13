@@ -183,34 +183,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Copie de rezervă și restaurare</string>
     <string name="backup_title">Export / import setări</string>
-    <string name="backup_summary">Salvați setările, profilurile, aranjamentele suprapunerii, tastele speciale și opțional PC-urile asociate într-un fișier sau restaurați-le dintr-un fișier</string>
+    <string name="backup_summary">Salvați setările, profilurile, aranjamentele suprapunerii și tastele speciale într-un fișier sau restaurați-le dintr-un fișier</string>
     <string name="backup_export">Exportă</string>
     <string name="backup_import">Importă</string>
     <string name="backup_export_done">Setări exportate</string>
     <string name="backup_export_failed">Exportul a eșuat: %1$s</string>
     <string name="backup_import_failed">Importul a eșuat: %1$s</string>
     <string name="backup_import_confirm_title">Înlocuiți setările curente?</string>
-    <string name="backup_import_confirm">Aceasta înlocuiește totul (setări, profiluri, aranjamente ale suprapunerii, taste speciale și PC-uri asociate) cu conținutul fișierului exportat la %1$s.\n\nAplicația va reporni apoi.</string>
     <string name="backup_import_button">Importă și repornește</string>
     <string name="backup_unknown_date">o dată necunoscută</string>
-    <string name="backup_dialog_message">Exportul salvează toate setările, profilurile, aranjamentele suprapunerii și tastele speciale într-un fișier. Pot fi incluse și PC-urile asociate.\n\nImportul le înlocuiește cu conținutul unui fișier.</string>
-    <string name="backup_import_confirm_keep_pairing">Aceasta înlocuiește setările, profilurile, aranjamentele suprapunerii și tastele speciale cu conținutul fișierului exportat la %1$s. PC-urile asociate sunt păstrate.\n\nAplicația va reporni apoi.</string>
-    <string name="backup_export_title">Exportă setările</string>
-    <string name="backup_export_always_included">Setările, profilurile, aranjamentele suprapunerii și tastele speciale sunt incluse întotdeauna.</string>
-    <string name="backup_include_pairing">Include calculatoarele asociate</string>
-    <string name="backup_pairing_password_hint">Aplicația care importă se va putea conecta la PC-urile dvs. fără o nouă asociere. Protejați această parte a fișierului cu o parolă:</string>
-    <string name="backup_password">Parolă</string>
-    <string name="backup_password_confirm">Confirmați parola</string>
-    <string name="backup_password_mismatch">Parolele nu se potrivesc</string>
-    <string name="backup_no_password_title">Exportați calculatoarele asociate fără parolă?</string>
-    <string name="backup_no_password_message">Fișierul va conține cheia de asociere a acestei aplicații fără protecție. Oricine obține o copie se poate conecta la PC-urile dvs. asociate, le poate transmite și controla fără aprobarea dvs. și fără asociere.\n\nÎnțelegeți riscurile de securitate și doriți totuși să exportați fără parolă?</string>
-    <string name="backup_no_password_proceed">Înțeleg, exportă oricum</string>
-    <string name="backup_no_password_back">Setează o parolă</string>
-    <string name="backup_password_required_title">Protejat cu parolă</string>
-    <string name="backup_password_required_message">Calculatoarele asociate din acest fișier sunt protejate cu o parolă.</string>
-    <string name="backup_unlock">Deblochează</string>
-    <string name="backup_import_without_pairing">Omite PC-urile asociate</string>
-    <string name="backup_wrong_password">Parolă greșită</string>
+    <string name="backup_dialog_message">Exportul salvează toate setările, profilurile, aranjamentele suprapunerii și tastele speciale într-un fișier. PC-urile asociate nu sunt incluse.\n\nImportul le înlocuiește cu conținutul unui fișier.</string>
+    <string name="backup_import_confirm">Aceasta înlocuiește setările, profilurile, aranjamentele suprapunerii și tastele speciale cu conținutul fișierului exportat la %1$s. PC-urile asociate sunt păstrate.\n\nAplicația va reporni apoi.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Unele elemente nu pot fi importate</string>

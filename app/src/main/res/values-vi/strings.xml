@@ -642,34 +642,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Sao lưu và khôi phục</string>
     <string name="backup_title">Xuất / nhập cài đặt</string>
-    <string name="backup_summary">Lưu cài đặt, hồ sơ, bố cục lớp phủ, phím đặc biệt và tùy chọn các PC đã ghép nối vào một tệp, hoặc khôi phục chúng từ tệp</string>
+    <string name="backup_summary">Lưu cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt vào một tệp, hoặc khôi phục chúng từ tệp</string>
     <string name="backup_export">Xuất</string>
     <string name="backup_import">Nhập</string>
     <string name="backup_export_done">Đã xuất cài đặt</string>
     <string name="backup_export_failed">Xuất thất bại: %1$s</string>
     <string name="backup_import_failed">Nhập thất bại: %1$s</string>
     <string name="backup_import_confirm_title">Thay thế cài đặt hiện tại?</string>
-    <string name="backup_import_confirm">Thao tác này thay thế mọi thứ (cài đặt, hồ sơ, bố cục lớp phủ, phím đặc biệt và PC đã ghép nối) bằng nội dung của tệp được xuất vào %1$s.\n\nỨng dụng sẽ khởi động lại sau đó.</string>
     <string name="backup_import_button">Nhập và khởi động lại</string>
     <string name="backup_unknown_date">ngày không xác định</string>
-    <string name="backup_dialog_message">Xuất sẽ lưu tất cả cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt vào một tệp. Cũng có thể bao gồm các PC đã ghép nối.\n\nNhập sẽ thay thế chúng bằng nội dung của một tệp.</string>
-    <string name="backup_import_confirm_keep_pairing">Thao tác này thay thế cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt bằng nội dung của tệp được xuất vào %1$s. Các PC đã ghép nối được giữ lại.\n\nỨng dụng sẽ khởi động lại sau đó.</string>
-    <string name="backup_export_title">Xuất cài đặt</string>
-    <string name="backup_export_always_included">Cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt luôn được bao gồm.</string>
-    <string name="backup_include_pairing">Bao gồm máy tính đã ghép nối</string>
-    <string name="backup_pairing_password_hint">Ứng dụng nhập sẽ có thể kết nối với PC của bạn mà không cần ghép nối lại. Hãy bảo vệ phần này của tệp bằng mật khẩu:</string>
-    <string name="backup_password">Mật khẩu</string>
-    <string name="backup_password_confirm">Xác nhận mật khẩu</string>
-    <string name="backup_password_mismatch">Mật khẩu không khớp</string>
-    <string name="backup_no_password_title">Xuất máy tính đã ghép nối mà không có mật khẩu?</string>
-    <string name="backup_no_password_message">Tệp sẽ chứa khóa ghép nối của ứng dụng này mà không được bảo vệ. Bất kỳ ai có được bản sao đều có thể kết nối với các PC đã ghép nối của bạn, phát trực tuyến và điều khiển chúng mà không cần bạn chấp thuận và không cần ghép nối.\n\nBạn có hiểu các rủi ro bảo mật và vẫn muốn xuất mà không có mật khẩu không?</string>
-    <string name="backup_no_password_proceed">Tôi hiểu, vẫn xuất</string>
-    <string name="backup_no_password_back">Đặt mật khẩu</string>
-    <string name="backup_password_required_title">Được bảo vệ bằng mật khẩu</string>
-    <string name="backup_password_required_message">Các máy tính đã ghép nối trong tệp này được bảo vệ bằng mật khẩu.</string>
-    <string name="backup_unlock">Mở khóa</string>
-    <string name="backup_import_without_pairing">Bỏ qua PC đã ghép nối</string>
-    <string name="backup_wrong_password">Sai mật khẩu</string>
+    <string name="backup_dialog_message">Xuất sẽ lưu tất cả cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt vào một tệp. Các PC đã ghép nối không được bao gồm.\n\nNhập sẽ thay thế chúng bằng nội dung của một tệp.</string>
+    <string name="backup_import_confirm">Thao tác này thay thế cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt bằng nội dung của tệp được xuất vào %1$s. Các PC đã ghép nối được giữ lại.\n\nỨng dụng sẽ khởi động lại sau đó.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Không thể nhập một số mục</string>

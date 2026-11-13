@@ -216,34 +216,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Cadangkan &amp; pulihkan</string>
     <string name="backup_title">Ekspor / impor pengaturan</string>
-    <string name="backup_summary">Simpan pengaturan, profil, tata letak overlay, tombol khusus, dan opsional PC yang dipasangkan ke file, atau pulihkan dari file</string>
+    <string name="backup_summary">Simpan pengaturan, profil, tata letak overlay, dan tombol khusus ke file, atau pulihkan dari file</string>
     <string name="backup_export">Ekspor</string>
     <string name="backup_import">Impor</string>
     <string name="backup_export_done">Pengaturan diekspor</string>
     <string name="backup_export_failed">Ekspor gagal: %1$s</string>
     <string name="backup_import_failed">Impor gagal: %1$s</string>
     <string name="backup_import_confirm_title">Ganti pengaturan saat ini?</string>
-    <string name="backup_import_confirm">Ini mengganti semuanya (pengaturan, profil, tata letak overlay, tombol khusus, dan PC yang dipasangkan) dengan isi file yang diekspor pada %1$s.\n\nAplikasi akan dimulai ulang setelahnya.</string>
     <string name="backup_import_button">Impor dan mulai ulang</string>
     <string name="backup_unknown_date">tanggal tidak diketahui</string>
-    <string name="backup_dialog_message">Ekspor menyimpan semua pengaturan, profil, tata letak overlay, dan tombol khusus ke file. PC yang dipasangkan juga dapat disertakan.\n\nImpor menggantinya dengan isi sebuah file.</string>
-    <string name="backup_import_confirm_keep_pairing">Ini mengganti pengaturan, profil, tata letak overlay, dan tombol khusus Anda dengan isi file yang diekspor pada %1$s. PC yang dipasangkan tetap dipertahankan.\n\nAplikasi akan dimulai ulang setelahnya.</string>
-    <string name="backup_export_title">Ekspor pengaturan</string>
-    <string name="backup_export_always_included">Pengaturan, profil, tata letak overlay, dan tombol khusus selalu disertakan.</string>
-    <string name="backup_include_pairing">Sertakan komputer yang dipasangkan</string>
-    <string name="backup_pairing_password_hint">Aplikasi yang mengimpor dapat terhubung ke PC Anda tanpa memasangkan ulang. Lindungi bagian file ini dengan kata sandi:</string>
-    <string name="backup_password">Kata sandi</string>
-    <string name="backup_password_confirm">Konfirmasi kata sandi</string>
-    <string name="backup_password_mismatch">Kata sandi tidak cocok</string>
-    <string name="backup_no_password_title">Ekspor komputer yang dipasangkan tanpa kata sandi?</string>
-    <string name="backup_no_password_message">File akan berisi kunci pemasangan aplikasi ini tanpa perlindungan. Siapa pun yang mendapatkan salinannya dapat terhubung ke PC yang dipasangkan, melakukan streaming, dan mengendalikannya tanpa persetujuan Anda dan tanpa pemasangan.\n\nApakah Anda memahami risiko keamanannya dan tetap ingin mengekspor tanpa kata sandi?</string>
-    <string name="backup_no_password_proceed">Saya mengerti, tetap ekspor</string>
-    <string name="backup_no_password_back">Atur kata sandi</string>
-    <string name="backup_password_required_title">Dilindungi kata sandi</string>
-    <string name="backup_password_required_message">Komputer yang dipasangkan dalam file ini dilindungi kata sandi.</string>
-    <string name="backup_unlock">Buka</string>
-    <string name="backup_import_without_pairing">Lewati PC yang dipasangkan</string>
-    <string name="backup_wrong_password">Kata sandi salah</string>
+    <string name="backup_dialog_message">Ekspor menyimpan semua pengaturan, profil, tata letak overlay, dan tombol khusus ke file. PC yang dipasangkan tidak disertakan.\n\nImpor menggantinya dengan isi sebuah file.</string>
+    <string name="backup_import_confirm">Ini mengganti pengaturan, profil, tata letak overlay, dan tombol khusus Anda dengan isi file yang diekspor pada %1$s. PC yang dipasangkan tetap dipertahankan.\n\nAplikasi akan dimulai ulang setelahnya.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Beberapa item tidak dapat diimpor</string>

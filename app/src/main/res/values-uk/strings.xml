@@ -288,34 +288,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Резервне копіювання та відновлення</string>
     <string name="backup_title">Експорт / імпорт налаштувань</string>
-    <string name="backup_summary">Збережіть налаштування, профілі, розкладки оверлею, спеціальні клавіші та за бажанням спарені ПК у файл або відновіть їх із файлу</string>
+    <string name="backup_summary">Збережіть налаштування, профілі, розкладки оверлею та спеціальні клавіші у файл або відновіть їх із файлу</string>
     <string name="backup_export">Експорт</string>
     <string name="backup_import">Імпорт</string>
     <string name="backup_export_done">Налаштування експортовано</string>
     <string name="backup_export_failed">Помилка експорту: %1$s</string>
     <string name="backup_import_failed">Помилка імпорту: %1$s</string>
     <string name="backup_import_confirm_title">Замінити поточні налаштування?</string>
-    <string name="backup_import_confirm">Усе (налаштування, профілі, розкладки оверлею, спеціальні клавіші та спарені ПК) буде замінено вмістом файлу, експортованого %1$s.\n\nПотім застосунок перезапуститься.</string>
     <string name="backup_import_button">Імпортувати й перезапустити</string>
     <string name="backup_unknown_date">невідому дату</string>
-    <string name="backup_dialog_message">Експорт зберігає всі налаштування, профілі, розкладки оверлею та спеціальні клавіші у файл. Також можна додати спарені ПК.\n\nІмпорт замінює їх вмістом файлу.</string>
-    <string name="backup_import_confirm_keep_pairing">Налаштування, профілі, розкладки оверлею та спеціальні клавіші буде замінено вмістом файлу, експортованого %1$s. Спарені ПК збережуться.\n\nПотім застосунок перезапуститься.</string>
-    <string name="backup_export_title">Експорт налаштувань</string>
-    <string name="backup_export_always_included">Налаштування, профілі, розкладки оверлею та спеціальні клавіші включаються завжди.</string>
-    <string name="backup_include_pairing">Додати спарені комп\'ютери</string>
-    <string name="backup_pairing_password_hint">Застосунок, у який буде виконано імпорт, зможе підключатися до ваших ПК без повторного спарювання. Захистіть цю частину файлу паролем:</string>
-    <string name="backup_password">Пароль</string>
-    <string name="backup_password_confirm">Підтвердьте пароль</string>
-    <string name="backup_password_mismatch">Паролі не збігаються</string>
-    <string name="backup_no_password_title">Експортувати спарені комп\'ютери без пароля?</string>
-    <string name="backup_no_password_message">Файл міститиме незахищений ключ спарювання цього застосунку. Будь-хто, хто отримає його копію, зможе підключитися до ваших спарених ПК, транслювати їх і керувати ними без вашої згоди та без спарювання.\n\nВи розумієте ризики безпеки й усе одно хочете експортувати без пароля?</string>
-    <string name="backup_no_password_proceed">Розумію, все одно експортувати</string>
-    <string name="backup_no_password_back">Задати пароль</string>
-    <string name="backup_password_required_title">Захищено паролем</string>
-    <string name="backup_password_required_message">Спарені комп\'ютери в цьому файлі захищені паролем.</string>
-    <string name="backup_unlock">Розблокувати</string>
-    <string name="backup_import_without_pairing">Пропустити спарені ПК</string>
-    <string name="backup_wrong_password">Неправильний пароль</string>
+    <string name="backup_dialog_message">Експорт зберігає всі налаштування, профілі, розкладки оверлею та спеціальні клавіші у файл. Спарені ПК не включаються.\n\nІмпорт замінює їх вмістом файлу.</string>
+    <string name="backup_import_confirm">Налаштування, профілі, розкладки оверлею та спеціальні клавіші буде замінено вмістом файлу, експортованого %1$s. Спарені ПК збережуться.\n\nПотім застосунок перезапуститься.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Деякі елементи неможливо імпортувати</string>

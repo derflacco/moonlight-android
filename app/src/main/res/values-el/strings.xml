@@ -217,34 +217,17 @@
     <!-- Settings backup -->
     <string name="backup_category">Αντίγραφο ασφαλείας και επαναφορά</string>
     <string name="backup_title">Εξαγωγή / εισαγωγή ρυθμίσεων</string>
-    <string name="backup_summary">Αποθηκεύστε τις ρυθμίσεις, τα προφίλ, τις διατάξεις επικάλυψης, τα ειδικά πλήκτρα και προαιρετικά τους συζευγμένους υπολογιστές σε αρχείο ή επαναφέρετέ τα από αρχείο</string>
+    <string name="backup_summary">Αποθηκεύστε τις ρυθμίσεις, τα προφίλ, τις διατάξεις επικάλυψης και τα ειδικά πλήκτρα σε αρχείο ή επαναφέρετέ τα από αρχείο</string>
     <string name="backup_export">Εξαγωγή</string>
     <string name="backup_import">Εισαγωγή</string>
     <string name="backup_export_done">Οι ρυθμίσεις εξήχθησαν</string>
     <string name="backup_export_failed">Η εξαγωγή απέτυχε: %1$s</string>
     <string name="backup_import_failed">Η εισαγωγή απέτυχε: %1$s</string>
     <string name="backup_import_confirm_title">Αντικατάσταση των τρεχουσών ρυθμίσεων;</string>
-    <string name="backup_import_confirm">Αυτό αντικαθιστά τα πάντα (ρυθμίσεις, προφίλ, διατάξεις επικάλυψης, ειδικά πλήκτρα και συζευγμένους υπολογιστές) με το περιεχόμενο του αρχείου που εξήχθη στις %1$s.\n\nΗ εφαρμογή θα επανεκκινηθεί στη συνέχεια.</string>
     <string name="backup_import_button">Εισαγωγή και επανεκκίνηση</string>
     <string name="backup_unknown_date">άγνωστη ημερομηνία</string>
-    <string name="backup_dialog_message">Η εξαγωγή αποθηκεύει όλες τις ρυθμίσεις, τα προφίλ, τις διατάξεις επικάλυψης και τα ειδικά πλήκτρα σε αρχείο. Μπορούν να συμπεριληφθούν και οι συζευγμένοι υπολογιστές.\n\nΗ εισαγωγή τα αντικαθιστά με το περιεχόμενο ενός αρχείου.</string>
-    <string name="backup_import_confirm_keep_pairing">Αυτό αντικαθιστά τις ρυθμίσεις, τα προφίλ, τις διατάξεις επικάλυψης και τα ειδικά πλήκτρα με το περιεχόμενο του αρχείου που εξήχθη στις %1$s. Οι συζευγμένοι υπολογιστές διατηρούνται.\n\nΗ εφαρμογή θα επανεκκινηθεί στη συνέχεια.</string>
-    <string name="backup_export_title">Εξαγωγή ρυθμίσεων</string>
-    <string name="backup_export_always_included">Οι ρυθμίσεις, τα προφίλ, οι διατάξεις επικάλυψης και τα ειδικά πλήκτρα περιλαμβάνονται πάντα.</string>
-    <string name="backup_include_pairing">Συμπερίληψη συζευγμένων υπολογιστών</string>
-    <string name="backup_pairing_password_hint">Η εφαρμογή στην οποία θα γίνει εισαγωγή θα μπορεί να συνδεθεί στους υπολογιστές σας χωρίς νέα σύζευξη. Προστατέψτε αυτό το μέρος του αρχείου με κωδικό:</string>
-    <string name="backup_password">Κωδικός πρόσβασης</string>
-    <string name="backup_password_confirm">Επιβεβαίωση κωδικού</string>
-    <string name="backup_password_mismatch">Οι κωδικοί δεν ταιριάζουν</string>
-    <string name="backup_no_password_title">Εξαγωγή συζευγμένων υπολογιστών χωρίς κωδικό;</string>
-    <string name="backup_no_password_message">Το αρχείο θα περιέχει το κλειδί σύζευξης αυτής της εφαρμογής χωρίς προστασία. Όποιος αποκτήσει αντίγραφο μπορεί να συνδεθεί στους συζευγμένους υπολογιστές σας, να τους μεταδώσει και να τους ελέγξει χωρίς την έγκρισή σας και χωρίς σύζευξη.\n\nΚατανοείτε τους κινδύνους ασφαλείας και θέλετε παρ\' όλα αυτά να γίνει εξαγωγή χωρίς κωδικό;</string>
-    <string name="backup_no_password_proceed">Κατανοώ, εξαγωγή παρ\' όλα αυτά</string>
-    <string name="backup_no_password_back">Ορισμός κωδικού</string>
-    <string name="backup_password_required_title">Προστατεύεται με κωδικό</string>
-    <string name="backup_password_required_message">Οι συζευγμένοι υπολογιστές σε αυτό το αρχείο προστατεύονται με κωδικό.</string>
-    <string name="backup_unlock">Ξεκλείδωμα</string>
-    <string name="backup_import_without_pairing">Παράλειψη συζευγμένων υπολογιστών</string>
-    <string name="backup_wrong_password">Λάθος κωδικός</string>
+    <string name="backup_dialog_message">Η εξαγωγή αποθηκεύει όλες τις ρυθμίσεις, τα προφίλ, τις διατάξεις επικάλυψης και τα ειδικά πλήκτρα σε αρχείο. Οι συζευγμένοι υπολογιστές δεν συμπεριλαμβάνονται.\n\nΗ εισαγωγή τα αντικαθιστά με το περιεχόμενο ενός αρχείου.</string>
+    <string name="backup_import_confirm">Αυτό αντικαθιστά τις ρυθμίσεις, τα προφίλ, τις διατάξεις επικάλυψης και τα ειδικά πλήκτρα με το περιεχόμενο του αρχείου που εξήχθη στις %1$s. Οι συζευγμένοι υπολογιστές διατηρούνται.\n\nΗ εφαρμογή θα επανεκκινηθεί στη συνέχεια.</string>
 
     <!-- Settings backup: import checks -->
     <string name="backup_unsupported_title">Ορισμένα στοιχεία δεν μπορούν να εισαχθούν</string>
