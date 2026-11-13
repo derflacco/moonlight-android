@@ -17,7 +17,8 @@ import android.view.MotionEvent;
 
 import com.limelight.LimeLog;
 import com.limelight.R;
-import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.binding.input.overlay.ButtonStyle;
+import com.limelight.binding.input.overlay.GamepadStyleRenderer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +36,7 @@ public class DigitalPad extends VirtualControllerElement {
     private final RectF rect = new RectF();
 
     private final Paint paint = new Paint();
+    private final GamepadStyleRenderer renderer = new GamepadStyleRenderer();
 
     public DigitalPad(VirtualController controller, Context context) {
         super(controller, context, EID_DPAD);
@@ -52,35 +54,33 @@ public class DigitalPad extends VirtualControllerElement {
         paint.setTextSize(getPercent(getCorrectWidth(), 20));
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setStrokeWidth(getDefaultStrokeWidth());
+
+        ButtonStyle style = getButtonStyle();
+        if (style.isVector()) {
+            renderer.drawDpad(canvas, getWidth(), getHeight(), style, direction, getOverlayAlpha());
+            return;
+        }
+
         //虚拟手柄皮肤 yuzu
-        if(!PreferenceConfiguration.readPreferences(getContext()).enableOnScreenStyleOfficial) {
-            int oscOpacity=PreferenceConfiguration.readPreferences(getContext()).oscOpacity;
+        if(style == ButtonStyle.CLASSIC) {
+            int overlayAlpha = getOverlayAlpha();
 
             paint.setColor(isPressed() ? pressedColor:getDefaultColor());
             rect.left = rect.top = paint.getStrokeWidth();
             rect.right = getWidth() - rect.left;
             rect.bottom = getHeight() - rect.top;
 
-            boolean bIsMoving = virtualController.getControllerMode() == VirtualController.ControllerMode.MoveButtons;
-            boolean bIsResizing = virtualController.getControllerMode() == VirtualController.ControllerMode.ResizeButtons;
-            boolean bIsEnable = virtualController.getControllerMode() == VirtualController.ControllerMode.DisableEnableButtons;
-
-            if (bIsMoving || bIsResizing || bIsEnable) {
-                paint.setStyle(Paint.Style.STROKE);
-                canvas.drawRect(rect,paint);
-            }
-
             if (direction == DIGITAL_PAD_DIRECTION_NO_DIRECTION) {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad);
                 d.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                d.setAlpha((int) (oscOpacity*2.55));
+                d.setAlpha(overlayAlpha);
                 d.draw(canvas);
             }
 
             if (direction == DIGITAL_PAD_DIRECTION_UP) {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 d.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                d.setAlpha((int) (oscOpacity*2.55));
+                d.setAlpha(overlayAlpha);
                 d.draw(canvas);
             }
 
@@ -88,7 +88,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 Drawable newD=rotateDrawable(d,180);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
@@ -96,7 +96,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 Drawable newD=rotateDrawable(d,270);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
@@ -104,7 +104,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up);
                 Drawable newD=rotateDrawable(d,90);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
             //right up
@@ -112,14 +112,14 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 Drawable newD=rotateDrawable(d,90);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
             if((direction & DIGITAL_PAD_DIRECTION_LEFT) > 0 && (direction & DIGITAL_PAD_DIRECTION_UP) > 0){
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 d.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                d.setAlpha((int) (oscOpacity*2.55));
+                d.setAlpha(overlayAlpha);
                 d.draw(canvas);
             }
 
@@ -127,7 +127,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 Drawable newD=rotateDrawable(d,180);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 
@@ -135,7 +135,7 @@ public class DigitalPad extends VirtualControllerElement {
                 Drawable d = getResources().getDrawable(R.drawable.facebutton_dpad_up_right);
                 Drawable newD=rotateDrawable(d,270);
                 newD.setBounds(5, 5, getWidth() - 5, getHeight() - 5);
-                newD.setAlpha((int) (oscOpacity*2.55));
+                newD.setAlpha(overlayAlpha);
                 newD.draw(canvas);
             }
 

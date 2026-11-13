@@ -310,4 +310,110 @@
 
     <string name="title_edit_profile">Profil bearbeiten</string>
 
+    <!-- Settings backup -->
+    <string name="backup_category">Sichern &amp; Wiederherstellen</string>
+    <string name="backup_title">Einstellungen exportieren / importieren</string>
+    <string name="backup_summary">Einstellungen, Profile, Overlay-Layouts und Sondertasten in einer Datei speichern oder daraus wiederherstellen</string>
+    <string name="backup_export">Exportieren</string>
+    <string name="backup_import">Importieren</string>
+    <string name="backup_export_done">Einstellungen exportiert</string>
+    <string name="backup_export_failed">Export fehlgeschlagen: %1$s</string>
+    <string name="backup_import_failed">Import fehlgeschlagen: %1$s</string>
+    <string name="backup_import_confirm_title">Aktuelle Einstellungen ersetzen?</string>
+    <string name="backup_import_button">Importieren und neu starten</string>
+    <string name="backup_unknown_date">einem unbekannten Datum</string>
+    <string name="backup_dialog_message">Beim Export werden alle Einstellungen, Profile, Overlay-Layouts und Sondertasten in einer Datei gespeichert. Gekoppelte PCs sind nicht enthalten.\n\nBeim Import werden sie durch den Inhalt einer Datei ersetzt.</string>
+    <string name="backup_import_confirm">Dadurch werden Einstellungen, Profile, Overlay-Layouts und Sondertasten durch den Inhalt der am %1$s exportierten Datei ersetzt. Gekoppelte PCs bleiben erhalten.\n\nDie App wird danach neu gestartet.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Einige Elemente können nicht importiert werden</string>
+    <string name="backup_unsupported_newer">Diese Datei wurde mit einer neueren Version der App erstellt (%1$s).</string>
+    <string name="backup_unsupported_message">Die folgenden Elemente werden von dieser Version nicht unterstützt und übersprungen. Alles andere kann importiert werden:</string>
+    <string name="backup_unsupported_setting">Einstellung: %1$s</string>
+    <string name="backup_unsupported_value">Inkompatibler Wert: %1$s</string>
+    <string name="backup_unsupported_group">Einstellungsgruppe: %1$s</string>
+    <string name="backup_unsupported_data">Datei: %1$s</string>
+    <string name="backup_unsupported_section">Abschnitt: %1$s</string>
+    <string name="backup_unsupported_pairing">Gekoppelte Computer (nicht unterstützt oder unvollständig)</string>
+    <string name="backup_import_rest">Rest importieren</string>
+    <string name="backup_import_rolled_back">Import fehlgeschlagen, die bisherigen Einstellungen wurden beibehalten: %1$s</string>
+
+    <!-- Input overlay editor -->
+    <string name="overlay_editor_title">Editor für Bildschirm-Steuerung</string>
+    <string name="overlay_editor_summary">Bildschirm-Gamepad und Tastatur-Steuerelemente anordnen, skalieren und gestalten</string>
+    <string name="overlay_editor_category">Bildschirm-Steuerung</string>
+    <string name="overlay_editor_close">Schließen</string>
+    <string name="overlay_editor_tab_gamepad">Gamepad</string>
+    <string name="overlay_editor_tab_keyboard">Tastatur</string>
+    <string name="overlay_editor_slot">Layout</string>
+    <string name="overlay_editor_slot_n">Layout %1$d</string>
+    <string name="overlay_editor_slot_1">Layout 1</string>
+    <string name="overlay_editor_slot_2">Layout 2</string>
+    <string name="overlay_editor_slot_3">Layout 3</string>
+    <string name="overlay_editor_slot_4">Layout 4</string>
+    <string name="overlay_editor_slot_5">Layout 5</string>
+    <string name="overlay_editor_slot_default_suffix">(Standard)</string>
+    <string name="overlay_editor_slot_loaded">Layout %1$d geladen</string>
+    <string name="overlay_editor_copy_to">Dieses Layout kopieren nach…</string>
+    <string name="overlay_editor_copied">Layout nach Layout %1$d kopiert</string>
+    <string name="overlay_editor_overwrite_slot">Layout %1$d enthält bereits ein Layout. Überschreiben?</string>
+    <string name="overlay_editor_overwrite">Überschreiben</string>
+    <string name="overlay_editor_undo">Rückgängig</string>
+    <string name="overlay_editor_redo">Wiederholen</string>
+    <string name="overlay_editor_add">Hinzufügen</string>
+    <string name="overlay_editor_options">Optionen</string>
+    <string name="overlay_editor_reset">Zurücksetzen</string>
+    <string name="overlay_editor_save">Speichern</string>
+    <string name="overlay_editor_shown">Sichtbar</string>
+    <string name="overlay_editor_hidden">Ausgeblendet</string>
+    <string name="overlay_editor_keep_ratio">Seitenverh.</string>
+    <string name="overlay_editor_reset_element">Standard</string>
+    <string name="overlay_editor_remove">Entfernen</string>
+    <string name="overlay_editor_done">Fertig</string>
+    <string name="overlay_editor_size">Größe</string>
+    <string name="overlay_editor_width">Breite</string>
+    <string name="overlay_editor_height">Höhe</string>
+    <string name="overlay_editor_opacity">Deckkraft</string>
+    <string name="overlay_editor_nudge_up">Nach oben</string>
+    <string name="overlay_editor_nudge_down">Nach unten</string>
+    <string name="overlay_editor_nudge_left">Nach links</string>
+    <string name="overlay_editor_nudge_right">Nach rechts</string>
+    <string name="overlay_editor_hint">Steuerelement antippen zum Bearbeiten · Ziehen zum Verschieben · Ecke ziehen oder mit zwei Fingern zoomen zum Skalieren</string>
+    <string name="overlay_editor_removed_toast">%1$s entfernt. Mit „Hinzufügen“ zurückholen.</string>
+    <string name="overlay_editor_unsaved_title">Ungespeicherte Änderungen</string>
+    <string name="overlay_editor_unsaved_slot">Änderungen an Layout %1$d zuerst speichern?</string>
+    <string name="overlay_editor_unsaved_close">Änderungen am Layout speichern?</string>
+    <string name="overlay_editor_discard">Verwerfen</string>
+    <string name="overlay_editor_keep_editing">Weiter bearbeiten</string>
+    <string name="overlay_editor_nothing_to_add">Alle Steuerelemente sind bereits auf dem Bildschirm</string>
+    <string name="overlay_editor_add_title">Steuerelemente hinzufügen</string>
+    <string name="overlay_editor_reset_layout">Dieses Layout auf Standard zurücksetzen</string>
+    <string name="overlay_editor_remove_all">Alle Steuerelemente entfernen</string>
+    <string name="overlay_editor_undo_hint">Erledigt. Mit „Rückgängig“ zurücknehmen.</string>
+    <string name="overlay_editor_style">Tastenstil</string>
+    <string name="overlay_editor_global_opacity">Overlay-Deckkraft</string>
+    <string name="overlay_editor_controls">Steuerelemente</string>
+    <string name="overlay_editor_option_guide">Home-Taste (Guide) anzeigen</string>
+    <string name="overlay_editor_option_free_sticks">Schwebende Analogsticks (erscheinen dort, wo du tippst)</string>
+    <string name="overlay_editor_option_square_keys">Quadratische Tastaturtasten</string>
+    <string name="overlay_editor_apply">Anwenden</string>
+    <string name="overlay_editor_saved">Layout gespeichert</string>
+    <string name="overlay_style_classic">Klassisch</string>
+    <string name="overlay_style_outline">Umriss</string>
+    <string name="overlay_element_dpad">Steuerkreuz</string>
+    <string name="overlay_element_left_stick">Linker Stick</string>
+    <string name="overlay_element_right_stick">Rechter Stick</string>
+    <string name="overlay_editor_style_short">Stil</string>
+    <string name="overlay_editor_more">Mehr</string>
+    <string name="overlay_editor_menu_snap">An Hilfslinien ausrichten</string>
+    <string name="overlay_editor_menu_grid">Raster anzeigen</string>
+    <string name="overlay_editor_menu_toolbar">Position der Leiste</string>
+    <string name="overlay_editor_toolbar_auto">Automatisch</string>
+    <string name="overlay_editor_toolbar_top">Oben</string>
+    <string name="overlay_editor_toolbar_bottom">Unten</string>
+    <string name="overlay_element_wasd_dpad">WASD-Steuerkreuz</string>
+    <string name="overlay_element_wasd_stick">WASD-Stick</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">Deckkraft des Kreises der schwebenden Sticks: %1$d%%</string>
 </resources>

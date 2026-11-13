@@ -5,6 +5,17 @@
     app:iconSpaceReserved="false">
 
     <PreferenceCategory
+        android:key="category_backup"
+        android:title="@string/backup_category"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="backup_export_import"
+            android:summary="@string/backup_summary"
+            android:title="@string/backup_title"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:key="category_video_settings"
         android:title="@string/category_video_settings"
         app:initialExpandedChildrenCount="3"
@@ -833,6 +844,17 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        android:key="category_input_overlay"
+        android:title="@string/overlay_editor_category"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="open_input_overlay_editor"
+            android:summary="@string/overlay_editor_summary"
+            android:title="@string/overlay_editor_title"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:key="category_onscreen_controls"
         android:title="@string/category_on_screen_controls_settings"
         app:initialExpandedChildrenCount="1"
@@ -851,66 +873,12 @@
             android:title="@string/title_hide_osc_when_has_gamepad"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
-            android:defaultValue="false"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:key="checkbox_onscreen_style_official"
-            android:summary="@string/summary_checkbox_onscreen_style_official"
-            android:title="@string/title_checkbox_onscreen_style_official"
-            app:iconSpaceReserved="false" />
-        <CheckBoxPreference
             android:defaultValue="true"
             android:dependency="checkbox_show_onscreen_controls"
             android:key="checkbox_vibrate_osc"
             android:summary="@string/summary_checkbox_vibrate_osc"
             android:title="@string/title_checkbox_vibrate_osc"
             app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:key="checkbox_only_show_L3R3"
-            android:summary="@string/summary_only_l3r3"
-            android:title="@string/title_only_l3r3"
-            app:iconSpaceReserved="false" />
-        <CheckBoxPreference
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:defaultValue="true"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:key="checkbox_show_guide_button"
-            android:summary="@string/summary_show_guide_button"
-            android:title="@string/title_show_guide_button"
-            app:iconSpaceReserved="false" />
-        <com.limelight.preferences.SeekBarPreference
-            android:defaultValue="90"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:dialogMessage="@string/summary_osc_opacity"
-            android:key="seekbar_osc_opacity"
-            android:max="100"
-            android:summary="@string/summary_osc_opacity"
-            android:text="@string/suffix_osc_opacity"
-            android:title="@string/dialog_title_osc_opacity"
-            app:iconSpaceReserved="false"
-            seekbar:min="0"
-            seekbar:step="1" />
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:key="checkbox_enable_analog_stick_new"
-            android:summary="@string/summary_free_analog_stick"
-            android:title="@string/title_free_analog_stick"
-            app:iconSpaceReserved="false" />
-        <com.limelight.preferences.SeekBarPreference
-            android:defaultValue="20"
-            android:dependency="checkbox_enable_analog_stick_new"
-            android:dialogMessage="@string/summary_osc_opacity"
-            android:key="seekbar_osc_free_analog_stick_opacity"
-            android:max="100"
-            android:summary="@string/summary_free_analog_stick_opacity"
-            android:text="@string/suffix_osc_opacity"
-            android:title="@string/title_free_analog_stick_opacity"
-            app:iconSpaceReserved="false"
-            seekbar:min="0"
-            seekbar:step="1" />
         <com.limelight.preferences.ConfirmDeleteOscPreference
             android:dialogMessage="@string/dialog_text_reset_osc"
             android:dialogTitle="@string/dialog_title_reset_osc"
@@ -959,13 +927,6 @@
             android:title="@string/title_default_layout_scheme"
             app:iconSpaceReserved="false" />
 
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:dependency="checkbox_enable_keyboard"
-            android:key="checkbox_enable_keyboard_square"
-            android:summary="@string/summary_square_buttons"
-            android:title="@string/title_square_buttons"
-            app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.ConfirmDeleteKeyboardPreference
             android:dependency="checkbox_enable_keyboard"

@@ -184,4 +184,111 @@
 \nカスタム解像度を作成することに起因する問題について、私たちは責任を負いません。
 \n
 \nモニターが必要な表示設定をサポートしていない場合もあります。その場合は、仮想モニターを設定してみてください。最後に、デバイスまたはホストPCが特定の解像度またはリフレッシュレートでのストリーミングをサポートしていない場合、残念ながら運が悪かったということになります。</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">バックアップと復元</string>
+    <string name="backup_title">設定のエクスポート / インポート</string>
+    <string name="backup_summary">設定、プロファイル、オーバーレイのレイアウト、特殊キーをファイルに保存、またはファイルから復元します</string>
+    <string name="backup_export">エクスポート</string>
+    <string name="backup_import">インポート</string>
+    <string name="backup_export_done">設定をエクスポートしました</string>
+    <string name="backup_export_failed">エクスポートに失敗しました: %1$s</string>
+    <string name="backup_import_failed">インポートに失敗しました: %1$s</string>
+    <string name="backup_import_confirm_title">現在の設定を置き換えますか？</string>
+    <string name="backup_import_button">インポートして再起動</string>
+    <string name="backup_unknown_date">不明な日付</string>
+    <string name="backup_dialog_message">エクスポートでは、すべての設定、プロファイル、オーバーレイのレイアウト、特殊キーをファイルに保存します。ペアリング済みPCは含まれません。\n\nインポートでは、それらをファイルの内容で置き換えます。</string>
+    <string name="backup_import_confirm">設定、プロファイル、オーバーレイのレイアウト、特殊キーが %1$s にエクスポートされたファイルの内容で置き換えられます。ペアリング済みPCは保持されます。\n\nその後アプリが再起動します。</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">一部の項目をインポートできません</string>
+    <string name="backup_unsupported_newer">このファイルは新しいバージョンのアプリ（%1$s）で作成されました。</string>
+    <string name="backup_unsupported_message">次の項目はこのバージョンではサポートされていないためスキップされます。それ以外はすべてインポートできます:</string>
+    <string name="backup_unsupported_setting">設定: %1$s</string>
+    <string name="backup_unsupported_value">互換性のない値: %1$s</string>
+    <string name="backup_unsupported_group">設定グループ: %1$s</string>
+    <string name="backup_unsupported_data">ファイル: %1$s</string>
+    <string name="backup_unsupported_section">セクション: %1$s</string>
+    <string name="backup_unsupported_pairing">ペアリング済みのコンピューター（未対応または不完全）</string>
+    <string name="backup_import_rest">残りをインポート</string>
+    <string name="backup_import_rolled_back">インポートに失敗しました。以前の設定は保持されています: %1$s</string>
+
+    <!-- Input overlay editor -->
+    <string name="overlay_editor_title">画面上コントロールエディター</string>
+    <string name="overlay_editor_summary">画面上のゲームパッドとキーボードのコントロールを配置・サイズ変更・スタイル設定します</string>
+    <string name="overlay_editor_category">画面上のコントロール</string>
+    <string name="overlay_editor_close">閉じる</string>
+    <string name="overlay_editor_tab_gamepad">ゲームパッド</string>
+    <string name="overlay_editor_tab_keyboard">キーボード</string>
+    <string name="overlay_editor_slot">レイアウト</string>
+    <string name="overlay_editor_slot_n">レイアウト %1$d</string>
+    <string name="overlay_editor_slot_1">レイアウト 1</string>
+    <string name="overlay_editor_slot_2">レイアウト 2</string>
+    <string name="overlay_editor_slot_3">レイアウト 3</string>
+    <string name="overlay_editor_slot_4">レイアウト 4</string>
+    <string name="overlay_editor_slot_5">レイアウト 5</string>
+    <string name="overlay_editor_slot_default_suffix">（デフォルト）</string>
+    <string name="overlay_editor_slot_loaded">レイアウト %1$d を読み込みました</string>
+    <string name="overlay_editor_copy_to">このレイアウトをコピー…</string>
+    <string name="overlay_editor_copied">レイアウト %1$d にコピーしました</string>
+    <string name="overlay_editor_overwrite_slot">レイアウト %1$d にはすでにレイアウトがあります。上書きしますか？</string>
+    <string name="overlay_editor_overwrite">上書き</string>
+    <string name="overlay_editor_undo">元に戻す</string>
+    <string name="overlay_editor_redo">やり直す</string>
+    <string name="overlay_editor_add">追加</string>
+    <string name="overlay_editor_options">オプション</string>
+    <string name="overlay_editor_reset">リセット</string>
+    <string name="overlay_editor_save">保存</string>
+    <string name="overlay_editor_shown">表示</string>
+    <string name="overlay_editor_hidden">非表示</string>
+    <string name="overlay_editor_keep_ratio">縦横比</string>
+    <string name="overlay_editor_reset_element">初期値</string>
+    <string name="overlay_editor_remove">削除</string>
+    <string name="overlay_editor_done">完了</string>
+    <string name="overlay_editor_size">サイズ</string>
+    <string name="overlay_editor_width">幅</string>
+    <string name="overlay_editor_height">高さ</string>
+    <string name="overlay_editor_opacity">不透明度</string>
+    <string name="overlay_editor_nudge_up">上へ移動</string>
+    <string name="overlay_editor_nudge_down">下へ移動</string>
+    <string name="overlay_editor_nudge_left">左へ移動</string>
+    <string name="overlay_editor_nudge_right">右へ移動</string>
+    <string name="overlay_editor_hint">コントロールをタップして編集 · ドラッグで移動 · 角をドラッグまたはピンチでサイズ変更</string>
+    <string name="overlay_editor_removed_toast">%1$s を削除しました。「追加」で元に戻せます。</string>
+    <string name="overlay_editor_unsaved_title">未保存の変更</string>
+    <string name="overlay_editor_unsaved_slot">先にレイアウト %1$d の変更を保存しますか？</string>
+    <string name="overlay_editor_unsaved_close">レイアウトの変更を保存しますか？</string>
+    <string name="overlay_editor_discard">破棄</string>
+    <string name="overlay_editor_keep_editing">編集を続ける</string>
+    <string name="overlay_editor_nothing_to_add">すべてのコントロールがすでに画面上にあります</string>
+    <string name="overlay_editor_add_title">コントロールを追加</string>
+    <string name="overlay_editor_reset_layout">このレイアウトをデフォルトに戻す</string>
+    <string name="overlay_editor_remove_all">すべてのコントロールを削除</string>
+    <string name="overlay_editor_undo_hint">完了しました。「元に戻す」で取り消せます。</string>
+    <string name="overlay_editor_style">ボタンのスタイル</string>
+    <string name="overlay_editor_global_opacity">オーバーレイの不透明度</string>
+    <string name="overlay_editor_controls">コントロール</string>
+    <string name="overlay_editor_option_guide">Home（Guide）ボタンを表示</string>
+    <string name="overlay_editor_option_free_sticks">フローティングアナログスティック（タッチした場所に表示）</string>
+    <string name="overlay_editor_option_square_keys">キーボードのキーを四角にする</string>
+    <string name="overlay_editor_apply">適用</string>
+    <string name="overlay_editor_saved">レイアウトを保存しました</string>
+    <string name="overlay_style_classic">クラシック</string>
+    <string name="overlay_style_outline">アウトライン</string>
+    <string name="overlay_element_dpad">十字キー</string>
+    <string name="overlay_element_left_stick">左スティック</string>
+    <string name="overlay_element_right_stick">右スティック</string>
+    <string name="overlay_editor_style_short">スタイル</string>
+    <string name="overlay_editor_more">その他</string>
+    <string name="overlay_editor_menu_snap">ガイドに吸着</string>
+    <string name="overlay_editor_menu_grid">グリッドを表示</string>
+    <string name="overlay_editor_menu_toolbar">ツールバーの位置</string>
+    <string name="overlay_editor_toolbar_auto">自動</string>
+    <string name="overlay_editor_toolbar_top">上</string>
+    <string name="overlay_editor_toolbar_bottom">下</string>
+    <string name="overlay_element_wasd_dpad">WASD十字キー</string>
+    <string name="overlay_element_wasd_stick">WASDスティック</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">フローティングスティックの円の不透明度: %1$d%%</string>
 </resources>

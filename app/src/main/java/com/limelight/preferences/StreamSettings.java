@@ -1283,6 +1283,10 @@ public class StreamSettings extends AppCompatActivity {
 
             // hide on-screen controls category on non touch screen devices
             if (!pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
+                PreferenceCategory overlayCategory = findPreference("category_input_overlay");
+                if (overlayCategory != null) {
+                    screen.removePreference(overlayCategory);
+                }
                 PreferenceCategory category = findPreference("category_onscreen_controls");
                 if (category != null) {
                     screen.removePreference(category);
@@ -1680,6 +1684,22 @@ public class StreamSettings extends AppCompatActivity {
             });
 
             Preference _pref;
+            _pref = findPreference("backup_export_import");
+            if (_pref != null) {
+                _pref.setOnPreferenceClickListener(preference -> {
+                    showBackupDialog();
+                    return true;
+                });
+            }
+
+            _pref = findPreference("open_input_overlay_editor");
+            if (_pref != null) {
+                _pref.setOnPreferenceClickListener(preference -> {
+                    startActivity(new Intent(getActivity(), com.limelight.InputOverlayEditorActivity.class));
+                    return true;
+                });
+            }
+
             _pref = findPreference("import_keyboard_file");
             if (_pref != null) {
                 _pref.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
@@ -1979,12 +1999,131 @@ public class StreamSettings extends AppCompatActivity {
             }, 500);
         }
 
+        private static final int BACKUP_EXPORT_REQUEST_CODE = 1003;
+        private static final int BACKUP_IMPORT_REQUEST_CODE = 1004;
+
+        private void showBackupDialog() {
+            new AlertDialog.Builder(requireActivity())
+                    .setTitle(R.string.backup_title)
+                    .setMessage(R.string.backup_dialog_message)
+                    .setPositiveButton(R.string.backup_export, (dialog, which) -> pickExportFile())
+                    .setNeutralButton(R.string.backup_import, (dialog, which) -> {
+                        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        // Some file managers don't tag .json files as JSON
+                        intent.setType("*/*");
+                        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "application/octet-stream", "text/plain"});
+                        startActivityForResult(intent, BACKUP_IMPORT_REQUEST_CODE);
+                    })
+                    .show();
+        }
+
+        private void pickExportFile() {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/json");
+            intent.putExtra(Intent.EXTRA_TITLE, SettingsBackup.suggestedFileName());
+            startActivityForResult(intent, BACKUP_EXPORT_REQUEST_CODE);
+        }
+
+        private void exportBackup(Uri uri) {
+            final Activity activity = requireActivity();
+            final android.content.Context appContext = activity.getApplicationContext();
+            // Don't block the UI while writing (the destination may be slow, e.g. a cloud provider)
+            new Thread(() -> {
+                String error = null;
+                try (java.io.OutputStream out = appContext.getContentResolver().openOutputStream(uri, "wt")) {
+                    SettingsBackup.write(SettingsBackup.export(appContext), out);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    error = e.getMessage();
+                }
+                final String result = error;
+                activity.runOnUiThread(() -> Toast.makeText(appContext,
+                        result == null ? appContext.getString(R.string.backup_export_done)
+                                : appContext.getString(R.string.backup_export_failed, result),
+                        Toast.LENGTH_LONG).show());
+            }).start();
+        }
+
+        private void importBackup(Uri uri) {
+            final org.json.JSONObject backup;
+            try (java.io.InputStream in = requireActivity().getContentResolver().openInputStream(uri)) {
+                backup = SettingsBackup.read(in);
+            } catch (Exception e) {
+                e.printStackTrace();
+                Toast.makeText(getActivity(), getString(R.string.backup_import_failed, e.getMessage()), Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            final SettingsBackup.ImportPlan plan = SettingsBackup.analyze(requireActivity(), backup);
+            if (plan.hasUnsupported()) {
+                showUnsupportedWarning(backup, plan);
+            } else {
+                confirmImport(backup, plan);
+            }
+        }
+
+        /** Lists what this version can't import; the user can import the rest or cancel. */
+        private void showUnsupportedWarning(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
+            StringBuilder message = new StringBuilder();
+            if (plan.isFromNewerVersion()) {
+                message.append(getString(R.string.backup_unsupported_newer,
+                        plan.appVersion != null ? plan.appVersion : "?")).append("\n\n");
+            }
+            message.append(getString(R.string.backup_unsupported_message)).append("\n");
+            for (String item : plan.unsupported) {
+                message.append("\n• ").append(item);
+            }
+            new AlertDialog.Builder(requireActivity())
+                    .setTitle(R.string.backup_unsupported_title)
+                    .setMessage(message.toString())
+                    .setPositiveButton(R.string.backup_import_rest, (d, w) -> confirmImport(backup, plan))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
+        private void confirmImport(org.json.JSONObject backup, SettingsBackup.ImportPlan plan) {
+            String date = backup.optString("exportedAt", getString(R.string.backup_unknown_date));
+            new AlertDialog.Builder(requireActivity())
+                    .setTitle(R.string.backup_import_confirm_title)
+                    .setMessage(getString(R.string.backup_import_confirm, date))
+                    .setPositiveButton(R.string.backup_import_button, (d, w) -> {
+                        try {
+                            SettingsBackup.restore(requireActivity(), backup, plan);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            Toast.makeText(getActivity(), getString(R.string.backup_import_rolled_back, e.getMessage()), Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        // Restart so that every component reloads the imported settings
+                        Activity activity = requireActivity();
+                        Intent restart = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
+                        if (restart != null) {
+                            restart.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                            activity.startActivity(restart);
+                        }
+                        Runtime.getRuntime().exit(0);
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
         int READ_REQUEST_CODE = 1001;
         int READ_REQUEST_SPECIAL_CODE = 1002;
 
         @Override
         public void onActivityResult(int requestCode, int resultCode, Intent data) {
             super.onActivityResult(requestCode, resultCode, data);
+            if ((requestCode == BACKUP_EXPORT_REQUEST_CODE || requestCode == BACKUP_IMPORT_REQUEST_CODE)
+                    && resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                if (requestCode == BACKUP_EXPORT_REQUEST_CODE) {
+                    exportBackup(data.getData());
+                } else {
+                    importBackup(data.getData());
+                }
+                return;
+            }
             if (requestCode == READ_REQUEST_CODE && resultCode == Activity.RESULT_OK && data.getData() != null) {
                 try {
                     Uri uri = data.getData();

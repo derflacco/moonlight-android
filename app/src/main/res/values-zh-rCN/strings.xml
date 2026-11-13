@@ -707,4 +707,111 @@
 
     <string name="title_checkbox_full_screen">启用全屏</string>
     <string name="summary_checkbox_full_screen">使用沉浸模式隐藏系统状态栏</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">备份与恢复</string>
+    <string name="backup_title">导出 / 导入设置</string>
+    <string name="backup_summary">将设置、配置文件、叠加层布局和特殊按键保存到文件，或从文件恢复</string>
+    <string name="backup_export">导出</string>
+    <string name="backup_import">导入</string>
+    <string name="backup_export_done">设置已导出</string>
+    <string name="backup_export_failed">导出失败：%1$s</string>
+    <string name="backup_import_failed">导入失败：%1$s</string>
+    <string name="backup_import_confirm_title">替换当前设置？</string>
+    <string name="backup_import_button">导入并重启</string>
+    <string name="backup_unknown_date">未知日期</string>
+    <string name="backup_dialog_message">导出会将所有设置、配置文件、叠加层布局和特殊按键保存到文件中，不包含已配对的电脑。\n\n导入会用文件内容替换它们。</string>
+    <string name="backup_import_confirm">这将用 %1$s 导出的文件内容替换你的设置、配置文件、叠加层布局和特殊按键。已配对的电脑会保留。\n\n之后应用将重新启动。</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">部分项目无法导入</string>
+    <string name="backup_unsupported_newer">此文件由更新版本的应用（%1$s）创建。</string>
+    <string name="backup_unsupported_message">以下项目不受此版本支持，将被跳过。其余内容均可导入：</string>
+    <string name="backup_unsupported_setting">设置：%1$s</string>
+    <string name="backup_unsupported_value">不兼容的值：%1$s</string>
+    <string name="backup_unsupported_group">设置组：%1$s</string>
+    <string name="backup_unsupported_data">文件：%1$s</string>
+    <string name="backup_unsupported_section">部分：%1$s</string>
+    <string name="backup_unsupported_pairing">已配对的电脑（不受支持或不完整）</string>
+    <string name="backup_import_rest">导入其余内容</string>
+    <string name="backup_import_rolled_back">导入失败，已保留之前的设置：%1$s</string>
+
+    <!-- Input overlay editor -->
+    <string name="overlay_editor_title">屏幕按键编辑器</string>
+    <string name="overlay_editor_summary">排列屏幕手柄和键盘按键，调整大小和样式</string>
+    <string name="overlay_editor_category">屏幕按键</string>
+    <string name="overlay_editor_close">关闭</string>
+    <string name="overlay_editor_tab_gamepad">手柄</string>
+    <string name="overlay_editor_tab_keyboard">键盘</string>
+    <string name="overlay_editor_slot">布局</string>
+    <string name="overlay_editor_slot_n">布局 %1$d</string>
+    <string name="overlay_editor_slot_1">布局 1</string>
+    <string name="overlay_editor_slot_2">布局 2</string>
+    <string name="overlay_editor_slot_3">布局 3</string>
+    <string name="overlay_editor_slot_4">布局 4</string>
+    <string name="overlay_editor_slot_5">布局 5</string>
+    <string name="overlay_editor_slot_default_suffix">（默认）</string>
+    <string name="overlay_editor_slot_loaded">已加载布局 %1$d</string>
+    <string name="overlay_editor_copy_to">将此布局复制到…</string>
+    <string name="overlay_editor_copied">已复制到布局 %1$d</string>
+    <string name="overlay_editor_overwrite_slot">布局 %1$d 已有内容。要覆盖吗？</string>
+    <string name="overlay_editor_overwrite">覆盖</string>
+    <string name="overlay_editor_undo">撤销</string>
+    <string name="overlay_editor_redo">重做</string>
+    <string name="overlay_editor_add">添加</string>
+    <string name="overlay_editor_options">选项</string>
+    <string name="overlay_editor_reset">重置</string>
+    <string name="overlay_editor_save">保存</string>
+    <string name="overlay_editor_shown">显示</string>
+    <string name="overlay_editor_hidden">隐藏</string>
+    <string name="overlay_editor_keep_ratio">比例</string>
+    <string name="overlay_editor_reset_element">默认</string>
+    <string name="overlay_editor_remove">移除</string>
+    <string name="overlay_editor_done">完成</string>
+    <string name="overlay_editor_size">大小</string>
+    <string name="overlay_editor_width">宽度</string>
+    <string name="overlay_editor_height">高度</string>
+    <string name="overlay_editor_opacity">不透明度</string>
+    <string name="overlay_editor_nudge_up">上移</string>
+    <string name="overlay_editor_nudge_down">下移</string>
+    <string name="overlay_editor_nudge_left">左移</string>
+    <string name="overlay_editor_nudge_right">右移</string>
+    <string name="overlay_editor_hint">点按按键进行编辑 · 拖动以移动 · 拖动角落或双指缩放以调整大小</string>
+    <string name="overlay_editor_removed_toast">已移除 %1$s。使用“添加”可将其恢复。</string>
+    <string name="overlay_editor_unsaved_title">未保存的更改</string>
+    <string name="overlay_editor_unsaved_slot">先保存布局 %1$d 的更改吗？</string>
+    <string name="overlay_editor_unsaved_close">保存对布局的更改吗？</string>
+    <string name="overlay_editor_discard">放弃</string>
+    <string name="overlay_editor_keep_editing">继续编辑</string>
+    <string name="overlay_editor_nothing_to_add">所有按键都已在屏幕上</string>
+    <string name="overlay_editor_add_title">添加按键</string>
+    <string name="overlay_editor_reset_layout">将此布局重置为默认</string>
+    <string name="overlay_editor_remove_all">移除所有按键</string>
+    <string name="overlay_editor_undo_hint">已完成。使用“撤销”可还原。</string>
+    <string name="overlay_editor_style">按键样式</string>
+    <string name="overlay_editor_global_opacity">叠加层不透明度</string>
+    <string name="overlay_editor_controls">按键</string>
+    <string name="overlay_editor_option_guide">显示 Home（Guide）键</string>
+    <string name="overlay_editor_option_free_sticks">浮动摇杆（在触摸处出现）</string>
+    <string name="overlay_editor_option_square_keys">方形键盘按键</string>
+    <string name="overlay_editor_apply">应用</string>
+    <string name="overlay_editor_saved">布局已保存</string>
+    <string name="overlay_style_classic">经典</string>
+    <string name="overlay_style_outline">轮廓</string>
+    <string name="overlay_element_dpad">十字键</string>
+    <string name="overlay_element_left_stick">左摇杆</string>
+    <string name="overlay_element_right_stick">右摇杆</string>
+    <string name="overlay_editor_style_short">样式</string>
+    <string name="overlay_editor_more">更多</string>
+    <string name="overlay_editor_menu_snap">吸附到参考线</string>
+    <string name="overlay_editor_menu_grid">显示网格</string>
+    <string name="overlay_editor_menu_toolbar">工具栏位置</string>
+    <string name="overlay_editor_toolbar_auto">自动</string>
+    <string name="overlay_editor_toolbar_top">顶部</string>
+    <string name="overlay_editor_toolbar_bottom">底部</string>
+    <string name="overlay_element_wasd_dpad">WASD 十字键</string>
+    <string name="overlay_element_wasd_stick">WASD 摇杆</string>
+
+    <!-- Input overlay editor: floating sticks -->
+    <string name="overlay_editor_option_free_sticks_opacity">浮动摇杆圆圈不透明度：%1$d%%</string>
 </resources>
