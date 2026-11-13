@@ -875,4 +875,29 @@
         <item>prime_little</item>
     </string-array>
 
+    <!-- Settings backup -->
+    <string name="backup_category">Backup &amp; restore</string>
+    <string name="backup_title">Export / import settings</string>
+    <string name="backup_summary">Save your settings, profiles, overlay layouts and special keys to a file, or restore them from one</string>
+    <string name="backup_export">Export</string>
+    <string name="backup_import">Import</string>
+    <string name="backup_export_done">Settings exported</string>
+    <string name="backup_export_failed">Export failed: %1$s</string>
+    <string name="backup_import_failed">Import failed: %1$s</string>
+    <string name="backup_import_confirm_title">Replace current settings?</string>
+    <string name="backup_import_button">Import and restart</string>
+    <string name="backup_unknown_date">an unknown date</string>
+    <string name="backup_dialog_message">Export saves every setting, settings profiles, overlay layouts and special keys to a file. Paired PCs are not included.\n\nImport replaces them with the content of a file.</string>
+    <string name="backup_import_confirm">This replaces your settings, profiles, overlay layouts and special keys with the content of the file exported on %1$s. Your paired PCs are kept.\n\nThe app restarts afterwards.</string>
+    <string name="backup_unsupported_title">Some items can\'t be imported</string>
+    <string name="backup_unsupported_newer">This file was made by a newer version of the app (%1$s).</string>
+    <string name="backup_unsupported_message">The following items aren\'t supported by this version and will be skipped. Everything else can be imported:</string>
+    <string name="backup_unsupported_setting">Setting: %1$s</string>
+    <string name="backup_unsupported_value">Incompatible value: %1$s</string>
+    <string name="backup_unsupported_group">Settings group: %1$s</string>
+    <string name="backup_unsupported_data">File: %1$s</string>
+    <string name="backup_unsupported_section">Section: %1$s</string>
+    <string name="backup_unsupported_pairing">Paired computers (unsupported or incomplete)</string>
+    <string name="backup_import_rest">Import the rest</string>
+    <string name="backup_import_rolled_back">Import failed, your previous settings were kept: %1$s</string>
 </resources>

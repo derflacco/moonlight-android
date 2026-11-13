@@ -184,4 +184,32 @@
 \nカスタム解像度を作成することに起因する問題について、私たちは責任を負いません。
 \n
 \nモニターが必要な表示設定をサポートしていない場合もあります。その場合は、仮想モニターを設定してみてください。最後に、デバイスまたはホストPCが特定の解像度またはリフレッシュレートでのストリーミングをサポートしていない場合、残念ながら運が悪かったということになります。</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">バックアップと復元</string>
+    <string name="backup_title">設定のエクスポート / インポート</string>
+    <string name="backup_summary">設定、プロファイル、オーバーレイのレイアウト、特殊キーをファイルに保存、またはファイルから復元します</string>
+    <string name="backup_export">エクスポート</string>
+    <string name="backup_import">インポート</string>
+    <string name="backup_export_done">設定をエクスポートしました</string>
+    <string name="backup_export_failed">エクスポートに失敗しました: %1$s</string>
+    <string name="backup_import_failed">インポートに失敗しました: %1$s</string>
+    <string name="backup_import_confirm_title">現在の設定を置き換えますか？</string>
+    <string name="backup_import_button">インポートして再起動</string>
+    <string name="backup_unknown_date">不明な日付</string>
+    <string name="backup_dialog_message">エクスポートでは、すべての設定、プロファイル、オーバーレイのレイアウト、特殊キーをファイルに保存します。ペアリング済みPCは含まれません。\n\nインポートでは、それらをファイルの内容で置き換えます。</string>
+    <string name="backup_import_confirm">設定、プロファイル、オーバーレイのレイアウト、特殊キーが %1$s にエクスポートされたファイルの内容で置き換えられます。ペアリング済みPCは保持されます。\n\nその後アプリが再起動します。</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">一部の項目をインポートできません</string>
+    <string name="backup_unsupported_newer">このファイルは新しいバージョンのアプリ（%1$s）で作成されました。</string>
+    <string name="backup_unsupported_message">次の項目はこのバージョンではサポートされていないためスキップされます。それ以外はすべてインポートできます:</string>
+    <string name="backup_unsupported_setting">設定: %1$s</string>
+    <string name="backup_unsupported_value">互換性のない値: %1$s</string>
+    <string name="backup_unsupported_group">設定グループ: %1$s</string>
+    <string name="backup_unsupported_data">ファイル: %1$s</string>
+    <string name="backup_unsupported_section">セクション: %1$s</string>
+    <string name="backup_unsupported_pairing">ペアリング済みのコンピューター（未対応または不完全）</string>
+    <string name="backup_import_rest">残りをインポート</string>
+    <string name="backup_import_rolled_back">インポートに失敗しました。以前の設定は保持されています: %1$s</string>
 </resources>

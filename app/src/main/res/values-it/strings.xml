@@ -290,4 +290,32 @@
     <string name="analogscroll_left">Stick analogico sinistro</string>
     <string name="title_enable_commit_text">Abilita input commit-text (swipe/voce)</string>
     <string name="summary_enable_commit_text">Invia al PC testi multi-carattere provenienti dalle tastiere software (scrittura a gesto, suggerimenti, dettatura vocale). Può causare problemi ai giochi che richiedono la pressione singola dei tasti.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Backup e ripristino</string>
+    <string name="backup_title">Esporta / importa impostazioni</string>
+    <string name="backup_summary">Salva le impostazioni, i profili, i layout dell\'overlay e i tasti speciali in un file, o ripristinali da un file</string>
+    <string name="backup_export">Esporta</string>
+    <string name="backup_import">Importa</string>
+    <string name="backup_export_done">Impostazioni esportate</string>
+    <string name="backup_export_failed">Esportazione non riuscita: %1$s</string>
+    <string name="backup_import_failed">Importazione non riuscita: %1$s</string>
+    <string name="backup_import_confirm_title">Sostituire le impostazioni attuali?</string>
+    <string name="backup_import_button">Importa e riavvia</string>
+    <string name="backup_unknown_date">una data sconosciuta</string>
+    <string name="backup_dialog_message">L\'esportazione salva tutte le impostazioni, i profili, i layout dell\'overlay e i tasti speciali in un file. I PC associati non sono inclusi.\n\nL\'importazione li sostituisce con il contenuto di un file.</string>
+    <string name="backup_import_confirm">Impostazioni, profili, layout dell\'overlay e tasti speciali verranno sostituiti con il contenuto del file esportato il %1$s. I PC associati vengono mantenuti.\n\nL\'app verrà poi riavviata.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Alcuni elementi non possono essere importati</string>
+    <string name="backup_unsupported_newer">Questo file è stato creato da una versione più recente dell\'app (%1$s).</string>
+    <string name="backup_unsupported_message">I seguenti elementi non sono supportati da questa versione e verranno saltati. Tutto il resto può essere importato:</string>
+    <string name="backup_unsupported_setting">Impostazione: %1$s</string>
+    <string name="backup_unsupported_value">Valore incompatibile: %1$s</string>
+    <string name="backup_unsupported_group">Gruppo di impostazioni: %1$s</string>
+    <string name="backup_unsupported_data">File: %1$s</string>
+    <string name="backup_unsupported_section">Sezione: %1$s</string>
+    <string name="backup_unsupported_pairing">Computer associati (non supportati o incompleti)</string>
+    <string name="backup_import_rest">Importa il resto</string>
+    <string name="backup_import_rolled_back">Importazione non riuscita, le impostazioni precedenti sono state mantenute: %1$s</string>
 </resources>

@@ -179,4 +179,32 @@
     <string name="audioconf_51surround">Sunet Surround 5.1</string>
     <string name="audioconf_71surround">Sunet Surround 7.1</string>
     <string name="videoformat_hevcalways">Folosește HEVC mereu (se poate bloca)</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Copie de rezervă și restaurare</string>
+    <string name="backup_title">Export / import setări</string>
+    <string name="backup_summary">Salvați setările, profilurile, aranjamentele suprapunerii și tastele speciale într-un fișier sau restaurați-le dintr-un fișier</string>
+    <string name="backup_export">Exportă</string>
+    <string name="backup_import">Importă</string>
+    <string name="backup_export_done">Setări exportate</string>
+    <string name="backup_export_failed">Exportul a eșuat: %1$s</string>
+    <string name="backup_import_failed">Importul a eșuat: %1$s</string>
+    <string name="backup_import_confirm_title">Înlocuiți setările curente?</string>
+    <string name="backup_import_button">Importă și repornește</string>
+    <string name="backup_unknown_date">o dată necunoscută</string>
+    <string name="backup_dialog_message">Exportul salvează toate setările, profilurile, aranjamentele suprapunerii și tastele speciale într-un fișier. PC-urile asociate nu sunt incluse.\n\nImportul le înlocuiește cu conținutul unui fișier.</string>
+    <string name="backup_import_confirm">Aceasta înlocuiește setările, profilurile, aranjamentele suprapunerii și tastele speciale cu conținutul fișierului exportat la %1$s. PC-urile asociate sunt păstrate.\n\nAplicația va reporni apoi.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Unele elemente nu pot fi importate</string>
+    <string name="backup_unsupported_newer">Acest fișier a fost creat de o versiune mai nouă a aplicației (%1$s).</string>
+    <string name="backup_unsupported_message">Următoarele elemente nu sunt acceptate de această versiune și vor fi omise. Tot restul poate fi importat:</string>
+    <string name="backup_unsupported_setting">Setare: %1$s</string>
+    <string name="backup_unsupported_value">Valoare incompatibilă: %1$s</string>
+    <string name="backup_unsupported_group">Grup de setări: %1$s</string>
+    <string name="backup_unsupported_data">Fișier: %1$s</string>
+    <string name="backup_unsupported_section">Secțiune: %1$s</string>
+    <string name="backup_unsupported_pairing">Calculatoare asociate (neacceptate sau incomplete)</string>
+    <string name="backup_import_rest">Importă restul</string>
+    <string name="backup_import_rolled_back">Importul a eșuat, setările anterioare au fost păstrate: %1$s</string>
 </resources>

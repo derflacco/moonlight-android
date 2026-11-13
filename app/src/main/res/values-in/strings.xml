@@ -212,4 +212,32 @@
     <string name="error_code_prefix">Kode galat:</string>
     <string name="title_enable_commit_text">Aktifkan input commit-text (geser/suara)</string>
     <string name="summary_enable_commit_text">Meneruskan teks multi-karakter dari papan ketik lunak (gestur geser, prediksi, dikte suara). Mungkin menyebabkan masalah pada gim yang bergantung pada input per tombol.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Cadangkan &amp; pulihkan</string>
+    <string name="backup_title">Ekspor / impor pengaturan</string>
+    <string name="backup_summary">Simpan pengaturan, profil, tata letak overlay, dan tombol khusus ke file, atau pulihkan dari file</string>
+    <string name="backup_export">Ekspor</string>
+    <string name="backup_import">Impor</string>
+    <string name="backup_export_done">Pengaturan diekspor</string>
+    <string name="backup_export_failed">Ekspor gagal: %1$s</string>
+    <string name="backup_import_failed">Impor gagal: %1$s</string>
+    <string name="backup_import_confirm_title">Ganti pengaturan saat ini?</string>
+    <string name="backup_import_button">Impor dan mulai ulang</string>
+    <string name="backup_unknown_date">tanggal tidak diketahui</string>
+    <string name="backup_dialog_message">Ekspor menyimpan semua pengaturan, profil, tata letak overlay, dan tombol khusus ke file. PC yang dipasangkan tidak disertakan.\n\nImpor menggantinya dengan isi sebuah file.</string>
+    <string name="backup_import_confirm">Ini mengganti pengaturan, profil, tata letak overlay, dan tombol khusus Anda dengan isi file yang diekspor pada %1$s. PC yang dipasangkan tetap dipertahankan.\n\nAplikasi akan dimulai ulang setelahnya.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Beberapa item tidak dapat diimpor</string>
+    <string name="backup_unsupported_newer">File ini dibuat oleh versi aplikasi yang lebih baru (%1$s).</string>
+    <string name="backup_unsupported_message">Item berikut tidak didukung oleh versi ini dan akan dilewati. Semua yang lain dapat diimpor:</string>
+    <string name="backup_unsupported_setting">Pengaturan: %1$s</string>
+    <string name="backup_unsupported_value">Nilai tidak kompatibel: %1$s</string>
+    <string name="backup_unsupported_group">Grup pengaturan: %1$s</string>
+    <string name="backup_unsupported_data">File: %1$s</string>
+    <string name="backup_unsupported_section">Bagian: %1$s</string>
+    <string name="backup_unsupported_pairing">Komputer yang dipasangkan (tidak didukung atau tidak lengkap)</string>
+    <string name="backup_import_rest">Impor sisanya</string>
+    <string name="backup_import_rolled_back">Impor gagal, pengaturan sebelumnya tetap dipertahankan: %1$s</string>
 </resources>

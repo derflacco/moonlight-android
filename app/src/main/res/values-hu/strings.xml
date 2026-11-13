@@ -260,4 +260,32 @@
     <string name="pacing_latency">A legalacsonyabb késleltetés előnyben részesítése</string>
     <string name="title_enable_commit_text">Commit-szöveg bevitel engedélyezése (húzás/hang)</string>
     <string name="summary_enable_commit_text">A képernyő-billentyűzetek többkarakteres szövegét (gesztusos gépelés, predikciók, hangalapú diktálás) továbbítja. Megzavarhatja azokat a játékokat, amelyek egyes gombnyomásokra támaszkodnak.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Biztonsági mentés és visszaállítás</string>
+    <string name="backup_title">Beállítások exportálása / importálása</string>
+    <string name="backup_summary">Mentse a beállításokat, profilokat, átfedés-elrendezéseket és speciális billentyűket egy fájlba, vagy állítsa vissza őket egy fájlból</string>
+    <string name="backup_export">Exportálás</string>
+    <string name="backup_import">Importálás</string>
+    <string name="backup_export_done">Beállítások exportálva</string>
+    <string name="backup_export_failed">Az exportálás sikertelen: %1$s</string>
+    <string name="backup_import_failed">Az importálás sikertelen: %1$s</string>
+    <string name="backup_import_confirm_title">Lecseréli a jelenlegi beállításokat?</string>
+    <string name="backup_import_button">Importálás és újraindítás</string>
+    <string name="backup_unknown_date">ismeretlen dátum</string>
+    <string name="backup_dialog_message">Az exportálás minden beállítást, profilt, átfedés-elrendezést és speciális billentyűt fájlba ment. A párosított számítógépek nem kerülnek bele.\n\nAz importálás ezeket egy fájl tartalmára cseréli.</string>
+    <string name="backup_import_confirm">Ez a beállításokat, profilokat, átfedés-elrendezéseket és speciális billentyűket lecseréli a(z) %1$s napon exportált fájl tartalmára. A párosított számítógépek megmaradnak.\n\nAz alkalmazás ezután újraindul.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Néhány elem nem importálható</string>
+    <string name="backup_unsupported_newer">Ezt a fájlt az alkalmazás egy újabb verziója hozta létre (%1$s).</string>
+    <string name="backup_unsupported_message">Az alábbi elemeket ez a verzió nem támogatja, ezért kimaradnak. Minden más importálható:</string>
+    <string name="backup_unsupported_setting">Beállítás: %1$s</string>
+    <string name="backup_unsupported_value">Nem kompatibilis érték: %1$s</string>
+    <string name="backup_unsupported_group">Beállításcsoport: %1$s</string>
+    <string name="backup_unsupported_data">Fájl: %1$s</string>
+    <string name="backup_unsupported_section">Szakasz: %1$s</string>
+    <string name="backup_unsupported_pairing">Párosított számítógépek (nem támogatott vagy hiányos)</string>
+    <string name="backup_import_rest">A többi importálása</string>
+    <string name="backup_import_rolled_back">Az importálás sikertelen, a korábbi beállítások megmaradtak: %1$s</string>
 </resources>

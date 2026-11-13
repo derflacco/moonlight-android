@@ -36,4 +36,32 @@
     <string name="unpairing">Malparigante…</string>
     <string name="applist_connect_msg">Konektante al komputilo…</string>
     <string name="pcview_menu_unpair_pc">Malparigi</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Savkopio kaj restarigo</string>
+    <string name="backup_title">Eksporti / importi agordojn</string>
+    <string name="backup_summary">Konservu viajn agordojn, profilojn, aranĝojn de la surmetaĵo kaj specialajn klavojn en dosieron, aŭ restarigu ilin el dosiero</string>
+    <string name="backup_export">Eksporti</string>
+    <string name="backup_import">Importi</string>
+    <string name="backup_export_done">Agordoj eksportitaj</string>
+    <string name="backup_export_failed">Eksporto malsukcesis: %1$s</string>
+    <string name="backup_import_failed">Importo malsukcesis: %1$s</string>
+    <string name="backup_import_confirm_title">Ĉu anstataŭigi la nunajn agordojn?</string>
+    <string name="backup_import_button">Importi kaj rekomenci</string>
+    <string name="backup_unknown_date">nekonata dato</string>
+    <string name="backup_dialog_message">Eksporto konservas ĉiujn agordojn, profilojn, aranĝojn de la surmetaĵo kaj specialajn klavojn en dosieron. Parigitaj komputiloj ne estas inkluzivitaj.\n\nImporto anstataŭigas ilin per la enhavo de dosiero.</string>
+    <string name="backup_import_confirm">Ĉi tio anstataŭigas viajn agordojn, profilojn, aranĝojn de la surmetaĵo kaj specialajn klavojn per la enhavo de la dosiero eksportita je %1$s. Viaj parigitaj komputiloj restas.\n\nPoste la aplikaĵo rekomenciĝos.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Kelkaj eroj ne povas esti importitaj</string>
+    <string name="backup_unsupported_newer">Ĉi tiu dosiero estis kreita de pli nova versio de la aplikaĵo (%1$s).</string>
+    <string name="backup_unsupported_message">La jenaj eroj ne estas subtenataj de ĉi tiu versio kaj estos preterlasitaj. Ĉio alia povas esti importita:</string>
+    <string name="backup_unsupported_setting">Agordo: %1$s</string>
+    <string name="backup_unsupported_value">Nekongrua valoro: %1$s</string>
+    <string name="backup_unsupported_group">Grupo de agordoj: %1$s</string>
+    <string name="backup_unsupported_data">Dosiero: %1$s</string>
+    <string name="backup_unsupported_section">Sekcio: %1$s</string>
+    <string name="backup_unsupported_pairing">Parigitaj komputiloj (nesubtenataj aŭ nekompletaj)</string>
+    <string name="backup_import_rest">Importi la reston</string>
+    <string name="backup_import_rolled_back">Importo malsukcesis, viaj antaŭaj agordoj estis konservitaj: %1$s</string>
 </resources>

@@ -255,4 +255,32 @@
     <string name="summary_analog_scrolling">Selecciona um stick analógico para fazer scroll quando a emulação de rato está ativada</string>
     <string name="title_enable_commit_text">Ativar entrada de texto commit (gesto/voz)</string>
     <string name="summary_enable_commit_text">Reencaminha texto com vários caracteres proveniente de teclados virtuais (digitação por gestos, previsões, ditado por voz). Pode causar problemas em jogos que dependem de entradas tecla-a-tecla.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Cópia de segurança e restauro</string>
+    <string name="backup_title">Exportar / importar definições</string>
+    <string name="backup_summary">Guarde as suas definições, perfis, esquemas da sobreposição e teclas especiais num ficheiro, ou restaure-os a partir de um</string>
+    <string name="backup_export">Exportar</string>
+    <string name="backup_import">Importar</string>
+    <string name="backup_export_done">Definições exportadas</string>
+    <string name="backup_export_failed">Falha ao exportar: %1$s</string>
+    <string name="backup_import_failed">Falha ao importar: %1$s</string>
+    <string name="backup_import_confirm_title">Substituir as definições atuais?</string>
+    <string name="backup_import_button">Importar e reiniciar</string>
+    <string name="backup_unknown_date">uma data desconhecida</string>
+    <string name="backup_dialog_message">Exportar guarda todas as definições, perfis, esquemas da sobreposição e teclas especiais num ficheiro. Os PCs emparelhados não são incluídos.\n\nImportar substitui-os pelo conteúdo de um ficheiro.</string>
+    <string name="backup_import_confirm">Isto substitui as suas definições, perfis, esquemas da sobreposição e teclas especiais pelo conteúdo do ficheiro exportado em %1$s. Os PCs emparelhados são mantidos.\n\nA aplicação será reiniciada em seguida.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Alguns itens não podem ser importados</string>
+    <string name="backup_unsupported_newer">Este ficheiro foi criado por uma versão mais recente da aplicação (%1$s).</string>
+    <string name="backup_unsupported_message">Os itens seguintes não são suportados por esta versão e serão ignorados. Tudo o resto pode ser importado:</string>
+    <string name="backup_unsupported_setting">Definição: %1$s</string>
+    <string name="backup_unsupported_value">Valor incompatível: %1$s</string>
+    <string name="backup_unsupported_group">Grupo de definições: %1$s</string>
+    <string name="backup_unsupported_data">Ficheiro: %1$s</string>
+    <string name="backup_unsupported_section">Secção: %1$s</string>
+    <string name="backup_unsupported_pairing">Computadores emparelhados (não suportados ou incompletos)</string>
+    <string name="backup_import_rest">Importar o resto</string>
+    <string name="backup_import_rolled_back">Falha ao importar, as definições anteriores foram mantidas: %1$s</string>
 </resources>
