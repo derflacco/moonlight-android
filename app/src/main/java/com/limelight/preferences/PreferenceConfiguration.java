@@ -143,6 +143,7 @@ public class PreferenceConfiguration {
     private static final String ENABLE_PERF_LOGGING = "checkbox_enable_perf_logging";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
+    private static final String MOUSE_EMULATION_SPEED_PREF_STRING = "seekbar_mouse_emulation_speed";
     private static final String REMEMBER_MOUSE_MODE_PREF_STRING = "checkbox_remember_mouse_mode";
     private static final String ANALOG_SCROLLING_PREF_STRING = "analog_scrolling";
     private static final String MOUSE_NAV_BUTTONS_STRING = "checkbox_mouse_nav_buttons";
@@ -465,6 +466,7 @@ public class PreferenceConfiguration {
 
     public boolean bindAllUsb;
     public boolean mouseEmulation;
+    public int mouseEmulationSpeedPercent = 100;
     public AnalogStickForScrolling analogStickForScrolling;
     public boolean mouseNavButtons;
     public boolean rememberMouseMode;
@@ -1084,6 +1086,7 @@ public class PreferenceConfiguration {
         config.showServerStats = prefs.getBoolean("checkbox_show_server_stats", false);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
+        config.mouseEmulationSpeedPercent = prefs.getInt(MOUSE_EMULATION_SPEED_PREF_STRING, 100);
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
         config.rememberMouseMode = prefs.getBoolean(REMEMBER_MOUSE_MODE_PREF_STRING, DEFAULT_REMEMBER_MOUSE_MODE);
         config.unlockFps = prefs.getBoolean(UNLOCK_FPS_STRING, DEFAULT_UNLOCK_FPS);

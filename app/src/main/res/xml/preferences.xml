@@ -462,6 +462,18 @@
             android:summary="@string/summary_checkbox_mouse_emulation"
             android:title="@string/title_checkbox_mouse_emulation"
             app:iconSpaceReserved="false" />
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="100"
+            android:dependency="checkbox_mouse_emulation"
+            android:key="seekbar_mouse_emulation_speed"
+            android:max="300"
+            android:summary="@string/summary_mouse_emulation_speed"
+            android:text="%"
+            android:title="@string/title_mouse_emulation_speed"
+            app:iconSpaceReserved="false"
+            seekbar:min="25"
+            seekbar:step="5"
+            seekbar:keyStep="5" />
         <ListPreference
             android:defaultValue="right"
             android:dependency="checkbox_mouse_emulation"

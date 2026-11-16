@@ -40,6 +40,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.profiles.ProfilesManager;
+import com.limelight.ui.GamepadDialogNavigation;
 import com.limelight.ui.CompositorHeartbeat;
 import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
@@ -402,6 +403,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
 
     public GameMenuCallbacks gameMenuCallbacks;
+    public final GamepadDialogNavigation menuNavigation =
+            new GamepadDialogNavigation(suspended -> {
+                if (controllerHandler != null) controllerHandler.setDialogInputSuspended(suspended);
+            });
 
     public boolean isInputOnly = true;
     public boolean allowChangeMouseMode = true;
@@ -2227,6 +2232,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean handleKeyDown(KeyEvent event) {
+        if (menuNavigation.handleKeyEvent(event)) return true;
         // Keep software/onscreen input unchanged; route physical devices consistently.
         InputDevice routingDevice = event.getDevice();
         if (routingDevice != null && !routingDevice.isVirtual() &&
@@ -2325,6 +2331,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean handleKeyUp(KeyEvent event) {
+        if (menuNavigation.handleKeyEvent(event)) return true;
         // Keep software/onscreen input unchanged; route physical devices consistently.
         InputDevice routingDevice = event.getDevice();
         if (routingDevice != null && !routingDevice.isVirtual() &&
@@ -2974,6 +2981,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // Returns true if the event was consumed
     // NB: View is only present if called from a view callback
     public boolean handleMotionEvent(View view, MotionEvent event) {
+        if (menuNavigation.handleMotionEvent(event)) return true;
         // Pass through mouse/touch/joystick input if we're not grabbing
         if (!grabbedInput) {
             return false;
@@ -4336,7 +4344,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         final MouseModeOption[] optionArray = options.toArray(new MouseModeOption[0]);
 
-        new AlertDialog.Builder(context)
+        AlertDialog modeDialog = new AlertDialog.Builder(context)
                 .setTitle(getString(R.string.game_menu_select_mouse_mode))
                 .setItems(labels, (dialog, which) -> {
                     dialog.dismiss();
@@ -4353,8 +4361,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         }
                     }
                 })
-                .create()
-                .show();
+                .create();
+        modeDialog.show();
+        menuNavigation.attach(modeDialog);
     }
 
     //本地鼠标光标切换
@@ -4462,6 +4471,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         AlertDialog dialog = builder.create();
         dialog.show();
+        menuNavigation.attach(dialog);
     }
 
     @Override

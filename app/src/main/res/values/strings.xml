@@ -248,6 +248,8 @@
     <string name="title_checkbox_usb_bind_all">Override native Xbox gamepad support</string>
     <string name="summary_checkbox_usb_bind_all">Use Artemis\'s USB driver for all supported gamepads, even if native Xbox/Nintendo Pro controller support is present</string>
     <string name="title_checkbox_mouse_emulation">Mouse emulation via gamepad</string>
+    <string name="title_mouse_emulation_speed">Mouse emulation speed</string>
+    <string name="summary_mouse_emulation_speed">Cursor speed when a controller is in mouse mode (100% ≈ Steam default)</string>
     <string name="summary_checkbox_mouse_emulation">Long-press the Start button to toggle between gamepad and mouse mode</string>
     <string name="title_checkbox_remember_mouse_mode">Remember mouse mode</string>
     <string name="summary_checkbox_remember_mouse_mode">Remember mouse mode selected during stream. When disabled, mouse mode changed during stream will be temporary.</string>

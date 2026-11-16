@@ -60,12 +60,50 @@ import java.util.List;
 import java.util.Map;
 
 public class ControllerHandler implements InputManager.InputDeviceListener, UsbDriverListener {
-    // Mouse emulation speed scale to compensate higher update rate (10 ms vs 50 ms).
-// 10 / 50 = 0.2 -> same overall speed, smoother steps.
-    private static final float MOUSE_EMULATION_SPEED_SCALE = 0.2f;
+    private static final float MOUSE_MAX_SPEED_PX_PER_S = 1600f;
+    private static final float MOUSE_CURVE_EXPONENT = 2.0f;
+    private static final float MOUSE_RADIAL_DEADZONE = 0.08f;
     // Reference counts prevent one controller releasing another controller's held input.
     private final int[] desktopKeyOwners = new int[256];
     private final int[] desktopMouseOwners = new int[2];
+    private volatile boolean dialogInputSuspended;
+    private volatile int dialogInputGeneration;
+
+    public void setDialogInputSuspended(boolean suspended) {
+        if (dialogInputSuspended == suspended) return;
+        dialogInputSuspended = suspended;
+        dialogInputGeneration++;
+        resetDialogInput(defaultContext, suspended);
+        for (int i = 0; i < inputDeviceContexts.size(); i++) {
+            resetDialogInput(inputDeviceContexts.valueAt(i), suspended);
+        }
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            resetDialogInput(usbDeviceContexts.valueAt(i), suspended);
+        }
+    }
+
+    private void resetDialogInput(GenericControllerContext context, boolean suspended) {
+        context.releaseDesktopInput();
+        context.inputMap = 0;
+        context.leftTrigger = context.rightTrigger = 0;
+        context.leftStickX = context.leftStickY = context.rightStickX = context.rightStickY = 0;
+        context.mouseLastMoveTime = SystemClock.uptimeMillis();
+        context.mouseRemainderX = context.mouseRemainderY = 0;
+        if (context instanceof InputDeviceContext) {
+            InputDeviceContext deviceContext = (InputDeviceContext) context;
+            deviceContext.emulatingButtonFlags = 0;
+            deviceContext.pendingExit = false;
+        }
+        if (context.assignedControllerNumber) {
+            int index = Math.max(0, Math.min(MAX_CONTROLLERS - 1, context.controllerNumber));
+            lastSentInputMap[index] = -1; // Force the first post-menu packet past Snappy Input's cache.
+        }
+        if (suspended && context.assignedControllerNumber) {
+            conn.sendControllerInput(context.controllerNumber, getActiveControllerMask(),
+                    0, (byte) 0, (byte) 0, (short) 0, (short) 0, (short) 0, (short) 0);
+        }
+    }
+
     private static final int MAXIMUM_BUMPER_UP_DELAY_MS = 100;
 
     private static final int START_DOWN_TIME_MOUSE_MODE_MS = 750;
@@ -81,23 +119,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private static final short MAX_GAMEPADS = 16; // Limited by bits in activeGamepadMask
 
     private static final int BATTERY_RECHECK_INTERVAL_MS = 120 * 1000;
-    // Apply speed scaling while preserving direction and avoiding zeros on tiny movements.
-    private int applyMouseSpeedScale(int delta) {
-        if (delta == 0) {
-            return 0;
-        }
-
-        float scaled = delta * MOUSE_EMULATION_SPEED_SCALE;
-        int result = Math.round(scaled);
-
-        // Ensure we don't lose small movements entirely
-        if (result == 0) {
-            return (delta > 0) ? 1 : -1;
-        }
-
-        return result;
-    }
-
     private static final Map<Integer, Integer> ANDROID_TO_LI_BUTTON_MAP = Map.ofEntries(
             Map.entry(KeyEvent.KEYCODE_BUTTON_A, ControllerPacket.A_FLAG),
             Map.entry(KeyEvent.KEYCODE_BUTTON_B, ControllerPacket.B_FLAG),
@@ -1261,6 +1282,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
     }
 
     private void sendControllerInputPacket(GenericControllerContext originalContext) {
+        if (dialogInputSuspended) return;
         assignControllerNumberIfNeeded(originalContext);
 
         // Take the context's controller number and fuse all inputs with the same number
@@ -1713,7 +1735,9 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         if (context.rightStickXAxis != -1 && context.rightStickYAxis != -1) {
             Vector2d rightStickVector = populateCachedVector(rsX, rsY);
 
-            handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
+            if (!context.mouseEmulationActive) {
+                handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
+            }
 
             context.rightStickX = (short) (rightStickVector.getX() * 0x7FFE);
             context.rightStickY = (short) (-rightStickVector.getY() * 0x7FFE);
@@ -1798,6 +1822,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
     }
 
     public boolean tryHandleTouchpadEvent(MotionEvent event) {
+        if (dialogInputSuspended) return true;
         // Bail if this is not a touchpad or mouse event
         if (event.getSource() != InputDevice.SOURCE_TOUCHPAD &&
                 event.getSource() != InputDevice.SOURCE_MOUSE) {
@@ -1919,6 +1944,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
     }
 
     public boolean handleMotionEvent(MotionEvent event) {
+        if (dialogInputSuspended) return true;
         InputDeviceContext context = getContextForEvent(event);
         if (context == null) {
             return true;
@@ -1954,35 +1980,49 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         return true;
     }
 
+    // Return pointer velocity in pixels/second, retaining the stick's direction.
     private Vector2d convertRawStickAxisToPixelMovement(short stickX, short stickY) {
         Vector2d vector = new Vector2d();
-        vector.initialize(stickX, stickY);
-        vector.scalarMultiply(1 / 32766.0f);
-        vector.scalarMultiply(4);
-        if (vector.getMagnitude() > 0) {
-            // Move faster as the stick is pressed further from center
-            vector.scalarMultiply(Math.pow(vector.getMagnitude(), 2));
+        vector.initialize(stickX / 32766f, stickY / 32766f);
+        double magnitude = vector.getMagnitude();
+        if (magnitude <= MOUSE_RADIAL_DEADZONE) {
+            vector.initialize(0, 0);
+        } else {
+            double m = (Math.min(magnitude, 1.0) - MOUSE_RADIAL_DEADZONE)
+                    / (1.0 - MOUSE_RADIAL_DEADZONE);
+            double maxSpeed = MOUSE_MAX_SPEED_PX_PER_S * prefConfig.mouseEmulationSpeedPercent / 100f;
+            double speed = maxSpeed * Math.pow(m, MOUSE_CURVE_EXPONENT);
+            vector.scalarMultiply(speed / magnitude);
         }
         return vector;
     }
 
-    private void sendEmulatedMouseMove(short x, short y) {
-        Vector2d vector = convertRawStickAxisToPixelMovement(x, y);
-        if (vector.getMagnitude() >= 1) {
-
-            short dx = (short) applyMouseSpeedScale((int) vector.getX());
-            short dy = (short) applyMouseSpeedScale((int) -vector.getY());
-
-            if (inputSender != null) {
-                final short fDx = dx;
-                final short fDy = dy;
-                // Route mouse moves through InputSender to keep input single-threaded
-                inputSender.post(() -> conn.sendMouseMove(fDx, fDy));
-            } else {
-                conn.sendMouseMove(dx, dy);
-            }
+    private void sendEmulatedMouseMove(GenericControllerContext context) {
+        if (dialogInputSuspended) return;
+        final int generation = dialogInputGeneration;
+        long now = SystemClock.uptimeMillis();
+        long elapsedMs = Math.max(0, Math.min(50, now - context.mouseLastMoveTime));
+        context.mouseLastMoveTime = now;
+        Vector2d velocity = convertRawStickAxisToPixelMovement(context.rightStickX, context.rightStickY);
+        context.mouseRemainderX += velocity.getX() * elapsedMs / 1000f;
+        context.mouseRemainderY -= velocity.getY() * elapsedMs / 1000f;
+        short dx = (short) context.mouseRemainderX;
+        short dy = (short) context.mouseRemainderY;
+        context.mouseRemainderX -= dx;
+        context.mouseRemainderY -= dy;
+        if (dx == 0 && dy == 0) {
+            return;
+        }
+        if (inputSender != null) {
+            // Route mouse moves through InputSender to keep input single-threaded.
+            inputSender.post(() -> {
+                if (!dialogInputSuspended && generation == dialogInputGeneration) conn.sendMouseMove(dx, dy);
+            });
+        } else {
+            conn.sendMouseMove(dx, dy);
         }
     }
+
     @TargetApi(31)
     private boolean hasDualAmplitudeControlledRumbleVibrators(VibratorManager vm) {
         int[] vibratorIds = vm.getVibratorIds();
@@ -2268,6 +2308,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
 
             @Override
             public void onSensorChanged(SensorEvent sensorEvent) {
+                if (dialogInputSuspended) return;
                 // Android will invoke our callback any time we get a new reading,
                 // even if the values are the same as last time. Don't report a
                 // duplicate set of values to save bandwidth.
@@ -2452,6 +2493,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
     }
 
     public boolean handleButtonUp(KeyEvent event) {
+        if (dialogInputSuspended) return true;
         InputDeviceContext context = getContextForEvent(event);
         if (context == null) {
             return true;
@@ -2699,6 +2741,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
     }
 
     public boolean handleButtonDown(KeyEvent event) {
+        if (dialogInputSuspended) return true;
         InputDeviceContext context = getContextForEvent(event);
         if (context == null) {
             return true;
@@ -2975,7 +3018,9 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
 
         Vector2d rightStickVector = populateCachedVector(rightStickX, rightStickY);
 
-        handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
+        if (!context.mouseEmulationActive) {
+            handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
+        }
 
         context.rightStickX = (short) (rightStickVector.getX() * 0x7FFE);
         context.rightStickY = (short) (-rightStickVector.getY() * 0x7FFE);
@@ -2997,6 +3042,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
 
     @Override
     public void reportControllerMotion(int controllerId, byte motionType, float motionX, float motionY, float motionZ) {
+        if (dialogInputSuspended) return;
         GenericControllerContext context = usbDeviceContexts.get(controllerId);
         if (context == null) {
             return;
@@ -3050,6 +3096,8 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         public short leftStickY = 0x0000;
 
         public boolean mouseEmulationActive;
+        private long mouseLastMoveTime;
+        private float mouseRemainderX, mouseRemainderY;
         private final boolean[] desktopKeys = new boolean[256];
         private final boolean[] desktopMouseButtons = new boolean[2];
         private boolean squareShortcutUsed;
@@ -3067,7 +3115,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                 }
 
                 // Desktop layout always uses the right stick for pointer movement.
-                sendEmulatedMouseMove(rightStickX, rightStickY);
+                sendEmulatedMouseMove(GenericControllerContext.this);
 
                 // Requeue the callback
                 mainThreadHandler.postDelayed(this, mouseEmulationReportPeriod);
@@ -3173,6 +3221,8 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         public void toggleMouseEmulation() {
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
             mouseEmulationActive = !mouseEmulationActive;
+            mouseLastMoveTime = SystemClock.uptimeMillis();
+            mouseRemainderX = mouseRemainderY = 0;
             Toast.makeText(activityContext, "Mouse emulation is: " + (mouseEmulationActive ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
 
             if (mouseEmulationActive) {
