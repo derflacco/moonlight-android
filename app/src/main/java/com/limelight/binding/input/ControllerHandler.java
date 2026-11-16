@@ -87,8 +87,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         context.inputMap = 0;
         context.leftTrigger = context.rightTrigger = 0;
         context.leftStickX = context.leftStickY = context.rightStickX = context.rightStickY = 0;
-        context.mouseLastMoveTime = SystemClock.uptimeMillis();
+        context.mouseLastMoveTime = context.mouseLastScrollTime = SystemClock.uptimeMillis();
         context.mouseRemainderX = context.mouseRemainderY = 0;
+        context.scrollRemainderX = context.scrollRemainderY = 0;
         if (context instanceof InputDeviceContext) {
             InputDeviceContext deviceContext = (InputDeviceContext) context;
             deviceContext.emulatingButtonFlags = 0;
@@ -1726,7 +1727,9 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         if (context.leftStickXAxis != -1 && context.leftStickYAxis != -1) {
             Vector2d leftStickVector = populateCachedVector(lsX, lsY);
 
-            handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
+            if (!context.mouseEmulationActive || !scrollWithLeftStick()) {
+                handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
+            }
 
             context.leftStickX = (short) (leftStickVector.getX() * 0x7FFE);
             context.leftStickY = (short) (-leftStickVector.getY() * 0x7FFE);
@@ -2021,6 +2024,41 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         } else {
             conn.sendMouseMove(dx, dy);
         }
+    }
+
+    private boolean scrollWithLeftStick() {
+        return prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.LEFT;
+    }
+
+    private void sendEmulatedMouseScroll(GenericControllerContext context) {
+        if (dialogInputSuspended) return;
+        final int generation = dialogInputGeneration;
+        long now = SystemClock.uptimeMillis();
+        long elapsedMs = Math.max(0, Math.min(50, now - context.mouseLastScrollTime));
+        context.mouseLastScrollTime = now;
+        if (!scrollWithLeftStick()) {
+            context.scrollRemainderX = context.scrollRemainderY = 0;
+            return;
+        }
+        // Use the same radial curve and speed percentage, in high-resolution wheel units.
+        // Positive stick Y is up, matching positive vertical wheel motion (120 units/notch).
+        Vector2d velocity = convertRawStickAxisToPixelMovement(context.leftStickX, context.leftStickY);
+        context.scrollRemainderX += velocity.getX() * elapsedMs / 1000f;
+        context.scrollRemainderY += velocity.getY() * elapsedMs / 1000f;
+        short dx = (short) context.scrollRemainderX;
+        short dy = (short) context.scrollRemainderY;
+        context.scrollRemainderX -= dx;
+        context.scrollRemainderY -= dy;
+        if (dx == 0 && dy == 0) return;
+        Runnable send = () -> {
+            if (!dialogInputSuspended && generation == dialogInputGeneration
+                    && context.mouseEmulationActive && scrollWithLeftStick()) {
+                if (dy != 0) conn.sendMouseHighResScroll(dy);
+                if (dx != 0) conn.sendMouseHighResHScroll(dx);
+            }
+        };
+        if (inputSender != null) inputSender.post(send);
+        else send.run();
     }
 
     @TargetApi(31)
@@ -3011,7 +3049,9 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
 
         Vector2d leftStickVector = populateCachedVector(leftStickX, leftStickY);
 
-        handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
+        if (!context.mouseEmulationActive || !scrollWithLeftStick()) {
+            handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
+        }
 
         context.leftStickX = (short) (leftStickVector.getX() * 0x7FFE);
         context.leftStickY = (short) (-leftStickVector.getY() * 0x7FFE);
@@ -3098,6 +3138,8 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         public boolean mouseEmulationActive;
         private long mouseLastMoveTime;
         private float mouseRemainderX, mouseRemainderY;
+        private long mouseLastScrollTime;
+        private float scrollRemainderX, scrollRemainderY;
         private final boolean[] desktopKeys = new boolean[256];
         private final boolean[] desktopMouseButtons = new boolean[2];
         private boolean squareShortcutUsed;
@@ -3115,7 +3157,12 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
                 }
 
                 // Desktop layout always uses the right stick for pointer movement.
-                sendEmulatedMouseMove(GenericControllerContext.this);
+                if (!dialogInputSuspended) {
+                    // Reconcile arrows even if the scroll preference changes while a stick is held.
+                    updateDesktopArrows(mouseEmulationLastInputMap, leftStickX, leftStickY);
+                    sendEmulatedMouseMove(GenericControllerContext.this);
+                    sendEmulatedMouseScroll(GenericControllerContext.this);
+                }
 
                 // Requeue the callback
                 mainThreadHandler.postDelayed(this, mouseEmulationReportPeriod);
@@ -3160,6 +3207,14 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             }
         }
 
+        private void updateDesktopArrows(int buttons, short lx, short ly) {
+            boolean arrows = !scrollWithLeftStick();
+            setDesktopKey(0x26, (arrows && ly > 16383) || (buttons & ControllerPacket.UP_FLAG) != 0);
+            setDesktopKey(0x28, (arrows && ly < -16383) || (buttons & ControllerPacket.DOWN_FLAG) != 0);
+            setDesktopKey(0x25, (arrows && lx < -16383) || (buttons & ControllerPacket.LEFT_FLAG) != 0);
+            setDesktopKey(0x27, (arrows && lx > 16383) || (buttons & ControllerPacket.RIGHT_FLAG) != 0);
+        }
+
         private void updateDesktopInput(int buttons, byte lt, byte rt, short lx, short ly) {
             int changed = buttons ^ mouseEmulationLastInputMap;
             mouseEmulationLastInputMap = buttons;
@@ -3167,10 +3222,7 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
             setDesktopKey(0xA0, (buttons & ControllerPacket.RS_CLK_FLAG) != 0);
             setDesktopKey(0xA2, (buttons & ControllerPacket.LB_FLAG) != 0);
             setDesktopKey(0xA4, (buttons & ControllerPacket.RB_FLAG) != 0);
-            setDesktopKey(0x26, ly > 16383 || (buttons & ControllerPacket.UP_FLAG) != 0);
-            setDesktopKey(0x28, ly < -16383 || (buttons & ControllerPacket.DOWN_FLAG) != 0);
-            setDesktopKey(0x25, lx < -16383 || (buttons & ControllerPacket.LEFT_FLAG) != 0);
-            setDesktopKey(0x27, lx > 16383 || (buttons & ControllerPacket.RIGHT_FLAG) != 0);
+            updateDesktopArrows(buttons, lx, ly);
             setDesktopKey(0x0D, (buttons & ControllerPacket.A_FLAG) != 0);
             setDesktopKey(0x20, (buttons & ControllerPacket.B_FLAG) != 0);
             setDesktopKey(0x22, (buttons & ControllerPacket.Y_FLAG) != 0);
@@ -3221,8 +3273,9 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         public void toggleMouseEmulation() {
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
             mouseEmulationActive = !mouseEmulationActive;
-            mouseLastMoveTime = SystemClock.uptimeMillis();
+            mouseLastMoveTime = mouseLastScrollTime = SystemClock.uptimeMillis();
             mouseRemainderX = mouseRemainderY = 0;
+            scrollRemainderX = scrollRemainderY = 0;
             Toast.makeText(activityContext, "Mouse emulation is: " + (mouseEmulationActive ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
 
             if (mouseEmulationActive) {

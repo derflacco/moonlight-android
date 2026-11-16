@@ -265,7 +265,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
     private static final boolean DEFAULT_REMEMBER_MOUSE_MODE = false;
-    private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "right";
+    private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "none";
     private static final boolean DEFAULT_MOUSE_NAV_BUTTONS = false;
     private static final boolean DEFAULT_UNLOCK_FPS = false;
     private static final boolean DEFAULT_VIBRATE_OSC = true;
@@ -821,10 +821,7 @@ public class PreferenceConfiguration {
         SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
 
         String str = prefs.getString(ANALOG_SCROLLING_PREF_STRING, DEFAULT_ANALOG_STICK_FOR_SCROLLING);
-        if (str.equals("right")) {
-            return AnalogStickForScrolling.RIGHT;
-        }
-        else if (str.equals("left")) {
+        if ("left".equals(str)) {
             return AnalogStickForScrolling.LEFT;
         }
         else {

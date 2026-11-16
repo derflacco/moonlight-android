@@ -886,4 +886,8 @@
         <item>prime_little</item>
     </string-array>
 
+    <string name="title_left_stick_scrolling">Scroll with left stick (mouse mode)</string>
+    <string name="summary_left_stick_scrolling">Choose scrolling or arrow keys for the left stick; the right stick always moves the cursor</string>
+    <string name="left_stick_scrolling_off">Off – left stick = arrow keys (Steam default)</string>
+    <string name="left_stick_scrolling_on">On – left stick scrolls</string>
 </resources>

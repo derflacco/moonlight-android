@@ -475,13 +475,13 @@
             seekbar:step="5"
             seekbar:keyStep="5" />
         <ListPreference
-            android:defaultValue="right"
+            android:defaultValue="none"
             android:dependency="checkbox_mouse_emulation"
-            android:entries="@array/analog_scrolling_names"
-            android:entryValues="@array/analog_scrolling_values"
+            android:entries="@array/left_stick_scrolling_names"
+            android:entryValues="@array/left_stick_scrolling_values"
             android:key="analog_scrolling"
-            android:summary="@string/summary_analog_scrolling"
-            android:title="@string/title_analog_scrolling"
+            android:summary="@string/summary_left_stick_scrolling"
+            android:title="@string/title_left_stick_scrolling"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
