@@ -130,6 +130,7 @@ public class GameMenu implements Game.GameMenuCallbacks {
             currentDialog.dismiss();
         }
         currentDialog = builder.show();
+        game.menuNavigation.attach(currentDialog);
 
         Window window = currentDialog.getWindow();
 
@@ -304,10 +305,11 @@ public class GameMenu implements Game.GameMenuCallbacks {
                     if (serverCmds.isEmpty()) {
                         int themeResId = game.getApplicationInfo().theme;
                         Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
-                        new AlertDialog.Builder(themedContext)
+                        AlertDialog messageDialog = new AlertDialog.Builder(themedContext)
                                 .setTitle(R.string.game_dialog_title_server_cmd_empty)
                                 .setMessage(R.string.game_dialog_message_server_cmd_empty)
                                 .show();
+                        game.menuNavigation.attach(messageDialog);
                     } else {
                         hideMenu();
                         this.showServerCmd(serverCmds);
@@ -343,6 +345,6 @@ public class GameMenu implements Game.GameMenuCallbacks {
 
     @Override
     public boolean isMenuOpen() {
-        return currentDialog != null && currentDialog.isShowing();
+        return game.menuNavigation.isOpen();
     }
 }

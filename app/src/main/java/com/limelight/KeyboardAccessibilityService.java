@@ -20,6 +20,14 @@ public class KeyboardAccessibilityService extends AccessibilityService {
 
     @Override
     public boolean onKeyEvent(KeyEvent event) {
+        if (Game.instance != null && Game.instance.menuNavigation.handleKeyEvent(event)) {
+            return true;
+        }
+
+        if (!InputRouting.shouldSendToStream(this, event.getDevice())) {
+            return false;
+        }
+
         int action = event.getAction();
         int keyCode = event.getKeyCode();
 //        Toast.makeText(getApplicationContext(),"scancode:"+event.getScanCode()+",code:"+event.getKeyCode(),Toast.LENGTH_LONG).show();

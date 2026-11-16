@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="input_devices_title">Input devices</string>
+    <string name="input_routing_auto">Auto</string>
+    <string name="input_routing_stream">Send to stream</string>
+    <string name="input_routing_tv">Leave for TV</string>
+    <string name="input_routing_always_stream">Always send to stream</string>
+    <string name="input_routing_always_tv">Always leave for TV</string>
+    <string name="input_routing_patterns_summary">Comma-separated device name substrings, ignoring case. Per-device choices take priority. If both lists match, Leave for TV wins.</string>
+    <string name="input_routing_connected">Connected physical devices</string>
+    <string name="input_routing_empty">No physical input devices connected</string>
     <!-- Shortcut strings -->
     <string name="scut_deleted_pc">PC deleted</string>
     <string name="scut_not_paired">PC not paired</string>
@@ -239,6 +248,8 @@
     <string name="title_checkbox_usb_bind_all">Override native Xbox gamepad support</string>
     <string name="summary_checkbox_usb_bind_all">Use Artemis\'s USB driver for all supported gamepads, even if native Xbox/Nintendo Pro controller support is present</string>
     <string name="title_checkbox_mouse_emulation">Mouse emulation via gamepad</string>
+    <string name="title_mouse_emulation_speed">Mouse emulation speed</string>
+    <string name="summary_mouse_emulation_speed">Cursor speed when a controller is in mouse mode (100% ≈ Steam default)</string>
     <string name="summary_checkbox_mouse_emulation">Long-press the Start button to toggle between gamepad and mouse mode</string>
     <string name="title_checkbox_remember_mouse_mode">Remember mouse mode</string>
     <string name="summary_checkbox_remember_mouse_mode">Remember mouse mode selected during stream. When disabled, mouse mode changed during stream will be temporary.</string>
@@ -875,4 +886,8 @@
         <item>prime_little</item>
     </string-array>
 
+    <string name="title_left_stick_scrolling">Scroll with left stick (mouse mode)</string>
+    <string name="summary_left_stick_scrolling">Choose scrolling or arrow keys for the left stick; the right stick always moves the cursor</string>
+    <string name="left_stick_scrolling_off">Off – left stick = arrow keys (Steam default)</string>
+    <string name="left_stick_scrolling_on">On – left stick scrolls</string>
 </resources>

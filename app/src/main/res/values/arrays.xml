@@ -138,6 +138,15 @@
         <item>gpu-raw</item>
     </string-array>
 
+    <string-array name="left_stick_scrolling_names">
+        <item>@string/left_stick_scrolling_off</item>
+        <item>@string/left_stick_scrolling_on</item>
+    </string-array>
+    <string-array name="left_stick_scrolling_values" translatable="false">
+        <item>none</item>
+        <item>left</item>
+    </string-array>
+
     <string-array name="analog_scrolling_names">
         <item>@string/analogscroll_none</item>
         <item>@string/analogscroll_right</item>

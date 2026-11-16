@@ -462,14 +462,26 @@
             android:summary="@string/summary_checkbox_mouse_emulation"
             android:title="@string/title_checkbox_mouse_emulation"
             app:iconSpaceReserved="false" />
-        <ListPreference
-            android:defaultValue="right"
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="100"
             android:dependency="checkbox_mouse_emulation"
-            android:entries="@array/analog_scrolling_names"
-            android:entryValues="@array/analog_scrolling_values"
+            android:key="seekbar_mouse_emulation_speed"
+            android:max="300"
+            android:summary="@string/summary_mouse_emulation_speed"
+            android:text="%"
+            android:title="@string/title_mouse_emulation_speed"
+            app:iconSpaceReserved="false"
+            seekbar:min="25"
+            seekbar:step="5"
+            seekbar:keyStep="5" />
+        <ListPreference
+            android:defaultValue="none"
+            android:dependency="checkbox_mouse_emulation"
+            android:entries="@array/left_stick_scrolling_names"
+            android:entryValues="@array/left_stick_scrolling_values"
             android:key="analog_scrolling"
-            android:summary="@string/summary_analog_scrolling"
-            android:title="@string/title_analog_scrolling"
+            android:summary="@string/summary_left_stick_scrolling"
+            android:title="@string/title_left_stick_scrolling"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
@@ -552,6 +564,10 @@
         android:title="@string/category_input_settings"
         app:initialExpandedChildrenCount="1"
         app:iconSpaceReserved="false">
+        <Preference
+            android:key="input_devices"
+            android:title="@string/input_devices_title"
+            app:iconSpaceReserved="false" />
         <ListPreference
             android:defaultValue="0"
             android:entries="@array/mouse_mode_names"
