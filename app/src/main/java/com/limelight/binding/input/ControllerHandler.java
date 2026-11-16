@@ -3273,7 +3273,6 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
         }
 
         public void destroy() {
-        if (inputSender != null) { try { inputSender.shutdown(); } catch (Throwable ignored) {} }
             mouseEmulationActive = false;
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
         }
@@ -3380,7 +3379,6 @@ if (this.prefConfig != null && this.prefConfig.snappyInput) {
 
         @Override
         public void destroy() {
-        if (inputSender != null) { try { inputSender.shutdown(); } catch (Throwable ignored) {} }
             super.destroy();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && vibratorManager != null) {
