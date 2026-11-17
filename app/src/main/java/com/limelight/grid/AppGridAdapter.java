@@ -1,6 +1,7 @@
 package com.limelight.grid;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.BitmapFactory;
 import android.view.View;
 import android.widget.ImageView;
@@ -22,6 +23,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Set;
 
@@ -38,6 +41,8 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
     private CachedAppAssetLoader loader;
     private Set<Integer> hiddenAppIds = new HashSet<>();
     private ArrayList<AppView.AppObject> allApps = new ArrayList<>();
+    private final Map<Integer, Integer> savedOrder = new HashMap<>();
+    private final SharedPreferences orderPreferences;
 
     public AppGridAdapter(Context context, PreferenceConfiguration prefs, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
         super(context, getLayoutIdForPreferences(prefs));
@@ -135,6 +140,50 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
                 }
             }
         });
+    }
+
+    private void applySavedOrder() {
+        if (savedOrder.isEmpty()) {
+            sortList(itemList);
+            sortList(allApps);
+            return;
+        }
+        Comparator<AppView.AppObject> comparator = (lhs, rhs) -> {
+            Integer left = savedOrder.get(lhs.app.getAppId());
+            Integer right = savedOrder.get(rhs.app.getAppId());
+            if (left != null && right != null) return left - right;
+            if (left != null) return -1;
+            if (right != null) return 1;
+            int index = lhs.app.getAppIndex() - rhs.app.getAppIndex();
+            return index != 0 ? index : lhs.app.getAppName().compareToIgnoreCase(rhs.app.getAppName());
+        };
+        Collections.sort(itemList, comparator);
+        Collections.sort(allApps, comparator);
+    }
+
+    public void moveApp(int from, int to) {
+        if (from < 0 || to < 0 || from >= itemList.size() || to >= itemList.size() || from == to) return;
+        AppView.AppObject moved = itemList.remove(from);
+        itemList.add(to, moved);
+        savedOrder.clear();
+        StringBuilder value = new StringBuilder();
+        for (AppView.AppObject app : itemList) {
+            int id = app.app.getAppId();
+            savedOrder.put(id, savedOrder.size());
+            if (value.length() > 0) value.append(',');
+            value.append(id);
+        }
+        for (AppView.AppObject app : allApps) {
+            int id = app.app.getAppId();
+            if (!savedOrder.containsKey(id)) {
+                savedOrder.put(id, savedOrder.size());
+                if (value.length() > 0) value.append(',');
+                value.append(id);
+            }
+        }
+        orderPreferences.edit().putString(computer.uuid, value.toString()).apply();
+        applySavedOrder();
+        notifyDataSetChanged();
     }
 
     public void addApp(AppView.AppObject app) {
