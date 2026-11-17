@@ -762,5 +762,6 @@
     <string name="quick_menu_advanced_task_manager">Task-Manager öffnen</string>
     <string name="quick_menu_advanced_special_keys">Sondertasten</string>
     <string name="quick_menu_advanced_touch_sensitivity">Touch-Empfindlichkeit wechseln</string>
+    <string name="quick_menu_advanced_device_options">Controller-spezifische Menüeinträge</string>
 </resources>
 
