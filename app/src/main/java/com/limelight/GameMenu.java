@@ -247,8 +247,7 @@ public class GameMenu implements Game.GameMenuCallbacks {
         showMenuDialog(getString(R.string.game_menu_send_keys), options.toArray(new MenuOption[options.size()]));
     }
 
-    private void showAdvancedMenu(GameInputDevice device) {
-        List<MenuOption> options = new ArrayList<>();
+    private void addAdvancedMenuOptions(List<MenuOption> options, GameInputDevice device) {
 
         if (game.allowChangeMouseMode && isQuickMenuOptionEnabled("quick_menu_advanced_mouse_mode")) {
             options.add(new MenuOption(getString(R.string.game_menu_select_mouse_mode), true, () -> game.selectMouseMode(dialogScreenContext)));
@@ -284,8 +283,6 @@ public class GameMenu implements Game.GameMenuCallbacks {
         if (device != null && isQuickMenuOptionEnabled("quick_menu_advanced_device_options")) {
             options.addAll(device.getGameMenuOptions());
         }
-        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
-        showMenuDialog(getString(R.string.game_menu_advanced), options.toArray(new MenuOption[options.size()]));
     }
 
     private void showServerCmd(ArrayList<String> serverCmds) {
@@ -349,8 +346,7 @@ public class GameMenu implements Game.GameMenuCallbacks {
                     game::rotateScreen));
         }
         if (isQuickMenuOptionEnabled("quick_menu_advanced")) {
-            options.add(new MenuOption(getString(R.string.game_menu_advanced), true,
-                    () -> showAdvancedMenu(device)));
+            addAdvancedMenuOptions(options, device);
         }
 
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
