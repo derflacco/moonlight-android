@@ -120,7 +120,6 @@ public final class SteamGridDbClient {
             return;
         }
 
-        Context appContext = context.getApplicationContext();
         String key = apiKey.trim();
         String name = gameName.trim();
         EXECUTOR.execute(() -> {
