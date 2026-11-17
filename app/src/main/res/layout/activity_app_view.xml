@@ -49,6 +49,19 @@
                 android:textStyle="bold" />
 
             <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/backgroundButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:contentDescription="@string/background_options_title"
+                android:text="@string/background_button"
+                android:textColor="@color/deck_text_primary"
+                app:backgroundTint="@color/deck_surface_raised"
+                app:icon="@drawable/ic_settings"
+                app:iconTint="@color/deck_accent"
+                app:rippleColor="@color/deck_ripple" />
+
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
                 android:id="@+id/profilesButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
