@@ -422,7 +422,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             steamGridDbApiKey = configuredApiKey.trim();
             lastArtworkAppId = -1;
             if (selectedApp != null) {
-                loadSteamGridDbArtwork(selectedApp);
+                updateSelectedApp(selectedApp, selectedItemView);
             }
         }
         startComputerUpdates();
