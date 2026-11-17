@@ -5,7 +5,6 @@
     android:layout_margin="5dp"
     android:background="@drawable/deck_pc_card"
     android:focusable="true"
-    android:focusableInTouchMode="true"
     android:padding="12dp">
 
     <RelativeLayout
