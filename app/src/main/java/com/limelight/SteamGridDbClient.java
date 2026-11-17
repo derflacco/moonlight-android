@@ -18,6 +18,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -45,6 +47,14 @@ public final class SteamGridDbClient {
 
     public interface Callback {
         void onArtworkLoaded(Artwork artwork);
+    }
+
+    public interface HeroOptionsCallback {
+        void onHeroesLoaded(List<String> urls);
+    }
+
+    public interface ImageCallback {
+        void onImageLoaded(Bitmap bitmap);
     }
 
     private SteamGridDbClient() {
@@ -96,6 +106,72 @@ public final class SteamGridDbClient {
             }
             postResult(callback, new Artwork(hero, logo));
         });
+    }
+
+    /**
+     * Loads all available hero artwork URLs for a game so the user can choose
+     * a preferred background instead of being locked to the first result.
+     */
+    public static void loadHeroOptions(Context context, String gameName, String apiKey,
+                                       HeroOptionsCallback callback) {
+        if (context == null || gameName == null || gameName.trim().isEmpty() ||
+                apiKey == null || apiKey.trim().isEmpty()) {
+            postHeroOptions(callback, new ArrayList<>());
+            return;
+        }
+
+        Context appContext = context.getApplicationContext();
+        String key = apiKey.trim();
+        String name = gameName.trim();
+        EXECUTOR.execute(() -> {
+            List<String> urls = new ArrayList<>();
+            try {
+                String encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.name());
+                JSONObject search = getJson(API_ROOT + "/search/autocomplete/" + encodedName, key);
+                JSONArray matches = search.optJSONArray("data");
+                if (matches != null && matches.length() > 0) {
+                    int gameId = matches.getJSONObject(0).optInt("id", -1);
+                    if (gameId >= 0) {
+                        JSONObject heroes = getJson(API_ROOT + "/heroes/game/" + gameId, key);
+                        JSONArray data = heroes.optJSONArray("data");
+                        if (data != null) {
+                            for (int i = 0; i < data.length(); i++) {
+                                JSONObject asset = data.optJSONObject(i);
+                                if (asset == null) continue;
+                                String url = asset.optString("url", "");
+                                if (url.isEmpty()) url = asset.optString("thumb", "");
+                                if (!url.isEmpty() && !urls.contains(url)) urls.add(url);
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LimeLog.warning("SteamGridDB hero list lookup failed: " + e.getMessage());
+            }
+            postHeroOptions(callback, urls);
+        });
+    }
+
+    /** Downloads a selected hero image off the UI thread and returns it on the main thread. */
+    public static void loadImage(Context context, String url, ImageCallback callback) {
+        if (context == null || url == null || url.trim().isEmpty()) {
+            if (callback != null) MAIN_HANDLER.post(() -> callback.onImageLoaded(null));
+            return;
+        }
+
+        Context appContext = context.getApplicationContext();
+        String imageUrl = url.trim();
+        EXECUTOR.execute(() -> {
+            Bitmap bitmap = downloadBitmap(appContext, imageUrl,
+                    "steamgriddb_hero_" + Integer.toHexString(imageUrl.hashCode()));
+            if (callback != null) MAIN_HANDLER.post(() -> callback.onImageLoaded(bitmap));
+        });
+    }
+
+    private static void postHeroOptions(HeroOptionsCallback callback, List<String> urls) {
+        if (callback != null) {
+            MAIN_HANDLER.post(() -> callback.onHeroesLoaded(urls));
+        }
     }
 
     private static JSONObject getJson(String url, String apiKey) throws IOException {
