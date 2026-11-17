@@ -281,7 +281,7 @@ public class GameMenu implements Game.GameMenuCallbacks {
         if (isQuickMenuOptionEnabled("quick_menu_advanced_touch_sensitivity")) {
             options.add(new MenuOption(getString(R.string.game_menu_switch_touch_sensitivity_model), true, game::switchTouchSensitivity));
         }
-        if (device != null) {
+        if (device != null && isQuickMenuOptionEnabled("quick_menu_advanced_device_options")) {
             options.addAll(device.getGameMenuOptions());
         }
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
