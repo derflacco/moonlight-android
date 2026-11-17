@@ -28,6 +28,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Service;
 import android.content.ComponentName;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
@@ -39,6 +40,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.ContextMenu;
+import android.view.DragEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -1083,6 +1085,41 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         gallery.setAdapter(appGridAdapter);
         gallery.setOnItemClickListener((parent, view, position, id) ->
                 handleAppClick((AppObject) appGridAdapter.getItem(position), view));
+        gallery.setOnItemLongClickListener((parent, view, position, id) -> {
+            ClipData data = ClipData.newPlainText("app-position", Integer.toString(position));
+            View.DragShadowBuilder shadow = new View.DragShadowBuilder(view);
+            view.startDrag(data, shadow, Integer.valueOf(position), 0);
+            return true;
+        });
+        gallery.setOnDragListener((target, event) -> {
+            switch (event.getAction()) {
+                case DragEvent.ACTION_DRAG_STARTED:
+                    return event.getLocalState() instanceof Integer;
+                case DragEvent.ACTION_DRAG_ENTERED:
+                case DragEvent.ACTION_DRAG_LOCATION:
+                case DragEvent.ACTION_DRAG_EXITED:
+                    return true;
+                case DragEvent.ACTION_DROP:
+                    if (!(event.getLocalState() instanceof Integer)) return false;
+                    int from = (Integer) event.getLocalState();
+                    int to = -1;
+                    float nearest = Float.MAX_VALUE;
+                    for (int i = 0; i < gallery.getChildCount(); i++) {
+                        View child = gallery.getChildAt(i);
+                        float distance = Math.abs(event.getX() - (child.getLeft() + child.getRight()) / 2.0f);
+                        if (distance < nearest) {
+                            nearest = distance;
+                            to = gallery.getPositionForView(child);
+                        }
+                    }
+                    if (to >= 0) appGridAdapter.moveApp(from, to);
+                    return to >= 0;
+                case DragEvent.ACTION_DRAG_ENDED:
+                    return true;
+                default:
+                    return true;
+            }
+        });
         gallery.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
