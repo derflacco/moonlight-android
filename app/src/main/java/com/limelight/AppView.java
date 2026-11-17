@@ -684,11 +684,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     }
 
     private String getLocalBackgroundKey(int appId) {
-        return "deck_background_uri_" + appId;
+        return "deck_background_uri_" + (uuidString == null ? "default" : uuidString) + "_" + appId;
     }
 
     private String getSteamGridDbBackgroundKey(int appId) {
-        return "deck_background_url_" + appId;
+        return "deck_background_url_" + (uuidString == null ? "default" : uuidString) + "_" + appId;
     }
 
     private int dp(int value) {
