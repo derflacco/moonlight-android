@@ -12,7 +12,9 @@ android {
         targetSdk 34
 
         versionName "20.2.6"
-        versionCode = 57
+        // Keep CI builds upgradeable: each workflow run gets a monotonically increasing code.
+        def ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode = ciRunNumber != null ? 57 + ciRunNumber.toInteger() : 58
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
@@ -93,8 +95,27 @@ android {
         }
     }
 
+    def stableSigningPath = System.getenv("MOONLIGHT_KEYSTORE_PATH")
+    def hasStableSigning = stableSigningPath != null && !stableSigningPath.isEmpty()
+
+    signingConfigs {
+        stableDebug {
+            if (hasStableSigning) {
+                storeFile file(stableSigningPath)
+                storePassword System.getenv("MOONLIGHT_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("MOONLIGHT_KEY_ALIAS")
+                keyPassword System.getenv("MOONLIGHT_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
+            // CI supplies one long-lived private keystore through GitHub Actions secrets.
+            // Local debug builds keep using the standard Android debug keystore.
+            if (hasStableSigning) {
+                signingConfig signingConfigs.stableDebug
+            }
             applicationIdSuffix ".noirdebug"
             resValue "string", "app_label", "Diana"
             resValue "string", "app_label_root", "Diana (Root)"
