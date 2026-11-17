@@ -24,30 +24,21 @@
         <requestFocus />
     </com.limelight.ui.StreamView>
 
-<!--    <com.limelight.ui.ApertureViewGroup-->
-<!--        android:layout_width="match_parent"-->
-<!--        android:layout_height="match_parent"-->
-<!--        app:aperture_color1="#5CF950"-->
-<!--        android:layout_gravity="center"-->
-<!--        android:padding="5dp"-->
-<!--        app:aperture_color2="#FC9595"-->
-<!--        app:aperture_border_width="10dp"-->
-<!--        app:aperture_border_angle="24dp"-->
-<!--        app:aperture_duration="6000"-->
-<!--        app:aperture_middle_color="#6CD2F8">-->
-<!--    </com.limelight.ui.ApertureViewGroup>-->
-
     <TextView
         android:id="@+id/notificationOverlay"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginRight="10dp"
-        android:layout_marginEnd="10dp"
-        android:layout_marginTop="10dp"
-        android:layout_gravity="right"
-        android:textAppearance="?android:attr/textAppearanceLarge"
-        android:gravity="right"
-        android:background="#80000000"
+        android:layout_marginEnd="14dp"
+        android:layout_marginTop="14dp"
+        android:layout_gravity="end"
+        android:background="@drawable/ic_hud_bg"
+        android:gravity="end|center_vertical"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/deck_text_primary"
+        android:textSize="14sp"
         android:preferKeepClear="true"
         android:visibility="gone" />
 
@@ -61,57 +52,62 @@
             android:id="@+id/performanceOverlayBig"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="10dp"
-            android:layout_marginStart="10dp"
-            android:layout_marginTop="10dp"
-            android:layout_gravity="left"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:gravity="left"
-            android:background="#80000000"
+            android:layout_marginStart="14dp"
+            android:layout_marginTop="14dp"
+            android:layout_gravity="start"
+            android:background="@drawable/ic_hud_bg"
+            android:gravity="start"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:textColor="@color/deck_text_primary"
+            android:textSize="13sp"
             android:preferKeepClear="true"
             android:visibility="gone" />
 
         <TextView
             android:id="@+id/performanceOverlayLite"
-            tools:text="延迟/解码：109ms/7ms 丢包率：69% FPS：60"
-            android:textSize="10sp"
-            android:layout_marginTop="4dp"
+            tools:text="Latency / decode: 109ms / 7ms  Packet loss: 0%  FPS: 60"
+            android:textSize="11sp"
+            android:layout_marginTop="6dp"
             android:background="@drawable/ic_hud_bg"
-            android:paddingLeft="5dp"
-            android:paddingRight="5dp"
-            android:paddingTop="2dp"
-            android:paddingBottom="2dp"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="5dp"
+            android:paddingBottom="5dp"
+            android:textColor="@color/deck_text_primary"
             android:visibility="gone"
-            android:textAppearance="?android:attr/textAppearanceLarge"
             android:layout_gravity="center_horizontal"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
+            android:layout_height="wrap_content" />
 
     </LinearLayout>
 
-    <!-- Floating Menu Button -->
     <ImageButton
         android:id="@+id/floatingMenuButton"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
         android:layout_gravity="top|start"
         android:layout_marginTop="24dp"
+        android:layout_marginStart="12dp"
         android:background="@drawable/floating_menu_button"
         android:contentDescription="@string/menu_button"
         android:src="@drawable/ic_menu"
-        android:padding="6dp"
+        android:padding="10dp"
+        android:scaleType="fitCenter"
         android:visibility="gone"
         android:elevation="9999dp" />
 
     <ImageButton
         android:id="@+id/overlayToggleZoomButton"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
         android:layout_gravity="top|center_horizontal"
         android:layout_marginTop="24dp"
         android:background="@drawable/floating_menu_button"
         android:src="@drawable/ic_zoom_toggle"
-        android:padding="6dp"
+        android:padding="10dp"
         android:scaleType="fitCenter"
         android:contentDescription="@string/toggle_pan_zoom_mode"
         android:visibility="gone"

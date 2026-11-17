@@ -1,18 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/deck_background">
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/profilesToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_alignParentTop="true"
+        android:background="@color/deck_surface"
+        android:elevation="0dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="12dp"
+        app:title="Profiles"
+        app:titleTextColor="@color/deck_text_primary" />
 
     <TextView
         android:id="@+id/profilesDescription"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="8dp"
+        android:layout_below="@id/profilesToolbar"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="14dp"
+        android:layout_marginEnd="20dp"
+        android:layout_marginBottom="10dp"
         android:text="@string/profile_manager_profiles_description"
-        android:textColor="#CCCCCC"
+        android:textColor="@color/deck_text_secondary"
         android:textSize="14sp" />
 
     <androidx.recyclerview.widget.RecyclerView
@@ -20,25 +35,26 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_below="@id/profilesDescription"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="16dp"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp" />
+        android:clipToPadding="false"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="92dp" />
 
     <LinearLayout
         android:id="@+id/emptyState"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_centerInParent="true"
-        android:orientation="vertical"
         android:gravity="center"
+        android:orientation="vertical"
+        android:padding="28dp"
         android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/profile_manager_no_profiles_yet"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/deck_text_primary"
             android:textSize="18sp"
             android:textStyle="bold" />
 
@@ -46,10 +62,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
+            android:gravity="center"
             android:text="@string/profile_manager_tap_create_profile"
-            android:textColor="#CCCCCC"
+            android:textColor="@color/deck_text_secondary"
             android:textSize="14sp" />
-
     </LinearLayout>
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -58,10 +74,10 @@
         android:layout_height="wrap_content"
         android:layout_alignParentEnd="true"
         android:layout_alignParentBottom="true"
-        android:layout_margin="16dp"
-        android:layout_marginEnd="24dp"
-        android:layout_marginBottom="24dp"
+        android:layout_margin="22dp"
         android:contentDescription="@string/profile_manager_new_profile"
-        android:src="@drawable/ic_add_base" />
+        android:src="@drawable/ic_add_base"
+        app:backgroundTint="@color/deck_accent"
+        app:tint="@color/deck_background" />
 
 </RelativeLayout>

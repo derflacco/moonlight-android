@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="profileAccent">#FF4081</color>
+    <color name="deck_background">#101116</color>
+    <color name="deck_surface">#1B1D25</color>
+    <color name="deck_surface_raised">#272A35</color>
+    <color name="deck_surface_highlight">#343846</color>
+    <color name="deck_accent">#8B7CFF</color>
+    <color name="deck_accent_bright">#A99EFF</color>
+    <color name="deck_text_primary">#F5F5FA</color>
+    <color name="deck_text_secondary">#A6A8B5</color>
+    <color name="deck_text_muted">#777B89</color>
+    <color name="deck_ripple">#448B7CFF</color>
+    <color name="deck_danger">#FF7185</color>
 </resources>

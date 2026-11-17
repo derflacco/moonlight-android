@@ -1,8 +1,33 @@
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/stream_settings"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/deck_background"
     tools:context=".preferences.StreamSettings">
 
-</RelativeLayout>
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/streamSettingsToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:background="@color/deck_surface"
+        android:elevation="0dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="12dp"
+        app:title="Streaming Settings"
+        app:titleTextColor="@color/deck_text_primary"
+        app:subtitleTextColor="@color/deck_text_secondary" />
+
+    <FrameLayout
+        android:id="@+id/stream_settings"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@color/deck_background"
+        android:clipToPadding="false"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp" />
+
+</LinearLayout>
