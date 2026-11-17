@@ -4,8 +4,6 @@
     android:layout_width="126dp"
     android:layout_height="164dp"
     android:padding="3dp"
-    android:focusable="true"
-    android:focusableInTouchMode="false"
     android:background="@drawable/deck_focus_overlay">
 
     <androidx.cardview.widget.CardView
