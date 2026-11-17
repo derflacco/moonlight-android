@@ -888,7 +888,8 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     }
 
     @Override
-    public void receiveAbsListView(AbsListView listView) {
+    public void receiveAdapterView(AdapterView<?> adapterView) {
+        AbsListView listView = (AbsListView) adapterView;
         listView.setAdapter(pcGridAdapter);
         listView.setOnItemClickListener(new OnItemClickListener() {
             @Override

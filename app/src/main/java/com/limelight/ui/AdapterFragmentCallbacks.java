@@ -1,8 +1,8 @@
 package com.limelight.ui;
 
-import android.widget.AbsListView;
+import android.widget.AdapterView;
 
 public interface AdapterFragmentCallbacks {
     int getAdapterFragmentLayoutId();
-    void receiveAbsListView(AbsListView gridView);
+    void receiveAdapterView(AdapterView<?> adapterView);
 }

@@ -1001,4 +1001,17 @@
             android:title="@string/title_follow_update"
             app:iconSpaceReserved="false" />
     </PreferenceCategory>
+    <PreferenceCategory
+        android:key="category_game_artwork"
+        android:title="@string/title_artwork_settings"
+        app:iconSpaceReserved="false">
+        <EditTextPreference
+            android:key="steamgriddb_api_key"
+            android:title="@string/title_steamgriddb_api_key"
+            android:summary="@string/summary_steamgriddb_api_key"
+            android:dialogTitle="@string/title_steamgriddb_api_key"
+            android:inputType="textPassword"
+            android:singleLine="true"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
 </PreferenceScreen>

@@ -46,12 +46,14 @@ import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageView;
+import android.widget.Gallery;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.preference.PreferenceManager;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -71,6 +73,14 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private HashSet<Integer> hiddenAppIds = new HashSet<>();
 
     private PreferenceConfiguration prefConfig;
+    private ImageView gameHeroBackground;
+    private ImageView gameLogo;
+    private TextView gameTitle;
+    private TextView gameMeta;
+    private AppObject selectedApp;
+    private View selectedItemView;
+    private String steamGridDbApiKey = "";
+    private int lastArtworkAppId = -1;
 
     private final static int START_OR_RESUME_ID = 1;
     private final static int QUIT_ID = 2;
@@ -331,6 +341,16 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         setTitle(computerName);
         label.setText(computerName);
 
+        gameHeroBackground = findViewById(R.id.gameHeroBackground);
+        gameLogo = findViewById(R.id.gameLogo);
+        gameTitle = findViewById(R.id.gameTitle);
+        gameMeta = findViewById(R.id.gameMeta);
+        findViewById(R.id.gamePlayButton).setOnClickListener(v -> {
+            if (selectedApp != null && selectedItemView != null) {
+                handleAppClick(selectedApp, selectedItemView);
+            }
+        });
+
         this.prefConfig = PreferenceConfiguration.readPreferences(this);
 
         // Bind to the computer manager service
@@ -396,6 +416,15 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         UiHelper.showDecoderCrashDialog(this);
 
         inForeground = true;
+        String configuredApiKey = PreferenceManager.getDefaultSharedPreferences(this)
+                .getString("steamgriddb_api_key", "");
+        if (!configuredApiKey.equals(steamGridDbApiKey)) {
+            steamGridDbApiKey = configuredApiKey.trim();
+            lastArtworkAppId = -1;
+            if (selectedApp != null) {
+                loadSteamGridDbArtwork(selectedApp);
+            }
+        }
         startComputerUpdates();
 
         ExtendedFloatingActionButton profilesButton = findViewById(R.id.profilesButton);
@@ -622,6 +651,74 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         }
     }
 
+    private void updateSelectedApp(AppObject app, View itemView) {
+        if (app == null) return;
+        boolean selectionChanged = selectedApp == null ||
+                selectedApp.app.getAppId() != app.app.getAppId();
+        selectedApp = app;
+        selectedItemView = itemView;
+        gameTitle.setText(app.app.getAppName());
+
+        String metadata = getString(R.string.meta_sunshine_game, app.app.getAppId());
+        if (app.app.isHdrSupported()) metadata += getString(R.string.meta_hdr_suffix);
+        if (app.isRunning) metadata += getString(R.string.meta_running_suffix);
+        if (steamGridDbApiKey.isEmpty()) metadata += getString(R.string.meta_steamgriddb_setup);
+        gameMeta.setText(metadata);
+
+        gameLogo.setImageDrawable(null);
+        gameLogo.setVisibility(View.GONE);
+        if (selectionChanged) lastArtworkAppId = -1;
+
+        ImageView tileImage = itemView != null ? itemView.findViewById(R.id.grid_image) : null;
+        if (tileImage != null && tileImage.getDrawable() != null) {
+            gameHeroBackground.setImageDrawable(tileImage.getDrawable());
+            gameHeroBackground.setAlpha(0.24f);
+        }
+        loadSteamGridDbArtwork(app);
+    }
+
+    private void loadSteamGridDbArtwork(AppObject app) {
+        if (app == null || steamGridDbApiKey.isEmpty() ||
+                lastArtworkAppId == app.app.getAppId()) return;
+        final int requestedAppId = app.app.getAppId();
+        lastArtworkAppId = requestedAppId;
+        SteamGridDbClient.loadArtwork(getApplicationContext(), app.app.getAppName(),
+                steamGridDbApiKey, artwork -> {
+                    if (isFinishing() || selectedApp == null ||
+                            selectedApp.app.getAppId() != requestedAppId) return;
+                    if (artwork.hero != null) {
+                        gameHeroBackground.setImageBitmap(artwork.hero);
+                        gameHeroBackground.setAlpha(0.58f);
+                    }
+                    if (artwork.logo != null) {
+                        gameLogo.setImageBitmap(artwork.logo);
+                        gameLogo.setVisibility(View.VISIBLE);
+                    }
+                });
+    }
+
+    private void handleAppClick(AppObject app, View itemView) {
+        if (app == null) return;
+        selectedApp = app;
+        selectedItemView = itemView;
+        if (lastRunningAppId != 0) {
+            if (prefConfig.resumeWithoutConfirm && lastRunningAppId == app.app.getAppId()) {
+                ServerHelper.doStart(AppView.this, app.app, computer, managerBinder,
+                        prefConfig.useVirtualDisplay);
+            } else if (itemView != null) {
+                openContextMenu(itemView);
+            }
+        } else if (prefConfig.useVirtualDisplay &&
+                !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
+            UiHelper.displayVdisplayConfirmationDialog(AppView.this, computer,
+                    () -> ServerHelper.doStart(AppView.this, app.app, computer,
+                            managerBinder, true), null);
+        } else {
+            ServerHelper.doStart(AppView.this, app.app, computer, managerBinder,
+                    prefConfig.useVirtualDisplay);
+        }
+    }
+
     private void updateUiWithServerinfo(final ComputerDetails details) {
         AppView.this.runOnUiThread(new Runnable() {
             @Override
@@ -741,38 +838,29 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     }
 
     @Override
-    public void receiveAbsListView(AbsListView listView) {
-        listView.setAdapter(appGridAdapter);
-        listView.setOnItemClickListener(new OnItemClickListener() {
+    public void receiveAdapterView(AdapterView<?> adapterView) {
+        Gallery gallery = (Gallery) adapterView;
+        gallery.setAdapter(appGridAdapter);
+        gallery.setOnItemClickListener((parent, view, position, id) ->
+                handleAppClick((AppObject) appGridAdapter.getItem(position), view));
+        gallery.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
-            public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
-                                    long id) {
-                AppObject app = (AppObject) appGridAdapter.getItem(pos);
-
-                // Only open the context menu if something is running, otherwise start it
-                if (lastRunningAppId != 0) {
-                    if (prefConfig.resumeWithoutConfirm && lastRunningAppId == app.app.getAppId()) {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
-                    } else {
-                        openContextMenu(arg1);
-                    }
-                } else {
-                    if (prefConfig.useVirtualDisplay && !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
-                        UiHelper.displayVdisplayConfirmationDialog(
-                                AppView.this,
-                                computer,
-                                () -> ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, true),
-                                null
-                        );
-                    } else {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
-                    }
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position >= 0 && position < appGridAdapter.getCount()) {
+                    updateSelectedApp((AppObject) appGridAdapter.getItem(position), view);
                 }
             }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+                selectedApp = null;
+                selectedItemView = null;
+            }
         });
-        UiHelper.applyStatusBarPadding(listView);
-        registerForContextMenu(listView);
-        listView.requestFocus();
+        gallery.setUnselectedAlpha(0.72f);
+        UiHelper.applyStatusBarPadding(gallery);
+        registerForContextMenu(gallery);
+        gallery.requestFocus();
+        if (gallery.getCount() > 0) gallery.setSelection(0);
     }
 
     public static class AppObject {

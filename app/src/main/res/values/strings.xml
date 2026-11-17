@@ -719,5 +719,15 @@
 
         <string name="title_checkbox_snappy_input">Snappy Input</string>
         <string name="summary_checkbox_snappy_input">Offload input to a background thread and ignore tiny axis/trigger deltas for a smoother feel. </string>
+    <string name="title_artwork_settings">Spielebibliothek &amp; Artwork</string>
+    <string name="title_steamgriddb_api_key">SteamGridDB API-Key</string>
+    <string name="summary_steamgriddb_api_key">Kostenlosen API-Key eintragen, um Hero-Hintergründe und Spielelogos zu laden. Der Schlüssel wird nur lokal auf diesem Gerät gespeichert.</string>
+    <string name="title_game_library">Spielebibliothek</string>
+    <string name="title_game_play">Spielen</string>
+    <string name="meta_sunshine_library">SUNSHINE-BIBLIOTHEK</string>
+    <string name="meta_sunshine_game">SUNSHINE  •  APP-ID %1$d</string>
+    <string name="meta_hdr_suffix">  •  HDR</string>
+    <string name="meta_running_suffix">  •  LÄUFT</string>
+    <string name="meta_steamgriddb_setup">  •  STEAMGRIDDB-KEY IN EINSTELLUNGEN HINTERLEGEN</string>
 </resources>
 
