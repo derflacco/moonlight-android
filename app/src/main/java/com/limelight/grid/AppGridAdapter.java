@@ -50,6 +50,20 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         this.computer = computer;
         this.uniqueId = uniqueId;
         this.showHiddenApps = showHiddenApps;
+        this.orderPreferences = context.getSharedPreferences("app_order", Context.MODE_PRIVATE);
+
+        String storedOrder = this.orderPreferences.getString(computer.uuid, "");
+        if (!storedOrder.isEmpty()) {
+            String[] appIds = storedOrder.split(",");
+            for (String appId : appIds) {
+                try {
+                    savedOrder.put(Integer.parseInt(appId), savedOrder.size());
+                }
+                catch (NumberFormatException ignored) {
+                    // Ignore invalid entries from an older or damaged preference value.
+                }
+            }
+        }
 
         updateLayoutWithPreferences(context, prefs);
     }
@@ -192,17 +206,16 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
 
         // Always add the app to the all apps list
         allApps.add(app);
-        sortList(allApps);
 
         // Add the app to the adapter data if it's not hidden
         if (showHiddenApps || !app.isHidden) {
             // Queue a request to fetch this bitmap into cache
             loader.queueCacheLoad(app.app);
 
-            // Add the app to our sorted list
             itemList.add(app);
-            sortList(itemList);
         }
+
+        applySavedOrder();
     }
 
     public void removeApp(AppView.AppObject app) {
