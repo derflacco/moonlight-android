@@ -435,10 +435,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 updateSelectedApp(selectedApp, selectedItemView);
             }
         }
+        // The selected image remains in place; only reapply its display mode after settings return.
         applyBackgroundScaleMode();
-        if (selectedApp != null) {
-            applyBackgroundForSelectedApp(selectedApp, selectedItemView);
-        }
         startComputerUpdates();
 
         ExtendedFloatingActionButton profilesButton = findViewById(R.id.profilesButton);
