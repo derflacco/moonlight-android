@@ -33,20 +33,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build non-root debug APKs with persistent signing
-        env:
-          MOONLIGHT_KEYSTORE_BASE64: ${{ secrets.MOONLIGHT_KEYSTORE_BASE64 }}
-          MOONLIGHT_KEYSTORE_PASSWORD: ${{ secrets.MOONLIGHT_KEYSTORE_PASSWORD }}
-          MOONLIGHT_KEY_ALIAS: ${{ secrets.MOONLIGHT_KEY_ALIAS }}
-          MOONLIGHT_KEY_PASSWORD: ${{ secrets.MOONLIGHT_KEY_PASSWORD }}
+      - name: Build non-root debug APKs (temporary debug signing)
         run: |
           set -euo pipefail
-          if [ -z "${MOONLIGHT_KEYSTORE_BASE64:-}" ] || [ -z "${MOONLIGHT_KEYSTORE_PASSWORD:-}" ] || [ -z "${MOONLIGHT_KEY_ALIAS:-}" ] || [ -z "${MOONLIGHT_KEY_PASSWORD:-}" ]; then
-            echo "::error::Persistent signing is not configured. Add the four MOONLIGHT_* repository secrets before building installable APKs."
-            exit 1
-          fi
-          printf '%s' "$MOONLIGHT_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/moonlight-signing.jks"
-          export MOONLIGHT_KEYSTORE_PATH="$RUNNER_TEMP/moonlight-signing.jks"
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleNonRoot_gameDebug
 
