@@ -25,6 +25,7 @@ import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -41,8 +42,12 @@ import android.view.ContextMenu;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.widget.AbsListView;
+import android.widget.BaseAdapter;
+import android.widget.FrameLayout;
+import android.widget.GridView;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageView;
@@ -77,10 +82,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private ImageView gameLogo;
     private TextView gameTitle;
     private TextView gameMeta;
+    private ExtendedFloatingActionButton backgroundButton;
     private AppObject selectedApp;
     private View selectedItemView;
     private String steamGridDbApiKey = "";
     private int lastArtworkAppId = -1;
+    private static final int REQUEST_CODE_BACKGROUND_IMAGE = 901;
 
     private final static int START_OR_RESUME_ID = 1;
     private final static int QUIT_ID = 2;
@@ -345,6 +352,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         gameLogo = findViewById(R.id.gameLogo);
         gameTitle = findViewById(R.id.gameTitle);
         gameMeta = findViewById(R.id.gameMeta);
+        backgroundButton = findViewById(R.id.backgroundButton);
+        backgroundButton.setOnClickListener(v -> showBackgroundOptions());
+        applyBackgroundScaleMode();
         findViewById(R.id.gamePlayButton).setOnClickListener(v -> {
             if (selectedApp != null && selectedItemView != null) {
                 handleAppClick(selectedApp, selectedItemView);
@@ -425,6 +435,10 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 updateSelectedApp(selectedApp, selectedItemView);
             }
         }
+        applyBackgroundScaleMode();
+        if (selectedApp != null) {
+            applyBackgroundForSelectedApp(selectedApp, selectedItemView);
+        }
         startComputerUpdates();
 
         ExtendedFloatingActionButton profilesButton = findViewById(R.id.profilesButton);
@@ -453,6 +467,26 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQUEST_CODE_BACKGROUND_IMAGE) {
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null &&
+                    selectedApp != null) {
+                Uri uri = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(uri,
+                            data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (SecurityException ignored) {
+                    // Some document providers don't offer persistable permissions.
+                }
+                PreferenceManager.getDefaultSharedPreferences(this).edit()
+                        .putString(getLocalBackgroundKey(selectedApp.app.getAppId()), uri.toString())
+                        .remove(getSteamGridDbBackgroundKey(selectedApp.app.getAppId()))
+                        .apply();
+                lastArtworkAppId = -1;
+                applyBackgroundForSelectedApp(selectedApp, selectedItemView);
+            }
+            return;
+        }
 
         if (requestCode == ShortcutHelper.REQUEST_CODE_EXPORT_ART_FILE) {
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
@@ -651,6 +685,204 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         }
     }
 
+    private String getLocalBackgroundKey(int appId) {
+        return "deck_background_uri_" + appId;
+    }
+
+    private String getSteamGridDbBackgroundKey(int appId) {
+        return "deck_background_url_" + appId;
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void applyBackgroundScaleMode() {
+        String mode = PreferenceManager.getDefaultSharedPreferences(this)
+                .getString("deck_background_scale_mode", "cover");
+        ImageView.ScaleType scaleType;
+        switch (mode) {
+            case "fit":
+                scaleType = ImageView.ScaleType.FIT_CENTER;
+                break;
+            case "stretch":
+                scaleType = ImageView.ScaleType.FIT_XY;
+                break;
+            case "center":
+                scaleType = ImageView.ScaleType.CENTER;
+                break;
+            case "cover":
+            default:
+                scaleType = ImageView.ScaleType.CENTER_CROP;
+                break;
+        }
+        gameHeroBackground.setScaleType(scaleType);
+    }
+
+    private void showBackgroundOptions() {
+        if (selectedApp == null) {
+            Toast.makeText(this, R.string.background_select_game_first, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] options = {
+                getString(R.string.background_choose_steamgriddb),
+                getString(R.string.background_choose_device),
+                getString(R.string.background_reset)
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.background_options_title)
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        showSteamGridDbHeroOptions();
+                    } else if (which == 1) {
+                        openBackgroundImagePicker();
+                    } else {
+                        resetSelectedBackground();
+                    }
+                })
+                .show();
+    }
+
+    private void openBackgroundImagePicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(intent, REQUEST_CODE_BACKGROUND_IMAGE);
+        } catch (android.content.ActivityNotFoundException e) {
+            Toast.makeText(this, R.string.background_picker_unavailable, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void resetSelectedBackground() {
+        if (selectedApp == null) return;
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+                .remove(getLocalBackgroundKey(selectedApp.app.getAppId()))
+                .remove(getSteamGridDbBackgroundKey(selectedApp.app.getAppId()))
+                .apply();
+        lastArtworkAppId = -1;
+        applyBackgroundForSelectedApp(selectedApp, selectedItemView);
+    }
+
+    private void showSteamGridDbHeroOptions() {
+        if (steamGridDbApiKey.isEmpty()) {
+            Toast.makeText(this, R.string.background_steamgriddb_key_required, Toast.LENGTH_LONG).show();
+            return;
+        }
+        Toast.makeText(this, R.string.background_loading_options, Toast.LENGTH_SHORT).show();
+        SteamGridDbClient.loadHeroOptions(getApplicationContext(), selectedApp.app.getAppName(),
+                steamGridDbApiKey, urls -> {
+                    if (isFinishing() || selectedApp == null) return;
+                    if (urls == null || urls.isEmpty()) {
+                        Toast.makeText(this, R.string.background_no_steamgriddb_options, Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    showSteamGridDbHeroGrid(urls);
+                });
+    }
+
+    private void showSteamGridDbHeroGrid(List<String> urls) {
+        GridView grid = new GridView(this);
+        grid.setNumColumns(2);
+        grid.setHorizontalSpacing(dp(10));
+        grid.setVerticalSpacing(dp(10));
+        grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        grid.setPadding(dp(12), dp(12), dp(12), dp(12));
+        grid.setClipToPadding(false);
+
+        grid.setAdapter(new BaseAdapter() {
+            @Override
+            public int getCount() {
+                return urls.size();
+            }
+
+            @Override
+            public Object getItem(int position) {
+                return urls.get(position);
+            }
+
+            @Override
+            public long getItemId(int position) {
+                return position;
+            }
+
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                FrameLayout cell;
+                ImageView image;
+                if (convertView instanceof FrameLayout) {
+                    cell = (FrameLayout) convertView;
+                    image = (ImageView) cell.getChildAt(0);
+                } else {
+                    cell = new FrameLayout(AppView.this);
+                    cell.setBackgroundResource(R.drawable.deck_input_background);
+                    image = new ImageView(AppView.this);
+                    image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    cell.addView(image, new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                    cell.setLayoutParams(new AbsListView.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, dp(116)));
+                }
+                String url = urls.get(position);
+                image.setTag(url);
+                image.setImageDrawable(null);
+                SteamGridDbClient.loadImage(getApplicationContext(), url, bitmap -> {
+                    if (bitmap != null && url.equals(image.getTag())) {
+                        image.setImageBitmap(bitmap);
+                    }
+                });
+                return cell;
+            }
+        });
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.background_choose_steamgriddb)
+                .setView(grid)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        grid.setOnItemClickListener((parent, view, position, id) -> {
+            String url = urls.get(position);
+            PreferenceManager.getDefaultSharedPreferences(this).edit()
+                    .putString(getSteamGridDbBackgroundKey(selectedApp.app.getAppId()), url)
+                    .remove(getLocalBackgroundKey(selectedApp.app.getAppId()))
+                    .apply();
+            lastArtworkAppId = -1;
+            applyBackgroundForSelectedApp(selectedApp, selectedItemView);
+            dialog.dismiss();
+        });
+        dialog.show();
+    }
+
+    private void applyBackgroundForSelectedApp(AppObject app, View itemView) {
+        if (app == null || gameHeroBackground == null) return;
+        applyBackgroundScaleMode();
+
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+        String localUri = preferences.getString(getLocalBackgroundKey(app.app.getAppId()), "");
+        if (!localUri.isEmpty()) {
+            try {
+                gameHeroBackground.setImageURI(Uri.parse(localUri));
+                gameHeroBackground.setAlpha(0.58f);
+                lastArtworkAppId = app.app.getAppId();
+                return;
+            } catch (RuntimeException e) {
+                LimeLog.warning("Unable to load selected background image: " + e.getMessage());
+                preferences.edit().remove(getLocalBackgroundKey(app.app.getAppId())).apply();
+            }
+        }
+
+        ImageView tileImage = itemView != null ? itemView.findViewById(R.id.grid_image) : null;
+        if (tileImage != null && tileImage.getDrawable() != null) {
+            gameHeroBackground.setImageDrawable(tileImage.getDrawable());
+            gameHeroBackground.setAlpha(0.24f);
+        } else {
+            gameHeroBackground.setImageDrawable(null);
+        }
+        loadSteamGridDbArtwork(app);
+    }
+
     private void updateSelectedApp(AppObject app, View itemView) {
         if (app == null) return;
         boolean selectionChanged = selectedApp == null ||
@@ -669,19 +901,29 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         gameLogo.setVisibility(View.GONE);
         if (selectionChanged) lastArtworkAppId = -1;
 
-        ImageView tileImage = itemView != null ? itemView.findViewById(R.id.grid_image) : null;
-        if (tileImage != null && tileImage.getDrawable() != null) {
-            gameHeroBackground.setImageDrawable(tileImage.getDrawable());
-            gameHeroBackground.setAlpha(0.24f);
-        }
-        loadSteamGridDbArtwork(app);
+        applyBackgroundForSelectedApp(app, itemView);
     }
 
     private void loadSteamGridDbArtwork(AppObject app) {
-        if (app == null || steamGridDbApiKey.isEmpty() ||
-                lastArtworkAppId == app.app.getAppId()) return;
+        if (app == null || lastArtworkAppId == app.app.getAppId()) return;
         final int requestedAppId = app.app.getAppId();
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+        String selectedUrl = preferences.getString(getSteamGridDbBackgroundKey(requestedAppId), "");
         lastArtworkAppId = requestedAppId;
+
+        if (!selectedUrl.isEmpty()) {
+            SteamGridDbClient.loadImage(getApplicationContext(), selectedUrl, bitmap -> {
+                if (isFinishing() || selectedApp == null ||
+                        selectedApp.app.getAppId() != requestedAppId) return;
+                if (bitmap != null) {
+                    gameHeroBackground.setImageBitmap(bitmap);
+                    gameHeroBackground.setAlpha(0.58f);
+                }
+            });
+            return;
+        }
+
+        if (steamGridDbApiKey.isEmpty()) return;
         SteamGridDbClient.loadArtwork(getApplicationContext(), app.app.getAppName(),
                 steamGridDbApiKey, artwork -> {
                     if (isFinishing() || selectedApp == null ||
