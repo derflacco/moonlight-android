@@ -42,6 +42,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.EditText;
+import android.app.AlertDialog;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.Toast;
 
 import com.google.gson.Gson;
@@ -63,6 +68,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 
@@ -340,8 +346,105 @@ public class StreamSettings extends AppCompatActivity {
             initializePreferences();
         }
 
+        private static final String QUICK_MENU_ORDER_PREF = "quick_menu_order";
+        private static final String[] QUICK_MENU_ORDER_KEYS = {
+                "quick_menu_disconnect", "quick_menu_quit_session",
+                "quick_menu_upload_clipboard", "quick_menu_fetch_clipboard",
+                "quick_menu_server_cmd", "quick_menu_keyboard",
+                "quick_menu_zoom", "quick_menu_rotate_screen", "quick_menu_advanced"
+        };
+
+        private void addQuickMenuOrderPreference() {
+            PreferenceCategory category = findPreference("category_quick_menu_customization");
+            if (category == null) return;
+            Preference reorder = new Preference(requireContext());
+            reorder.setKey("quick_menu_order_editor");
+            reorder.setTitle("Reihenfolge der Schnellzugriffe");
+            reorder.setSummary("Lege fest, in welcher Reihenfolge die Einträge im Quick-Menü erscheinen.");
+            reorder.setOrder(0);
+            reorder.setOnPreferenceClickListener(preference -> {
+                showQuickMenuOrderDialog(category);
+                return true;
+            });
+            category.addPreference(reorder);
+        }
+
+        private void showQuickMenuOrderDialog(PreferenceCategory category) {
+            ArrayList<String> keys = new ArrayList<>();
+            String saved = PreferenceManager.getDefaultSharedPreferences(requireContext())
+                    .getString(QUICK_MENU_ORDER_PREF, "");
+            if (!TextUtils.isEmpty(saved)) {
+                for (String key : saved.split(",")) {
+                    if (Arrays.asList(QUICK_MENU_ORDER_KEYS).contains(key) && !keys.contains(key)) keys.add(key);
+                }
+            }
+            for (String key : QUICK_MENU_ORDER_KEYS) if (!keys.contains(key)) keys.add(key);
+
+            ArrayList<String> labels = new ArrayList<>();
+            for (String key : keys) {
+                Preference item = category.findPreference(key);
+                labels.add(item == null ? key : item.getTitle().toString());
+            }
+
+            LinearLayout content = new LinearLayout(requireContext());
+            content.setOrientation(LinearLayout.VERTICAL);
+            int padding = (int) (16 * getResources().getDisplayMetrics().density);
+            content.setPadding(padding, padding, padding, padding);
+            ListView list = new ListView(requireContext());
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
+                    android.R.layout.simple_list_item_single_choice, labels);
+            list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+            list.setAdapter(adapter);
+            list.setItemChecked(0, true);
+            content.addView(list, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                    (int) (280 * getResources().getDisplayMetrics().density)));
+
+            LinearLayout controls = new LinearLayout(requireContext());
+            controls.setOrientation(LinearLayout.HORIZONTAL);
+            Button up = new Button(requireContext());
+            up.setText("Nach oben");
+            Button down = new Button(requireContext());
+            down.setText("Nach unten");
+            controls.addView(up, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            controls.addView(down, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            content.addView(controls);
+
+            final int[] selected = {0};
+            list.setOnItemClickListener((parent, view, position, id) -> selected[0] = position);
+            up.setOnClickListener(view -> {
+                int index = selected[0];
+                if (index > 0) {
+                    Collections.swap(keys, index, index - 1);
+                    Collections.swap(labels, index, index - 1);
+                    selected[0] = index - 1;
+                    adapter.notifyDataSetChanged();
+                    list.setItemChecked(selected[0], true);
+                }
+            });
+            down.setOnClickListener(view -> {
+                int index = selected[0];
+                if (index < keys.size() - 1) {
+                    Collections.swap(keys, index, index + 1);
+                    Collections.swap(labels, index, index + 1);
+                    selected[0] = index + 1;
+                    adapter.notifyDataSetChanged();
+                    list.setItemChecked(selected[0], true);
+                }
+            });
+
+            new AlertDialog.Builder(requireContext())
+                    .setTitle("Quick-Menü-Reihenfolge")
+                    .setView(content)
+                    .setPositiveButton("Speichern", (dialog, which) ->
+                            PreferenceManager.getDefaultSharedPreferences(requireContext()).edit()
+                                    .putString(QUICK_MENU_ORDER_PREF, TextUtils.join(",", keys)).apply())
+                    .setNegativeButton("Abbrechen", null)
+                    .show();
+        }
+
         public void initializePreferences() {
             addPreferencesFromResource(R.xml.preferences);
+            addQuickMenuOrderPreference();
             PreferenceScreen screen = getPreferenceScreen();
 
             AppCompatActivity activity = (AppCompatActivity) requireActivity();
