@@ -197,6 +197,12 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
 
     public void moveApp(int from, int to) {
         if (from < 0 || to < 0 || from >= itemList.size() || to >= itemList.size() || from == to) return;
+        if (isAppLocked(itemList.get(from)) || isAppLocked(itemList.get(to))) return;
+        int start = Math.min(from, to);
+        int end = Math.max(from, to);
+        for (int i = start; i <= end; i++) {
+            if (i != from && isAppLocked(itemList.get(i))) return;
+        }
         AppView.AppObject moved = itemList.remove(from);
         itemList.add(to, moved);
         savedOrder.clear();
