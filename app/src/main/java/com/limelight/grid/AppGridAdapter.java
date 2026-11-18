@@ -43,6 +43,8 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
     private ArrayList<AppView.AppObject> allApps = new ArrayList<>();
     private final Map<Integer, Integer> savedOrder = new HashMap<>();
     private final SharedPreferences orderPreferences;
+    private final Set<Integer> lockedAppIds = new HashSet<>();
+    private final SharedPreferences lockPreferences;
 
     public AppGridAdapter(Context context, PreferenceConfiguration prefs, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
         super(context, getLayoutIdForPreferences(prefs));
@@ -51,6 +53,10 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         this.uniqueId = uniqueId;
         this.showHiddenApps = showHiddenApps;
         this.orderPreferences = context.getSharedPreferences("app_order", Context.MODE_PRIVATE);
+        this.lockPreferences = context.getSharedPreferences("app_grid_locks", Context.MODE_PRIVATE);
+        for (String id : lockPreferences.getStringSet(computer.uuid, new HashSet<String>())) {
+            try { lockedAppIds.add(Integer.parseInt(id)); } catch (NumberFormatException ignored) { }
+        }
 
         String storedOrder = this.orderPreferences.getString(computer.uuid, "");
         if (!storedOrder.isEmpty()) {
