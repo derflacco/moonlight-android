@@ -66,6 +66,7 @@ import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.UiHelper;
 import org.json.JSONObject;
 import java.io.File;
+import java.util.ArrayList;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
