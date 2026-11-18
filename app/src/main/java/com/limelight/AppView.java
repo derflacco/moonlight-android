@@ -574,6 +574,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
         int itemId = item.getItemId();
         switch (itemId) {
+            case TOGGLE_APP_LOCK_ID: {
+                boolean locked = !appGridAdapter.isAppLocked(app);
+                appGridAdapter.setAppLocked(app, locked);
+                Toast.makeText(this, locked ? "App position locked" : "App position unlocked", Toast.LENGTH_SHORT).show();
+                return true;
+            }
             case START_WITH_QUIT:
             case START_WITH_QUIT_VDISPLAY: {
                 boolean withVDiaplay = itemId == START_WITH_QUIT_VDISPLAY;
@@ -1090,6 +1096,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         gallery.setOnItemClickListener((parent, view, position, id) ->
                 handleAppClick((AppObject) appGridAdapter.getItem(position), view));
         gallery.setOnItemLongClickListener((parent, view, position, id) -> {
+            AppObject draggedApp = (AppObject) appGridAdapter.getItem(position);
+            if (appGridAdapter.isAppLocked(draggedApp)) {
+                Toast.makeText(AppView.this, "This app position is locked", Toast.LENGTH_SHORT).show();
+                return true;
+            }
             ClipData data = ClipData.newPlainText("app-position", Integer.toString(position));
             View.DragShadowBuilder shadow = new View.DragShadowBuilder(view);
             view.startDrag(data, shadow, Integer.valueOf(position), 0);
