@@ -181,6 +181,20 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         Collections.sort(allApps, comparator);
     }
 
+    public boolean isAppLocked(AppView.AppObject app) {
+        return app != null && lockedAppIds.contains(app.app.getAppId());
+    }
+
+    public void setAppLocked(AppView.AppObject app, boolean locked) {
+        if (app == null) return;
+        int appId = app.app.getAppId();
+        if (locked) lockedAppIds.add(appId);
+        else lockedAppIds.remove(appId);
+        Set<String> stored = new HashSet<>();
+        for (Integer id : lockedAppIds) stored.add(Integer.toString(id));
+        lockPreferences.edit().putStringSet(computer.uuid, stored).apply();
+    }
+
     public void moveApp(int from, int to) {
         if (from < 0 || to < 0 || from >= itemList.size() || to >= itemList.size() || from == to) return;
         AppView.AppObject moved = itemList.remove(from);
