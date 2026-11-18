@@ -100,6 +100,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private final static int HIDE_APP_ID = 8;
     private final static int START_WITH_VDISPLAY = 20;
     private final static int START_WITH_QUIT_VDISPLAY = 21;
+    private final static int TOGGLE_APP_LOCK_ID = 22;
 
     public final static String HIDDEN_APPS_PREF_FILENAME = "HiddenApps";
 
@@ -356,6 +357,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         gameMeta = findViewById(R.id.gameMeta);
         backgroundButton = findViewById(R.id.backgroundButton);
         backgroundButton.setOnClickListener(v -> showBackgroundOptions());
+        backgroundButton.shrink();
         applyBackgroundScaleMode();
         findViewById(R.id.gamePlayButton).setOnClickListener(v -> {
             if (selectedApp != null && selectedItemView != null) {
@@ -511,6 +513,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
 
         menu.setHeaderTitle(selectedApp.app.getAppName());
+        MenuItem lockItem = menu.add(Menu.NONE, TOGGLE_APP_LOCK_ID, 0,\n                appGridAdapter.isAppLocked(selectedApp) ? "Unlock position" : "Lock position");
 
         if (lastRunningAppId == 0) {
             if (prefConfig.useVirtualDisplay) {
