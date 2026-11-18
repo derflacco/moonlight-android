@@ -2,9 +2,15 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:layout_marginStart="5dp"
+    android:layout_marginEnd="5dp"
+    android:layout_marginTop="5dp"
+    android:layout_marginBottom="5dp"
     android:orientation="horizontal"
-    android:padding="16dp"
-    android:background="?android:attr/selectableItemBackground"
+    android:focusable="true"
+    android:descendantFocusability="afterDescendants"
+    android:padding="14dp"
+    android:background="@drawable/deck_profile_row"
     android:gravity="center_vertical">
 
     <LinearLayout
@@ -17,45 +23,47 @@
             android:id="@+id/profileName"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp"
-            android:textStyle="bold"
+            android:ellipsize="end"
             android:singleLine="true"
-            android:ellipsize="end" />
+            android:textColor="@color/deck_text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
         <TextView
             android:id="@+id/profileTimestamp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#CCCCCC"
+            android:layout_marginTop="5dp"
+            android:textColor="@color/deck_text_secondary"
             android:textSize="12sp" />
-
     </LinearLayout>
 
     <RadioButton
         android:id="@+id/profileActive"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:layout_marginLeft="8dp"
-        android:layout_marginEnd="8dp"
-        android:layout_marginRight="8dp" />
+        android:layout_marginStart="6dp"
+        android:buttonTint="@color/deck_accent" />
 
     <ImageButton
         android:id="@+id/editProfile"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:background="@drawable/deck_icon_button"
         android:contentDescription="Edit profile"
-        android:src="@drawable/ic_edit" />
+        android:padding="11dp"
+        android:src="@drawable/ic_edit"
+        android:tint="@color/deck_text_primary" />
 
     <ImageButton
         android:id="@+id/deleteProfile"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_marginStart="6dp"
+        android:background="@drawable/deck_icon_button"
         android:contentDescription="Delete profile"
-        android:src="@drawable/ic_delete" />
+        android:padding="11dp"
+        android:src="@drawable/ic_delete"
+        android:tint="@color/deck_danger" />
 
 </LinearLayout>

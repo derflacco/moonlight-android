@@ -76,6 +76,9 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private ShortcutHelper shortcutHelper;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private boolean freezeUpdates, runningPolling, inForeground, completeOnCreateCalled;
+    private boolean autoLaunchAttempted;
+    private static final String LAST_COMPUTER_PREFS = "LastComputer";
+    private static final String LAST_COMPUTER_UUID = "uuid";
     private ComputerDetails.AddressTuple pendingPairingAddress;
     private String pendingPairingPin, pendingPairingPassphrase;
     private final ServiceConnection serviceConnection = new ServiceConnection() {
@@ -721,6 +724,9 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             return;
         }
 
+        getSharedPreferences(LAST_COMPUTER_PREFS, MODE_PRIVATE).edit()
+                .putString(LAST_COMPUTER_UUID, computer.uuid).apply();
+
         Intent i = new Intent(this, AppView.class);
         i.putExtra(AppView.NAME_EXTRA, computer.name);
         i.putExtra(AppView.UUID_EXTRA, computer.uuid);
@@ -880,6 +886,16 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
         // Notify the view that the data has changed
         pcGridAdapter.notifyDataSetChanged();
+
+        // Return directly to the last selected PC's app library when it is available.
+        if (!autoLaunchAttempted && managerBinder != null &&
+                details.uuid.equals(getSharedPreferences(LAST_COMPUTER_PREFS, MODE_PRIVATE)
+                        .getString(LAST_COMPUTER_UUID, null)) &&
+                details.state == ComputerDetails.State.ONLINE &&
+                details.pairState == PairState.PAIRED) {
+            autoLaunchAttempted = true;
+            doAppList(details, false, false);
+        }
     }
 
     @Override
@@ -888,7 +904,8 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     }
 
     @Override
-    public void receiveAbsListView(AbsListView listView) {
+    public void receiveAdapterView(AdapterView<?> adapterView) {
+        AbsListView listView = (AbsListView) adapterView;
         listView.setAdapter(pcGridAdapter);
         listView.setOnItemClickListener(new OnItemClickListener() {
             @Override

@@ -191,4 +191,17 @@
         <item>right</item>
     </string-array>
 
+
+    <string-array name="deck_background_scale_names">
+        <item>Ausfüllen (Bild zuschneiden)</item>
+        <item>Einpassen (komplett sichtbar)</item>
+        <item>Strecken (Seitenverhältnis ignorieren)</item>
+        <item>Originalgröße (zentriert)</item>
+    </string-array>
+    <string-array name="deck_background_scale_values" translatable="false">
+        <item>cover</item>
+        <item>fit</item>
+        <item>stretch</item>
+        <item>center</item>
+    </string-array>
 </resources>

@@ -1,16 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="170dp"
-    android:layout_height="220dp">
+    android:layout_width="184dp"
+    android:layout_height="236dp"
+    android:padding="4dp"
+    android:background="@drawable/deck_focus_overlay">
 
     <androidx.cardview.widget.CardView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_margin="10dp"
-        app:cardCornerRadius="12dp"
-        app:cardElevation="8dp"
-        app:cardMaxElevation="8dp">
+        android:layout_margin="5dp"
+        app:cardBackgroundColor="@color/deck_surface"
+        app:cardCornerRadius="18dp"
+        app:cardElevation="4dp"
+        app:cardMaxElevation="4dp"
+        app:cardUseCompatPadding="false">
 
         <ImageView
             android:id="@+id/grid_image"
@@ -22,25 +26,32 @@
         <RelativeLayout
             android:id="@+id/grid_mask"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+            android:background="@drawable/deck_game_scrim">
 
             <ImageView
                 android:id="@+id/grid_overlay"
-                android:layout_width="50dp"
-                android:layout_height="50dp"
+                android:layout_width="46dp"
+                android:layout_height="46dp"
                 android:layout_centerHorizontal="true"
-                android:layout_marginTop="50dp" />
+                android:layout_marginTop="42dp" />
 
             <TextView
                 android:id="@+id/grid_text"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:layout_below="@id/grid_overlay"
-                android:layout_margin="5dp"
-                android:gravity="center|center_vertical"
-                android:background="#00FFFFFF"
+                android:layout_height="wrap_content"
+                android:layout_alignParentBottom="true"
+                android:layout_marginStart="10dp"
+                android:layout_marginEnd="10dp"
+                android:layout_marginBottom="12dp"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:maxLines="2"
+                android:minHeight="38dp"
                 android:textAlignment="center"
-                android:textSize="18sp" />
+                android:textColor="@color/deck_text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
         </RelativeLayout>
 
     </androidx.cardview.widget.CardView>

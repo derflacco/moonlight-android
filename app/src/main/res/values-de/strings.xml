@@ -310,4 +310,38 @@
 
     <string name="title_edit_profile">Profil bearbeiten</string>
 
+
+    <string name="background_button">Hintergrund</string>
+    <string name="background_options_title">Hintergrundbild</string>
+    <string name="background_choose_steamgriddb">SteamGridDB-Bild auswählen</string>
+    <string name="background_choose_device">Eigenes Bild vom Gerät wählen</string>
+    <string name="background_reset">Automatisches Artwork verwenden</string>
+    <string name="background_select_game_first">Bitte zuerst ein Spiel auswählen.</string>
+    <string name="background_picker_unavailable">Kein Dateiauswahldialog verfügbar.</string>
+    <string name="background_steamgriddb_key_required">Hinterlege zuerst deinen SteamGridDB-API-Key in den Einstellungen.</string>
+    <string name="background_loading_options">SteamGridDB-Hintergründe werden geladen …</string>
+    <string name="background_no_steamgriddb_options">Keine SteamGridDB-Hintergründe gefunden.</string>
+    <string name="title_background_scale">Hintergrund-Skalierung</string>
+    <string name="summary_background_scale">Legt fest, wie das Spiele-Hintergrundbild dargestellt wird.</string>
+    <string name="title_quick_menu_customization">Quick-Menü anpassen</string>
+    <string name="title_quick_menu_advanced_customization">Erweiterte Menüeinträge</string>
+    <string name="quick_menu_disconnect">Verbindung trennen</string>
+    <string name="quick_menu_quit_session">Sitzung beenden</string>
+    <string name="quick_menu_upload_clipboard">Zwischenablage an PC senden</string>
+    <string name="quick_menu_fetch_clipboard">Zwischenablage vom PC abrufen</string>
+    <string name="quick_menu_server_cmd">Sunshine-Serverbefehle</string>
+    <string name="quick_menu_keyboard">Bildschirmtastatur</string>
+    <string name="quick_menu_zoom">Zoom-Modus umschalten</string>
+    <string name="quick_menu_rotate_screen">Bildschirm drehen</string>
+    <string name="quick_menu_advanced">Erweitertes Menü</string>
+    <string name="quick_menu_advanced_mouse_mode">Mausmodus auswählen</string>
+    <string name="quick_menu_advanced_hud">HUD ein-/ausblenden</string>
+    <string name="quick_menu_advanced_floating_button">Schwebenden Menübutton ein-/ausblenden</string>
+    <string name="quick_menu_advanced_keyboard_controller">Tastatur-Controller ein-/ausblenden</string>
+    <string name="quick_menu_advanced_virtual_controller">Virtuellen Controller ein-/ausblenden</string>
+    <string name="quick_menu_advanced_virtual_keyboard">Virtuelle Tastatur ein-/ausblenden</string>
+    <string name="quick_menu_advanced_task_manager">Task-Manager öffnen</string>
+    <string name="quick_menu_advanced_special_keys">Sondertasten</string>
+    <string name="quick_menu_advanced_touch_sensitivity">Touch-Empfindlichkeit wechseln</string>
+    <string name="quick_menu_advanced_device_options">Controller-spezifische Menüeinträge</string>
 </resources>

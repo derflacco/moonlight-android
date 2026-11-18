@@ -1,0 +1,50 @@
+name: Android debug APK
+
+on:
+  push:
+    branches:
+      - chatgpt/steamdeck-ui-redesign
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK and NDK
+        run: |
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build non-root debug APKs (temporary debug signing)
+        run: |
+          echo "Building latest Steam Deck UI changes"
+
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleNonRoot_gameDebug
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonlight-steamdeck-redesign-debug-apks
+          path: app/build/outputs/apk/nonRoot_game/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

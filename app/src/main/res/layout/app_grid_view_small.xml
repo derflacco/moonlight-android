@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<GridView xmlns:android="http://schemas.android.com/apk/res/android"
+<Gallery xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/fragmentView"
-    android:layout_width="fill_parent"
-    android:layout_height="fill_parent"
-    android:numColumns="auto_fit"
-    android:columnWidth="110dp"
-    android:stretchMode="spacingWidthUniform"
-    android:focusable="true"
-    android:focusableInTouchMode="true"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent"
     android:clipToPadding="false"
-    android:gravity="center"/>
+    android:gravity="center_vertical"
+    android:paddingStart="22dp"
+    android:paddingEnd="22dp"
+    android:scrollbars="none"
+    android:spacing="12dp"
+    android:unselectedAlpha="0.72" />

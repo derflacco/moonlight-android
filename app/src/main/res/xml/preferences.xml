@@ -1001,4 +1001,56 @@
             android:title="@string/title_follow_update"
             app:iconSpaceReserved="false" />
     </PreferenceCategory>
+    <PreferenceCategory
+        android:key="category_game_artwork"
+        android:title="@string/title_artwork_settings"
+        app:iconSpaceReserved="false">
+        <EditTextPreference
+            android:key="steamgriddb_api_key"
+            android:title="@string/title_steamgriddb_api_key"
+            android:summary="@string/summary_steamgriddb_api_key"
+            android:dialogTitle="@string/title_steamgriddb_api_key"
+            android:inputType="textPassword"
+            android:singleLine="true"
+            app:iconSpaceReserved="false" />
+        <ListPreference
+            android:key="deck_background_scale_mode"
+            android:defaultValue="cover"
+            android:entries="@array/deck_background_scale_names"
+            android:entryValues="@array/deck_background_scale_values"
+            android:title="@string/title_background_scale"
+            android:summary="@string/summary_background_scale"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="category_quick_menu_customization"
+        android:title="@string/title_quick_menu_customization"
+        app:iconSpaceReserved="false">
+        <CheckBoxPreference android:key="quick_menu_disconnect" android:defaultValue="true" android:title="@string/quick_menu_disconnect" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_quit_session" android:defaultValue="true" android:title="@string/quick_menu_quit_session" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_upload_clipboard" android:defaultValue="true" android:title="@string/quick_menu_upload_clipboard" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_fetch_clipboard" android:defaultValue="true" android:title="@string/quick_menu_fetch_clipboard" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_server_cmd" android:defaultValue="true" android:title="@string/quick_menu_server_cmd" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_keyboard" android:defaultValue="true" android:title="@string/quick_menu_keyboard" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_zoom" android:defaultValue="true" android:title="@string/quick_menu_zoom" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_rotate_screen" android:defaultValue="true" android:title="@string/quick_menu_rotate_screen" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_advanced" android:defaultValue="true" android:title="@string/quick_menu_advanced" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="category_quick_menu_advanced_customization"
+        android:title="@string/title_quick_menu_advanced_customization"
+        app:iconSpaceReserved="false">
+            <CheckBoxPreference android:key="quick_menu_advanced_mouse_mode" android:defaultValue="true" android:title="@string/quick_menu_advanced_mouse_mode" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_hud" android:defaultValue="true" android:title="@string/quick_menu_advanced_hud" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_floating_button" android:defaultValue="true" android:title="@string/quick_menu_advanced_floating_button" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_keyboard_controller" android:defaultValue="true" android:title="@string/quick_menu_advanced_keyboard_controller" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_virtual_controller" android:defaultValue="true" android:title="@string/quick_menu_advanced_virtual_controller" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_virtual_keyboard" android:defaultValue="true" android:title="@string/quick_menu_advanced_virtual_keyboard" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_task_manager" android:defaultValue="true" android:title="@string/quick_menu_advanced_task_manager" app:iconSpaceReserved="false" />
+            <CheckBoxPreference android:key="quick_menu_advanced_special_keys" android:defaultValue="true" android:title="@string/quick_menu_advanced_special_keys" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_advanced_touch_sensitivity" android:defaultValue="true" android:title="@string/quick_menu_advanced_touch_sensitivity" app:iconSpaceReserved="false" />
+        <CheckBoxPreference android:key="quick_menu_advanced_device_options" android:defaultValue="true" android:title="@string/quick_menu_advanced_device_options" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
 </PreferenceScreen>

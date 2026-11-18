@@ -3,70 +3,91 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="10dp">
+    android:padding="16dp"
+    android:background="@color/deck_background">
 
     <Button
         android:id="@+id/bt_vibrator"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="52dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/deck_secondary_button"
         android:onClick="onClick"
+        android:textColor="@color/deck_text_primary"
+        android:textAllCaps="false"
         android:text="@string/debug_info_test_device_vibration" />
 
     <Button
         android:id="@+id/bt_update_gamepad"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="52dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/deck_secondary_button"
         android:onClick="onClick"
+        android:textColor="@color/deck_text_primary"
+        android:textAllCaps="false"
         android:text="@string/debug_info_refresh_gamepad_list" />
 
     <Button
         android:id="@+id/bt_vibrator_gamepad"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="52dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/deck_secondary_button"
         android:onClick="onClick"
+        android:textColor="@color/deck_text_primary"
+        android:textAllCaps="false"
         android:text="@string/debug_info_test_gamepad_rumble" />
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/bt_vibrator_value"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/deck_secondary_button"
             android:onClick="onClick"
+            android:textColor="@color/deck_text_primary"
+            android:textAllCaps="false"
             android:text="@string/debug_info_vibration_amplitude" />
 
         <Button
             android:id="@+id/bt_vibrator_cancle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
             android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/deck_secondary_button"
             android:onClick="onClick"
+            android:textColor="@color/deck_text_primary"
+            android:textAllCaps="false"
             android:text="@string/debug_info_stop_vibration" />
-
-
-
     </LinearLayout>
 
     <TextView
         android:id="@+id/tx_content"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:textColor="@color/deck_text_secondary"
         android:text="@string/debug_info_refresh_gamepad_info" />
 
     <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
         android:layout_marginTop="10dp">
 
         <TextView
             android:id="@+id/tx_game_pad_info"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+            android:layout_height="wrap_content"
+            android:textColor="@color/deck_text_primary"
+            android:textSize="13sp" />
     </ScrollView>
-
-
-
 </LinearLayout>

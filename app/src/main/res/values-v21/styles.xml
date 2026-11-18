@@ -1,12 +1,21 @@
 <resources>
-
-    <!--
-        Base application theme for API 21+. This theme completely replaces
-        AppBaseTheme from BOTH res/values/styles.xml and
-        res/values-v21/styles.xml on API 21+ devices.
-    -->
     <style name="AppBaseTheme" parent="Theme.MaterialComponents.NoActionBar">
-        <!-- API 21 theme customizations can go here. -->
+        <item name="colorPrimary">@color/deck_accent</item>
+        <item name="colorPrimaryVariant">@color/deck_background</item>
+        <item name="colorSecondary">@color/deck_accent_bright</item>
+        <item name="colorSurface">@color/deck_surface</item>
+        <item name="colorOnSurface">@color/deck_text_primary</item>
+        <item name="colorOnPrimary">@color/deck_background</item>
+        <item name="colorAccent">@color/deck_accent</item>
+        <item name="colorControlActivated">@color/deck_accent</item>
+        <item name="colorControlHighlight">@color/deck_ripple</item>
+        <item name="android:colorAccent">@color/deck_accent</item>
+        <item name="android:colorControlActivated">@color/deck_accent</item>
+        <item name="android:colorControlHighlight">@color/deck_ripple</item>
+        <item name="android:textColorPrimary">@color/deck_text_primary</item>
+        <item name="android:textColorSecondary">@color/deck_text_secondary</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:alertDialogTheme">@style/DeckAlertDialogTheme</item>
+        <item name="alertDialogTheme">@style/DeckAlertDialogTheme</item>
     </style>
-
 </resources>

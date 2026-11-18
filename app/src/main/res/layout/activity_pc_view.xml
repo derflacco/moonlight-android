@@ -1,92 +1,126 @@
-<!-- Portrait orientation only -->
+<?xml version="1.0" encoding="utf-8"?>
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:background="#1A1A1A"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/deck_background"
     tools:context=".PcView">
+
+    <LinearLayout
+        android:id="@+id/pcHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="20dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="14dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:letterSpacing="0.12"
+                android:text="MOONLIGHT"
+                android:textColor="@color/deck_text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="REMOTE PLAY  •  YOUR GAMING PCS"
+                android:textColor="@color/deck_text_secondary"
+                android:textSize="10sp"
+                android:letterSpacing="0.08" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/settingsButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/deck_icon_button"
+            android:contentDescription="Settings"
+            android:padding="12dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_settings"
+            android:tint="@color/deck_text_primary"
+            android:preferKeepClear="true"
+            style="?android:attr/borderlessButtonStyle" />
+
+        <ImageButton
+            android:id="@+id/helpButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/deck_icon_button"
+            android:contentDescription="@string/help"
+            android:padding="12dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_help"
+            android:tint="@color/deck_text_primary"
+            android:preferKeepClear="true"
+            style="?android:attr/borderlessButtonStyle" />
+
+        <ImageButton
+            android:id="@+id/manuallyAddPc"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/deck_icon_button"
+            android:contentDescription="@string/title_add_pc"
+            android:padding="12dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_add"
+            android:tint="@color/deck_accent"
+            android:preferKeepClear="true"
+            style="?android:attr/borderlessButtonStyle" />
+    </LinearLayout>
 
     <RelativeLayout
         android:id="@+id/pcFragmentContainer"
-        android:layout_width="fill_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:layout_below="@+id/settingsButton"
-        android:layout_alignParentLeft="true"
-        android:layout_alignParentStart="true"
-        android:layout_alignParentRight="true"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentBottom="true"
-        >
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/pcHeader"
+        android:gravity="center">
 
         <RelativeLayout
             android:id="@+id/no_pc_found_layout"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingLeft="@dimen/activity_horizontal_margin"
-            android:paddingRight="@dimen/activity_horizontal_margin"
             android:layout_centerInParent="true"
-            android:layout_centerVertical="true"
-            android:layout_centerHorizontal="true">
+            android:gravity="center"
+            android:padding="24dp">
+
             <ProgressBar
                 android:id="@+id/pcs_loading"
-                android:layout_width="75dp"
-                android:layout_height="75dp"
-                android:indeterminate="true"/>
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:layout_centerHorizontal="true"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/deck_accent" />
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_toRightOf="@+id/pcs_loading"
-                android:layout_toEndOf="@+id/pcs_loading"
-                android:layout_marginLeft="10dp"
-                android:layout_marginStart="10dp"
-                android:layout_centerVertical="true"
-                android:textAppearance="?android:attr/textAppearanceLarge"
+                android:layout_below="@id/pcs_loading"
+                android:layout_marginTop="18dp"
                 android:gravity="center"
-                android:text="@string/searching_pc"/>
+                android:text="@string/searching_pc"
+                android:textColor="@color/deck_text_secondary"
+                android:textSize="14sp" />
         </RelativeLayout>
-
     </RelativeLayout>
-
-    <ImageButton
-        android:id="@+id/settingsButton"
-        android:layout_width="70dp"
-        android:layout_height="65dp"
-        android:cropToPadding="false"
-        android:scaleType="fitXY"
-        android:layout_alignParentLeft="true"
-        android:layout_alignParentStart="true"
-        android:layout_alignParentTop="true"
-        android:src="@drawable/ic_settings"
-        android:preferKeepClear="true"
-        style="?android:attr/borderlessButtonStyle"/>
-
-    <ImageButton
-        android:id="@+id/helpButton"
-        android:layout_width="70dp"
-        android:layout_height="65dp"
-        android:cropToPadding="false"
-        android:scaleType="fitXY"
-        android:layout_alignParentTop="true"
-        android:layout_toRightOf="@+id/settingsButton"
-        android:layout_toEndOf="@+id/profilesButton"
-        android:src="@drawable/ic_help"
-        android:preferKeepClear="true"
-        style="?android:attr/borderlessButtonStyle"/>
-
-    <ImageButton
-        android:id="@+id/manuallyAddPc"
-        android:layout_width="70dp"
-        android:layout_height="65dp"
-        android:cropToPadding="false"
-        android:scaleType="fitXY"
-        android:layout_alignParentTop="true"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentRight="true"
-        android:src="@drawable/ic_add"
-        android:preferKeepClear="true"
-        style="?android:attr/borderlessButtonStyle"/>
 
     <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
         android:id="@+id/profilesButton"
@@ -94,10 +128,12 @@
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
         android:layout_alignParentEnd="true"
-        android:layout_marginBottom="24dp"
-        android:layout_marginEnd="24dp"
+        android:layout_margin="20dp"
         android:contentDescription="@string/profile_manager_choose_profile"
-        android:layout_margin="16dp"
-        app:icon="@drawable/ic_profiles" />
+        android:textColor="@color/deck_text_primary"
+        app:backgroundTint="@color/deck_surface_raised"
+        app:icon="@drawable/ic_profiles"
+        app:iconTint="@color/deck_accent"
+        app:rippleColor="@color/deck_ripple" />
 
 </RelativeLayout>
