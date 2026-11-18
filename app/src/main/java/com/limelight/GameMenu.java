@@ -24,6 +24,7 @@ import com.limelight.utils.KeyMapper;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -45,11 +46,17 @@ public class GameMenu implements Game.GameMenuCallbacks {
         private final String label;
         private final boolean withGameFocus;
         private final Runnable runnable;
+        private String quickMenuOrderKey;
 
         public MenuOption(String label, boolean withGameFocus, Runnable runnable) {
+            this(label, withGameFocus, runnable, null);
+        }
+
+        public MenuOption(String label, boolean withGameFocus, Runnable runnable, String quickMenuOrderKey) {
             this.label = label;
             this.withGameFocus = withGameFocus;
             this.runnable = runnable;
+            this.quickMenuOrderKey = quickMenuOrderKey;
         }
 
         public MenuOption(String label, Runnable runnable) {
@@ -247,6 +254,20 @@ public class GameMenu implements Game.GameMenuCallbacks {
         showMenuDialog(getString(R.string.game_menu_send_keys), options.toArray(new MenuOption[options.size()]));
     }
 
+    private void sortQuickMenuOptions(List<MenuOption> options) {
+        String stored = PreferenceManager.getDefaultSharedPreferences(game).getString("quick_menu_order", "");
+        if (TextUtils.isEmpty(stored)) return;
+        List<String> order = new ArrayList<>();
+        for (String key : stored.split(",")) if (!order.contains(key)) order.add(key);
+        Collections.sort(options, (left, right) -> {
+            int leftIndex = left.quickMenuOrderKey == null ? Integer.MAX_VALUE : order.indexOf(left.quickMenuOrderKey);
+            int rightIndex = right.quickMenuOrderKey == null ? Integer.MAX_VALUE : order.indexOf(right.quickMenuOrderKey);
+            if (leftIndex < 0) leftIndex = Integer.MAX_VALUE;
+            if (rightIndex < 0) rightIndex = Integer.MAX_VALUE;
+            return Integer.compare(leftIndex, rightIndex);
+        });
+    }
+
     private void addAdvancedMenuOptions(List<MenuOption> options, GameInputDevice device) {
 
         if (game.allowChangeMouseMode && isQuickMenuOptionEnabled("quick_menu_advanced_mouse_mode")) {
@@ -303,18 +324,18 @@ public class GameMenu implements Game.GameMenuCallbacks {
         List<MenuOption> options = new ArrayList<>();
 
         if (isQuickMenuOptionEnabled("quick_menu_disconnect")) {
-            options.add(new MenuOption(getString(R.string.game_menu_disconnect), game::disconnect));
+            options.add(new MenuOption(getString(R.string.game_menu_disconnect), false, game::disconnect, "quick_menu_disconnect"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_quit_session")) {
-            options.add(new MenuOption(getString(R.string.game_menu_quit_session), game::quit));
+            options.add(new MenuOption(getString(R.string.game_menu_quit_session), false, game::quit, "quick_menu_quit_session"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_upload_clipboard")) {
             options.add(new MenuOption(getString(R.string.game_menu_upload_clipboard), true,
-                    () -> game.sendClipboard(true)));
+                    () -> game.sendClipboard(true), "quick_menu_upload_clipboard"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_fetch_clipboard")) {
             options.add(new MenuOption(getString(R.string.game_menu_fetch_clipboard), true,
-                    () -> game.getClipboard(0)));
+                    () -> game.getClipboard(0), "quick_menu_fetch_clipboard"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_server_cmd")) {
             options.add(new MenuOption(getString(R.string.game_menu_server_cmd), true,
@@ -331,24 +352,29 @@ public class GameMenu implements Game.GameMenuCallbacks {
                             hideMenu();
                             this.showServerCmd(serverCmds);
                         }
-                    }));
+                    }, "quick_menu_server_cmd"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_keyboard")) {
             options.add(new MenuOption(getString(R.string.game_menu_toggle_keyboard), true,
-                    game::toggleKeyboard));
+                    game::toggleKeyboard, "quick_menu_keyboard"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_zoom")) {
             options.add(new MenuOption(getString(game.isZoomModeEnabled() ? R.string.game_menu_disable_zoom_mode : R.string.game_menu_enable_zoom_mode), true,
-                    game::toggleZoomMode));
+                    game::toggleZoomMode, "quick_menu_zoom"));
         }
         if (dialogScreenContext == game && isQuickMenuOptionEnabled("quick_menu_rotate_screen")) {
             options.add(new MenuOption(getString(R.string.game_menu_rotate_screen), true,
-                    game::rotateScreen));
+                    game::rotateScreen, "quick_menu_rotate_screen"));
         }
         if (isQuickMenuOptionEnabled("quick_menu_advanced")) {
+            int advancedStart = options.size();
             addAdvancedMenuOptions(options, device);
+            for (int i = advancedStart; i < options.size(); i++) {
+                options.get(i).quickMenuOrderKey = "quick_menu_advanced";
+            }
         }
 
+        sortQuickMenuOptions(options);
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
         showMenuDialog(getString(R.string.quick_menu_title), options.toArray(new MenuOption[options.size()]));
     }
