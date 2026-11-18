@@ -3,6 +3,7 @@ package com.limelight.preferences;
 import static com.limelight.utils.ServerHelper.getActiveDisplay;
 
 import android.content.Context;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -36,6 +37,7 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Range;
 import android.view.Display;
+import android.view.DragEvent;
 import android.view.DisplayCutout;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -411,6 +413,33 @@ public class StreamSettings extends AppCompatActivity {
 
             final int[] selected = {0};
             list.setOnItemClickListener((parent, view, position, id) -> selected[0] = position);
+            list.setOnItemLongClickListener((parent, view, position, id) -> {
+                selected[0] = position;
+                ClipData dragData = ClipData.newPlainText("quick-menu-order", Integer.toString(position));
+                view.startDrag(dragData, new View.DragShadowBuilder(view), Integer.valueOf(position), 0);
+                return true;
+            });
+            list.setOnDragListener((view, event) -> {
+                if (event.getAction() == DragEvent.ACTION_DROP && event.getLocalState() instanceof Integer) {
+                    int from = (Integer) event.getLocalState();
+                    int to = list.pointToPosition((int) event.getX(), (int) event.getY());
+                    if (to >= 0 && from >= 0 && from < keys.size() && to < keys.size() && from != to) {
+                        String movedKey = keys.remove(from);
+                        String movedLabel = labels.remove(from);
+                        keys.add(to, movedKey);
+                        labels.add(to, movedLabel);
+                        selected[0] = to;
+                        adapter.notifyDataSetChanged();
+                        list.setItemChecked(to, true);
+                    }
+                    return true;
+                }
+                return event.getAction() == DragEvent.ACTION_DRAG_STARTED
+                        || event.getAction() == DragEvent.ACTION_DRAG_LOCATION
+                        || event.getAction() == DragEvent.ACTION_DRAG_ENTERED
+                        || event.getAction() == DragEvent.ACTION_DRAG_EXITED
+                        || event.getAction() == DragEvent.ACTION_DRAG_ENDED;
+            });
             up.setOnClickListener(view -> {
                 int index = selected[0];
                 if (index > 0) {
