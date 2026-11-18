@@ -513,7 +513,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
 
         menu.setHeaderTitle(selectedApp.app.getAppName());
-        MenuItem lockItem = menu.add(Menu.NONE, TOGGLE_APP_LOCK_ID, 0,\n                appGridAdapter.isAppLocked(selectedApp) ? "Unlock position" : "Lock position");
+        menu.add(Menu.NONE, TOGGLE_APP_LOCK_ID, 0,
+                appGridAdapter.isAppLocked(selectedApp) ? "Unlock position" : "Lock position");
 
         if (lastRunningAppId == 0) {
             if (prefConfig.useVirtualDisplay) {
