@@ -274,4 +274,32 @@
     <string name="summary_enable_perf_overlay">Akış sırasında gerçek zamanlı akış performansı bilgilerini görüntüleyin</string>
     <string name="title_enable_commit_text">Commit-text girişini etkinleştir (kaydırma/sesli)</string>
     <string name="summary_enable_commit_text">Yazılım klavyelerinden çok karakterli metni iletir (sürükleyerek yazma, tahminler, sesli dikte). Tuş bazlı girişe ihtiyaç duyan oyunlarda sorun yaratabilir.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Yedekleme ve geri yükleme</string>
+    <string name="backup_title">Ayarları dışa / içe aktar</string>
+    <string name="backup_summary">Ayarlarınızı, profillerinizi, kaplama düzenlerinizi ve özel tuşlarınızı bir dosyaya kaydedin veya bir dosyadan geri yükleyin</string>
+    <string name="backup_export">Dışa aktar</string>
+    <string name="backup_import">İçe aktar</string>
+    <string name="backup_export_done">Ayarlar dışa aktarıldı</string>
+    <string name="backup_export_failed">Dışa aktarma başarısız: %1$s</string>
+    <string name="backup_import_failed">İçe aktarma başarısız: %1$s</string>
+    <string name="backup_import_confirm_title">Mevcut ayarlar değiştirilsin mi?</string>
+    <string name="backup_import_button">İçe aktar ve yeniden başlat</string>
+    <string name="backup_unknown_date">bilinmeyen bir tarih</string>
+    <string name="backup_dialog_message">Dışa aktarma tüm ayarları, profilleri, kaplama düzenlerini ve özel tuşları bir dosyaya kaydeder. Eşleştirilmiş bilgisayarlar dahil edilmez.\n\nİçe aktarma bunları bir dosyanın içeriğiyle değiştirir.</string>
+    <string name="backup_import_confirm">Bu işlem ayarlarınızı, profillerinizi, kaplama düzenlerinizi ve özel tuşlarınızı %1$s tarihinde dışa aktarılan dosyanın içeriğiyle değiştirir. Eşleştirilmiş bilgisayarlarınız korunur.\n\nUygulama ardından yeniden başlatılır.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Bazı öğeler içe aktarılamıyor</string>
+    <string name="backup_unsupported_newer">Bu dosya uygulamanın daha yeni bir sürümüyle oluşturuldu (%1$s).</string>
+    <string name="backup_unsupported_message">Aşağıdaki öğeler bu sürümde desteklenmiyor ve atlanacak. Geri kalan her şey içe aktarılabilir:</string>
+    <string name="backup_unsupported_setting">Ayar: %1$s</string>
+    <string name="backup_unsupported_value">Uyumsuz değer: %1$s</string>
+    <string name="backup_unsupported_group">Ayar grubu: %1$s</string>
+    <string name="backup_unsupported_data">Dosya: %1$s</string>
+    <string name="backup_unsupported_section">Bölüm: %1$s</string>
+    <string name="backup_unsupported_pairing">Eşleştirilmiş bilgisayarlar (desteklenmiyor veya eksik)</string>
+    <string name="backup_import_rest">Kalanını içe aktar</string>
+    <string name="backup_import_rolled_back">İçe aktarma başarısız, önceki ayarlarınız korundu: %1$s</string>
 </resources>

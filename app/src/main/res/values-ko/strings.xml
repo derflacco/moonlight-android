@@ -289,4 +289,32 @@
     <string name="suffix_seekbar_vibrate_fallback_strength">%</string>
     <string name="title_enable_commit_text">커밋 텍스트 입력 활성화 (스와이프/음성)</string>
     <string name="summary_enable_commit_text">소프트 키보드의 여러 글자 입력(제스처 타이핑, 예측, 음성 입력)을 PC로 전달합니다. 키 단위 입력에 의존하는 게임에서는 문제가 발생할 수 있습니다.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">백업 및 복원</string>
+    <string name="backup_title">설정 내보내기 / 가져오기</string>
+    <string name="backup_summary">설정, 프로필, 오버레이 레이아웃, 특수 키를 파일로 저장하거나 파일에서 복원합니다</string>
+    <string name="backup_export">내보내기</string>
+    <string name="backup_import">가져오기</string>
+    <string name="backup_export_done">설정을 내보냈습니다</string>
+    <string name="backup_export_failed">내보내기 실패: %1$s</string>
+    <string name="backup_import_failed">가져오기 실패: %1$s</string>
+    <string name="backup_import_confirm_title">현재 설정을 교체할까요?</string>
+    <string name="backup_import_button">가져오기 및 다시 시작</string>
+    <string name="backup_unknown_date">알 수 없는 날짜</string>
+    <string name="backup_dialog_message">내보내기는 모든 설정, 프로필, 오버레이 레이아웃, 특수 키를 파일로 저장합니다. 페어링된 PC는 포함되지 않습니다.\n\n가져오기는 이를 파일의 내용으로 교체합니다.</string>
+    <string name="backup_import_confirm">설정, 프로필, 오버레이 레이아웃, 특수 키가 %1$s에 내보낸 파일의 내용으로 교체됩니다. 페어링된 PC는 유지됩니다.\n\n이후 앱이 다시 시작됩니다.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">일부 항목을 가져올 수 없습니다</string>
+    <string name="backup_unsupported_newer">이 파일은 더 최신 버전의 앱(%1$s)에서 만들어졌습니다.</string>
+    <string name="backup_unsupported_message">다음 항목은 이 버전에서 지원되지 않아 건너뜁니다. 나머지는 모두 가져올 수 있습니다:</string>
+    <string name="backup_unsupported_setting">설정: %1$s</string>
+    <string name="backup_unsupported_value">호환되지 않는 값: %1$s</string>
+    <string name="backup_unsupported_group">설정 그룹: %1$s</string>
+    <string name="backup_unsupported_data">파일: %1$s</string>
+    <string name="backup_unsupported_section">섹션: %1$s</string>
+    <string name="backup_unsupported_pairing">페어링된 컴퓨터 (지원되지 않거나 불완전함)</string>
+    <string name="backup_import_rest">나머지 가져오기</string>
+    <string name="backup_import_rolled_back">가져오기에 실패했으며 이전 설정이 유지되었습니다: %1$s</string>
 </resources>

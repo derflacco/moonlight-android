@@ -659,4 +659,32 @@
     <string name="render_mode_2d">По умолчанию 2D</string>
     <string name="title_checkbox_full_screen">Включить полноэкранный режим</string>
     <string name="summary_checkbox_full_screen">Скрывать системные панели в режиме погружения</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Резервное копирование и восстановление</string>
+    <string name="backup_title">Экспорт / импорт настроек</string>
+    <string name="backup_summary">Сохраните настройки, профили, раскладки оверлея и специальные клавиши в файл или восстановите их из файла</string>
+    <string name="backup_export">Экспорт</string>
+    <string name="backup_import">Импорт</string>
+    <string name="backup_export_done">Настройки экспортированы</string>
+    <string name="backup_export_failed">Ошибка экспорта: %1$s</string>
+    <string name="backup_import_failed">Ошибка импорта: %1$s</string>
+    <string name="backup_import_confirm_title">Заменить текущие настройки?</string>
+    <string name="backup_import_button">Импортировать и перезапустить</string>
+    <string name="backup_unknown_date">неизвестную дату</string>
+    <string name="backup_dialog_message">Экспорт сохраняет все настройки, профили, раскладки оверлея и специальные клавиши в файл. Сопряжённые ПК не включаются.\n\nИмпорт заменяет их содержимым файла.</string>
+    <string name="backup_import_confirm">Настройки, профили, раскладки оверлея и специальные клавиши будут заменены содержимым файла, экспортированного %1$s. Сопряжённые ПК сохранятся.\n\nЗатем приложение перезапустится.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Некоторые элементы нельзя импортировать</string>
+    <string name="backup_unsupported_newer">Этот файл создан более новой версией приложения (%1$s).</string>
+    <string name="backup_unsupported_message">Следующие элементы не поддерживаются этой версией и будут пропущены. Всё остальное можно импортировать:</string>
+    <string name="backup_unsupported_setting">Настройка: %1$s</string>
+    <string name="backup_unsupported_value">Несовместимое значение: %1$s</string>
+    <string name="backup_unsupported_group">Группа настроек: %1$s</string>
+    <string name="backup_unsupported_data">Файл: %1$s</string>
+    <string name="backup_unsupported_section">Раздел: %1$s</string>
+    <string name="backup_unsupported_pairing">Сопряжённые компьютеры (не поддерживаются или неполные)</string>
+    <string name="backup_import_rest">Импортировать остальное</string>
+    <string name="backup_import_rolled_back">Ошибка импорта, прежние настройки сохранены: %1$s</string>
 </resources>

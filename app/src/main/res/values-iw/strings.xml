@@ -153,4 +153,32 @@
     <string name="title_checkbox_touchscreen_trackpad">השתמש במסך מגע כמשטח מגע</string>
     <string name="title_enable_commit_text">הפעל קלט commit-text (החלקה/קול)</string>
     <string name="summary_enable_commit_text">מעביר טקסט מרובה תווים ממקלדות וירטואליות (החלקה, הצעות, הקלדה קולית). עלול לגרום בעיות במשחקים שמסתמכים על קלט לפי מקש.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">גיבוי ושחזור</string>
+    <string name="backup_title">ייצוא / ייבוא הגדרות</string>
+    <string name="backup_summary">שמירת ההגדרות, הפרופילים, פריסות שכבת הבקרה והמקשים המיוחדים לקובץ, או שחזורם מקובץ</string>
+    <string name="backup_export">ייצוא</string>
+    <string name="backup_import">ייבוא</string>
+    <string name="backup_export_done">ההגדרות יוצאו</string>
+    <string name="backup_export_failed">הייצוא נכשל: %1$s</string>
+    <string name="backup_import_failed">הייבוא נכשל: %1$s</string>
+    <string name="backup_import_confirm_title">להחליף את ההגדרות הנוכחיות?</string>
+    <string name="backup_import_button">ייבוא והפעלה מחדש</string>
+    <string name="backup_unknown_date">תאריך לא ידוע</string>
+    <string name="backup_dialog_message">הייצוא שומר את כל ההגדרות, הפרופילים, פריסות שכבת הבקרה והמקשים המיוחדים בקובץ. המחשבים המצומדים אינם נכללים.\n\nהייבוא מחליף אותם בתוכן של קובץ.</string>
+    <string name="backup_import_confirm">פעולה זו מחליפה את ההגדרות, הפרופילים, פריסות שכבת הבקרה והמקשים המיוחדים בתוכן הקובץ שיוצא בתאריך %1$s. המחשבים המצומדים נשמרים.\n\nהאפליקציה תופעל מחדש לאחר מכן.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">לא ניתן לייבא חלק מהפריטים</string>
+    <string name="backup_unsupported_newer">קובץ זה נוצר על ידי גרסה חדשה יותר של האפליקציה (%1$s).</string>
+    <string name="backup_unsupported_message">הפריטים הבאים אינם נתמכים בגרסה זו וידולגו. כל השאר ניתן לייבוא:</string>
+    <string name="backup_unsupported_setting">הגדרה: %1$s</string>
+    <string name="backup_unsupported_value">ערך לא תואם: %1$s</string>
+    <string name="backup_unsupported_group">קבוצת הגדרות: %1$s</string>
+    <string name="backup_unsupported_data">קובץ: %1$s</string>
+    <string name="backup_unsupported_section">מקטע: %1$s</string>
+    <string name="backup_unsupported_pairing">מחשבים מצומדים (לא נתמכים או חלקיים)</string>
+    <string name="backup_import_rest">ייבוא השאר</string>
+    <string name="backup_import_rolled_back">הייבוא נכשל, ההגדרות הקודמות נשמרו: %1$s</string>
 </resources>

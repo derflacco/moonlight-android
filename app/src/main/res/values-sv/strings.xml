@@ -273,4 +273,32 @@
     <string name="title_analog_scrolling">Använd en analog spak för att bläddra</string>
     <string name="title_enable_commit_text">Aktivera commit-textinmatning (svep/röst)</string>
     <string name="summary_enable_commit_text">Vidarebefordra text i flera tecken från mjuka tangentbord (gestinmatning, förslag, röstdiktering). Kan störa spel som kräver tangent för tangent.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Säkerhetskopiering och återställning</string>
+    <string name="backup_title">Exportera / importera inställningar</string>
+    <string name="backup_summary">Spara dina inställningar, profiler, överläggslayouter och specialtangenter till en fil, eller återställ dem från en fil</string>
+    <string name="backup_export">Exportera</string>
+    <string name="backup_import">Importera</string>
+    <string name="backup_export_done">Inställningarna har exporterats</string>
+    <string name="backup_export_failed">Exporten misslyckades: %1$s</string>
+    <string name="backup_import_failed">Importen misslyckades: %1$s</string>
+    <string name="backup_import_confirm_title">Ersätta nuvarande inställningar?</string>
+    <string name="backup_import_button">Importera och starta om</string>
+    <string name="backup_unknown_date">ett okänt datum</string>
+    <string name="backup_dialog_message">Export sparar alla inställningar, profiler, överläggslayouter och specialtangenter i en fil. Parkopplade datorer ingår inte.\n\nImport ersätter dem med innehållet i en fil.</string>
+    <string name="backup_import_confirm">Detta ersätter dina inställningar, profiler, överläggslayouter och specialtangenter med innehållet i filen som exporterades %1$s. Dina parkopplade datorer behålls.\n\nAppen startas om efteråt.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Vissa objekt kan inte importeras</string>
+    <string name="backup_unsupported_newer">Den här filen skapades av en nyare version av appen (%1$s).</string>
+    <string name="backup_unsupported_message">Följande objekt stöds inte av den här versionen och hoppas över. Allt annat kan importeras:</string>
+    <string name="backup_unsupported_setting">Inställning: %1$s</string>
+    <string name="backup_unsupported_value">Inkompatibelt värde: %1$s</string>
+    <string name="backup_unsupported_group">Inställningsgrupp: %1$s</string>
+    <string name="backup_unsupported_data">Fil: %1$s</string>
+    <string name="backup_unsupported_section">Avsnitt: %1$s</string>
+    <string name="backup_unsupported_pairing">Parkopplade datorer (stöds inte eller ofullständiga)</string>
+    <string name="backup_import_rest">Importera resten</string>
+    <string name="backup_import_rolled_back">Importen misslyckades, dina tidigare inställningar har behållits: %1$s</string>
 </resources>

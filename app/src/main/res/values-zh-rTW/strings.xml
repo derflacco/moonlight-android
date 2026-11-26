@@ -787,4 +787,32 @@
 
 	<string name="title_checkbox_full_screen">啟用全螢幕</string>
 	<string name="summary_checkbox_full_screen">以沉浸模式隱藏系統列</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">備份與還原</string>
+    <string name="backup_title">匯出 / 匯入設定</string>
+    <string name="backup_summary">將設定、設定檔、疊加層配置和特殊按鍵儲存到檔案，或從檔案還原</string>
+    <string name="backup_export">匯出</string>
+    <string name="backup_import">匯入</string>
+    <string name="backup_export_done">設定已匯出</string>
+    <string name="backup_export_failed">匯出失敗：%1$s</string>
+    <string name="backup_import_failed">匯入失敗：%1$s</string>
+    <string name="backup_import_confirm_title">要取代目前的設定嗎？</string>
+    <string name="backup_import_button">匯入並重新啟動</string>
+    <string name="backup_unknown_date">未知日期</string>
+    <string name="backup_dialog_message">匯出會將所有設定、設定檔、疊加層配置和特殊按鍵儲存到檔案中，不包含已配對的電腦。\n\n匯入會以檔案內容取代它們。</string>
+    <string name="backup_import_confirm">這會以 %1$s 匯出的檔案內容取代你的設定、設定檔、疊加層配置和特殊按鍵。已配對的電腦會保留。\n\n之後應用程式將重新啟動。</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">部分項目無法匯入</string>
+    <string name="backup_unsupported_newer">此檔案由較新版本的應用程式（%1$s）建立。</string>
+    <string name="backup_unsupported_message">以下項目不受此版本支援，將會略過。其餘內容皆可匯入：</string>
+    <string name="backup_unsupported_setting">設定：%1$s</string>
+    <string name="backup_unsupported_value">不相容的值：%1$s</string>
+    <string name="backup_unsupported_group">設定群組：%1$s</string>
+    <string name="backup_unsupported_data">檔案：%1$s</string>
+    <string name="backup_unsupported_section">區段：%1$s</string>
+    <string name="backup_unsupported_pairing">已配對的電腦（不受支援或不完整）</string>
+    <string name="backup_import_rest">匯入其餘內容</string>
+    <string name="backup_import_rolled_back">匯入失敗，已保留先前的設定：%1$s</string>
 </resources>

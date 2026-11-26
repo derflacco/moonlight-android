@@ -638,4 +638,32 @@
     <!-- New Strings -->
     <string name="title_enable_commit_text">Bật nhập commit-text (vuốt/giọng nói)</string>
     <string name="summary_enable_commit_text">Chuyển tiếp văn bản nhiều ký tự từ bàn phím ảo (gõ vuốt, gợi ý, nhập giọng nói). Có thể gây lỗi với trò chơi yêu cầu nhập từng phím.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Sao lưu và khôi phục</string>
+    <string name="backup_title">Xuất / nhập cài đặt</string>
+    <string name="backup_summary">Lưu cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt vào một tệp, hoặc khôi phục chúng từ tệp</string>
+    <string name="backup_export">Xuất</string>
+    <string name="backup_import">Nhập</string>
+    <string name="backup_export_done">Đã xuất cài đặt</string>
+    <string name="backup_export_failed">Xuất thất bại: %1$s</string>
+    <string name="backup_import_failed">Nhập thất bại: %1$s</string>
+    <string name="backup_import_confirm_title">Thay thế cài đặt hiện tại?</string>
+    <string name="backup_import_button">Nhập và khởi động lại</string>
+    <string name="backup_unknown_date">ngày không xác định</string>
+    <string name="backup_dialog_message">Xuất sẽ lưu tất cả cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt vào một tệp. Các PC đã ghép nối không được bao gồm.\n\nNhập sẽ thay thế chúng bằng nội dung của một tệp.</string>
+    <string name="backup_import_confirm">Thao tác này thay thế cài đặt, hồ sơ, bố cục lớp phủ và phím đặc biệt bằng nội dung của tệp được xuất vào %1$s. Các PC đã ghép nối được giữ lại.\n\nỨng dụng sẽ khởi động lại sau đó.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Không thể nhập một số mục</string>
+    <string name="backup_unsupported_newer">Tệp này được tạo bởi phiên bản ứng dụng mới hơn (%1$s).</string>
+    <string name="backup_unsupported_message">Các mục sau không được phiên bản này hỗ trợ và sẽ bị bỏ qua. Mọi thứ khác đều có thể nhập:</string>
+    <string name="backup_unsupported_setting">Cài đặt: %1$s</string>
+    <string name="backup_unsupported_value">Giá trị không tương thích: %1$s</string>
+    <string name="backup_unsupported_group">Nhóm cài đặt: %1$s</string>
+    <string name="backup_unsupported_data">Tệp: %1$s</string>
+    <string name="backup_unsupported_section">Mục: %1$s</string>
+    <string name="backup_unsupported_pairing">Máy tính đã ghép nối (không được hỗ trợ hoặc không đầy đủ)</string>
+    <string name="backup_import_rest">Nhập phần còn lại</string>
+    <string name="backup_import_rolled_back">Nhập thất bại, cài đặt trước đó đã được giữ lại: %1$s</string>
 </resources>

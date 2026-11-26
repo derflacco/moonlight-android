@@ -209,4 +209,32 @@
     <string name="perf_overlay_streamdetails">Videostrøm: %1$s %2$.2f BPS</string>
     <string name="title_enable_commit_text">Aktiver commit-tekst-input (sveip/stemme)</string>
     <string name="summary_enable_commit_text">Sender tekst med flere tegn fra skjermtastaturet (gesture-skriving, forslag, stemmediktat). Kan skape problemer i spill som krever tast-for-tast-inndata.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Sikkerhetskopi og gjenoppretting</string>
+    <string name="backup_title">Eksporter / importer innstillinger</string>
+    <string name="backup_summary">Lagre innstillinger, profiler, overleggsoppsett og spesialtaster i en fil, eller gjenopprett dem fra en fil</string>
+    <string name="backup_export">Eksporter</string>
+    <string name="backup_import">Importer</string>
+    <string name="backup_export_done">Innstillingene er eksportert</string>
+    <string name="backup_export_failed">Eksporten mislyktes: %1$s</string>
+    <string name="backup_import_failed">Importen mislyktes: %1$s</string>
+    <string name="backup_import_confirm_title">Erstatte gjeldende innstillinger?</string>
+    <string name="backup_import_button">Importer og start på nytt</string>
+    <string name="backup_unknown_date">en ukjent dato</string>
+    <string name="backup_dialog_message">Eksport lagrer alle innstillinger, profiler, overleggsoppsett og spesialtaster i en fil. Parede PC-er tas ikke med.\n\nImport erstatter dem med innholdet i en fil.</string>
+    <string name="backup_import_confirm">Dette erstatter innstillingene, profilene, overleggsoppsettene og spesialtastene dine med innholdet i filen som ble eksportert %1$s. De parede PC-ene beholdes.\n\nAppen startes på nytt etterpå.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Noen elementer kan ikke importeres</string>
+    <string name="backup_unsupported_newer">Denne filen ble laget av en nyere versjon av appen (%1$s).</string>
+    <string name="backup_unsupported_message">Følgende elementer støttes ikke av denne versjonen og hoppes over. Alt annet kan importeres:</string>
+    <string name="backup_unsupported_setting">Innstilling: %1$s</string>
+    <string name="backup_unsupported_value">Inkompatibel verdi: %1$s</string>
+    <string name="backup_unsupported_group">Innstillingsgruppe: %1$s</string>
+    <string name="backup_unsupported_data">Fil: %1$s</string>
+    <string name="backup_unsupported_section">Seksjon: %1$s</string>
+    <string name="backup_unsupported_pairing">Parede datamaskiner (støttes ikke eller ufullstendige)</string>
+    <string name="backup_import_rest">Importer resten</string>
+    <string name="backup_import_rolled_back">Importen mislyktes, de tidligere innstillingene er beholdt: %1$s</string>
 </resources>

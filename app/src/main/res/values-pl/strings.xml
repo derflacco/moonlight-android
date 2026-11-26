@@ -273,4 +273,32 @@
     <string name="summary_setup_guide">Wyświetl instrukcje, jak skonfigurować komputer do gier do streamowania</string>
     <string name="title_enable_commit_text">Włącz przekazywanie tekstu (pisanie gestem/głos)</string>
     <string name="summary_enable_commit_text">Przekazuje wieloznakowy tekst z klawiatur ekranowych (pisanie gestem, podpowiedzi, dyktowanie głosowe) do hosta. Może powodować problemy w grach wymagających wprowadzania znak po znaku.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Kopia zapasowa i przywracanie</string>
+    <string name="backup_title">Eksport / import ustawień</string>
+    <string name="backup_summary">Zapisz ustawienia, profile, układy nakładki i klawisze specjalne do pliku lub przywróć je z pliku</string>
+    <string name="backup_export">Eksportuj</string>
+    <string name="backup_import">Importuj</string>
+    <string name="backup_export_done">Ustawienia wyeksportowane</string>
+    <string name="backup_export_failed">Eksport nie powiódł się: %1$s</string>
+    <string name="backup_import_failed">Import nie powiódł się: %1$s</string>
+    <string name="backup_import_confirm_title">Zastąpić bieżące ustawienia?</string>
+    <string name="backup_import_button">Importuj i uruchom ponownie</string>
+    <string name="backup_unknown_date">nieznanego dnia</string>
+    <string name="backup_dialog_message">Eksport zapisuje wszystkie ustawienia, profile, układy nakładki i klawisze specjalne do pliku. Sparowane komputery nie są dołączane.\n\nImport zastępuje je zawartością pliku.</string>
+    <string name="backup_import_confirm">Spowoduje to zastąpienie ustawień, profili, układów nakładki i klawiszy specjalnych zawartością pliku wyeksportowanego %1$s. Sparowane komputery zostaną zachowane.\n\nAplikacja zostanie następnie uruchomiona ponownie.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Niektórych elementów nie można zaimportować</string>
+    <string name="backup_unsupported_newer">Ten plik został utworzony przez nowszą wersję aplikacji (%1$s).</string>
+    <string name="backup_unsupported_message">Poniższe elementy nie są obsługiwane przez tę wersję i zostaną pominięte. Wszystko inne można zaimportować:</string>
+    <string name="backup_unsupported_setting">Ustawienie: %1$s</string>
+    <string name="backup_unsupported_value">Niezgodna wartość: %1$s</string>
+    <string name="backup_unsupported_group">Grupa ustawień: %1$s</string>
+    <string name="backup_unsupported_data">Plik: %1$s</string>
+    <string name="backup_unsupported_section">Sekcja: %1$s</string>
+    <string name="backup_unsupported_pairing">Sparowane komputery (nieobsługiwane lub niekompletne)</string>
+    <string name="backup_import_rest">Importuj resztę</string>
+    <string name="backup_import_rolled_back">Import nie powiódł się, poprzednie ustawienia zostały zachowane: %1$s</string>
 </resources>

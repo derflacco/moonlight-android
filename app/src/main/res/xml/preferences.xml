@@ -5,6 +5,17 @@
     app:iconSpaceReserved="false">
 
     <PreferenceCategory
+        android:key="category_backup"
+        android:title="@string/backup_category"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="backup_export_import"
+            android:summary="@string/backup_summary"
+            android:title="@string/backup_title"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
         android:key="category_video_settings"
         android:title="@string/category_video_settings"
         app:initialExpandedChildrenCount="3"

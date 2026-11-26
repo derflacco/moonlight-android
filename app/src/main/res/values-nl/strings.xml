@@ -224,4 +224,32 @@
     <string name="videoformat_hevcalways">Gebruik HEVC altijd (mogelijkheid tot crashes)</string>
     <string name="title_enable_commit_text">Commit-tekstinvoer inschakelen (veeg/stem)</string>
     <string name="summary_enable_commit_text">Stuurt meerteksts invoer van softwaretoetsenborden (veegtypen, voorspellingen, spraakdicteren) door naar de pc. Kan problemen geven bij games die per-toetsinvoer vereisen.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Back-up en herstel</string>
+    <string name="backup_title">Instellingen exporteren / importeren</string>
+    <string name="backup_summary">Sla je instellingen, profielen, overlay-indelingen en speciale toetsen op in een bestand, of herstel ze uit een bestand</string>
+    <string name="backup_export">Exporteren</string>
+    <string name="backup_import">Importeren</string>
+    <string name="backup_export_done">Instellingen geëxporteerd</string>
+    <string name="backup_export_failed">Exporteren mislukt: %1$s</string>
+    <string name="backup_import_failed">Importeren mislukt: %1$s</string>
+    <string name="backup_import_confirm_title">Huidige instellingen vervangen?</string>
+    <string name="backup_import_button">Importeren en herstarten</string>
+    <string name="backup_unknown_date">een onbekende datum</string>
+    <string name="backup_dialog_message">Exporteren slaat alle instellingen, profielen, overlay-indelingen en speciale toetsen op in een bestand. Gekoppelde pc\'s worden niet meegenomen.\n\nImporteren vervangt ze door de inhoud van een bestand.</string>
+    <string name="backup_import_confirm">Hiermee worden je instellingen, profielen, overlay-indelingen en speciale toetsen vervangen door de inhoud van het bestand dat op %1$s is geëxporteerd. Je gekoppelde pc\'s blijven behouden.\n\nDe app wordt daarna opnieuw gestart.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Sommige items kunnen niet worden geïmporteerd</string>
+    <string name="backup_unsupported_newer">Dit bestand is gemaakt met een nieuwere versie van de app (%1$s).</string>
+    <string name="backup_unsupported_message">De volgende items worden niet ondersteund door deze versie en worden overgeslagen. Al het andere kan worden geïmporteerd:</string>
+    <string name="backup_unsupported_setting">Instelling: %1$s</string>
+    <string name="backup_unsupported_value">Incompatibele waarde: %1$s</string>
+    <string name="backup_unsupported_group">Instellingengroep: %1$s</string>
+    <string name="backup_unsupported_data">Bestand: %1$s</string>
+    <string name="backup_unsupported_section">Sectie: %1$s</string>
+    <string name="backup_unsupported_pairing">Gekoppelde computers (niet ondersteund of onvolledig)</string>
+    <string name="backup_import_rest">De rest importeren</string>
+    <string name="backup_import_rolled_back">Importeren mislukt, je vorige instellingen zijn behouden: %1$s</string>
 </resources>

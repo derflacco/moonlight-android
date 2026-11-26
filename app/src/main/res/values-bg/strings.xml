@@ -142,4 +142,32 @@
     <!-- commit-text feature -->
     <string name="title_enable_commit_text">Разреши изпращане на текст на блокове (жестово/гласово въвеждане)</string>
     <string name="summary_enable_commit_text">Изпраща текст от софтуерната клавиатура наведнъж (жестово писане, предложения, гласово диктуване). Възможно е да не работи с игри, които разчитат на по-символно въвеждане.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Архивиране и възстановяване</string>
+    <string name="backup_title">Експорт / импорт на настройките</string>
+    <string name="backup_summary">Запазете настройките, профилите, подредбите на наслагването и специалните клавиши във файл или ги възстановете от файл</string>
+    <string name="backup_export">Експорт</string>
+    <string name="backup_import">Импорт</string>
+    <string name="backup_export_done">Настройките са експортирани</string>
+    <string name="backup_export_failed">Експортът е неуспешен: %1$s</string>
+    <string name="backup_import_failed">Импортът е неуспешен: %1$s</string>
+    <string name="backup_import_confirm_title">Да се заменят ли текущите настройки?</string>
+    <string name="backup_import_button">Импорт и рестарт</string>
+    <string name="backup_unknown_date">неизвестна дата</string>
+    <string name="backup_dialog_message">Експортът записва всички настройки, профили, подредби на наслагването и специални клавиши във файл. Сдвоените компютри не се включват.\n\nИмпортът ги заменя със съдържанието на файл.</string>
+    <string name="backup_import_confirm">Това заменя настройките, профилите, подредбите на наслагването и специалните клавиши със съдържанието на файла, експортиран на %1$s. Сдвоените компютри се запазват.\n\nПриложението ще се рестартира след това.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Някои елементи не могат да бъдат импортирани</string>
+    <string name="backup_unsupported_newer">Този файл е създаден от по-нова версия на приложението (%1$s).</string>
+    <string name="backup_unsupported_message">Следните елементи не се поддържат от тази версия и ще бъдат пропуснати. Всичко останало може да бъде импортирано:</string>
+    <string name="backup_unsupported_setting">Настройка: %1$s</string>
+    <string name="backup_unsupported_value">Несъвместима стойност: %1$s</string>
+    <string name="backup_unsupported_group">Група настройки: %1$s</string>
+    <string name="backup_unsupported_data">Файл: %1$s</string>
+    <string name="backup_unsupported_section">Раздел: %1$s</string>
+    <string name="backup_unsupported_pairing">Сдвоени компютри (неподдържани или непълни)</string>
+    <string name="backup_import_rest">Импортирай останалото</string>
+    <string name="backup_import_rolled_back">Импортът е неуспешен, предишните настройки са запазени: %1$s</string>
 </resources>

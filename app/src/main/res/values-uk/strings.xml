@@ -284,4 +284,32 @@
     <string name="perf_overlay_hostprocessinglatency">Затримка обробки хостом мін./макс./середня: %1$.1f/%2$.1f/%3$.1f мс</string>
     <string name="title_enable_commit_text">Увімкнути commit-text ввід (свайп/голос)</string>
     <string name="summary_enable_commit_text">Пересилати багато-символьний текст з екранних клавіатур (жестове введення, підказки, голосовий ввід). Може порушити ігри, що покладаються на посимвольне введення.</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Резервне копіювання та відновлення</string>
+    <string name="backup_title">Експорт / імпорт налаштувань</string>
+    <string name="backup_summary">Збережіть налаштування, профілі, розкладки оверлею та спеціальні клавіші у файл або відновіть їх із файлу</string>
+    <string name="backup_export">Експорт</string>
+    <string name="backup_import">Імпорт</string>
+    <string name="backup_export_done">Налаштування експортовано</string>
+    <string name="backup_export_failed">Помилка експорту: %1$s</string>
+    <string name="backup_import_failed">Помилка імпорту: %1$s</string>
+    <string name="backup_import_confirm_title">Замінити поточні налаштування?</string>
+    <string name="backup_import_button">Імпортувати й перезапустити</string>
+    <string name="backup_unknown_date">невідому дату</string>
+    <string name="backup_dialog_message">Експорт зберігає всі налаштування, профілі, розкладки оверлею та спеціальні клавіші у файл. Спарені ПК не включаються.\n\nІмпорт замінює їх вмістом файлу.</string>
+    <string name="backup_import_confirm">Налаштування, профілі, розкладки оверлею та спеціальні клавіші буде замінено вмістом файлу, експортованого %1$s. Спарені ПК збережуться.\n\nПотім застосунок перезапуститься.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Деякі елементи неможливо імпортувати</string>
+    <string name="backup_unsupported_newer">Цей файл створено новішою версією застосунку (%1$s).</string>
+    <string name="backup_unsupported_message">Наведені нижче елементи не підтримуються цією версією й будуть пропущені. Усе інше можна імпортувати:</string>
+    <string name="backup_unsupported_setting">Налаштування: %1$s</string>
+    <string name="backup_unsupported_value">Несумісне значення: %1$s</string>
+    <string name="backup_unsupported_group">Група налаштувань: %1$s</string>
+    <string name="backup_unsupported_data">Файл: %1$s</string>
+    <string name="backup_unsupported_section">Розділ: %1$s</string>
+    <string name="backup_unsupported_pairing">Спарені комп\'ютери (не підтримуються або неповні)</string>
+    <string name="backup_import_rest">Імпортувати решту</string>
+    <string name="backup_import_rolled_back">Помилка імпорту, попередні налаштування збережено: %1$s</string>
 </resources>

@@ -590,4 +590,32 @@
     <string name="title_checkbox_remember_zoom_pan">Mémoriser le zoom et le panoramique</string>
     <string name="summary_checkbox_remember_zoom_pan">Enregistre la position de zoom et de panoramique entre les sessions.</string>
     <string name="title_edit_profile">Modifier le profil</string>
+
+    <!-- Settings backup -->
+    <string name="backup_category">Sauvegarde et restauration</string>
+    <string name="backup_title">Exporter / importer les paramètres</string>
+    <string name="backup_summary">Enregistrez vos paramètres, profils, dispositions de la superposition et touches spéciales dans un fichier, ou restaurez-les depuis un fichier</string>
+    <string name="backup_export">Exporter</string>
+    <string name="backup_import">Importer</string>
+    <string name="backup_export_done">Paramètres exportés</string>
+    <string name="backup_export_failed">Échec de l\'export : %1$s</string>
+    <string name="backup_import_failed">Échec de l\'import : %1$s</string>
+    <string name="backup_import_confirm_title">Remplacer les paramètres actuels ?</string>
+    <string name="backup_import_button">Importer et redémarrer</string>
+    <string name="backup_unknown_date">une date inconnue</string>
+    <string name="backup_dialog_message">L\'export enregistre tous les paramètres, profils, dispositions de la superposition et touches spéciales dans un fichier. Les PC appairés ne sont pas inclus.\n\nL\'import les remplace par le contenu d\'un fichier.</string>
+    <string name="backup_import_confirm">Vos paramètres, profils, dispositions de la superposition et touches spéciales seront remplacés par le contenu du fichier exporté le %1$s. Vos PC appairés sont conservés.\n\nL\'application redémarrera ensuite.</string>
+
+    <!-- Settings backup: import checks -->
+    <string name="backup_unsupported_title">Certains éléments ne peuvent pas être importés</string>
+    <string name="backup_unsupported_newer">Ce fichier a été créé par une version plus récente de l\'application (%1$s).</string>
+    <string name="backup_unsupported_message">Les éléments suivants ne sont pas pris en charge par cette version et seront ignorés. Tout le reste peut être importé :</string>
+    <string name="backup_unsupported_setting">Paramètre : %1$s</string>
+    <string name="backup_unsupported_value">Valeur incompatible : %1$s</string>
+    <string name="backup_unsupported_group">Groupe de paramètres : %1$s</string>
+    <string name="backup_unsupported_data">Fichier : %1$s</string>
+    <string name="backup_unsupported_section">Section : %1$s</string>
+    <string name="backup_unsupported_pairing">Ordinateurs appairés (non pris en charge ou incomplets)</string>
+    <string name="backup_import_rest">Importer le reste</string>
+    <string name="backup_import_rolled_back">Échec de l\'import, vos paramètres précédents ont été conservés : %1$s</string>
 </resources>
