@@ -46,6 +46,8 @@ android {
         }
 
         nonRoot_game {
+            isDefault = true
+
             externalNativeBuild {
                 ndkBuild {
                     arguments "PRODUCT_FLAVOR=nonRoot"
@@ -146,6 +148,7 @@ android {
         }
 perf {
     initWith release
+    isDefault = true
     matchingFallbacks = ["release"]
     debuggable false
     minifyEnabled true
