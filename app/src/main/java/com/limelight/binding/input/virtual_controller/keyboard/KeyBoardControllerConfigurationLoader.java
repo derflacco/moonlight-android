@@ -19,6 +19,7 @@ import androidx.preference.PreferenceManager;
 import com.limelight.GameMenu;
 import com.limelight.LimeLog;
 import com.limelight.R;
+import com.limelight.binding.input.overlay.LayoutSlots;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
 import com.limelight.preferences.PreferenceConfiguration;
@@ -128,7 +129,7 @@ public class KeyBoardControllerConfigurationLoader {
 
     }
 
-    private static KeyBoardAnalogStickButtonFree createKeyBoardAnalogStickButton2(final KeyBoardController controller, String elementId, final Context context, int[] keylist) {
+    public static KeyBoardAnalogStickButtonFree createKeyBoardAnalogStickButton2(final KeyBoardController controller, String elementId, final Context context, int[] keylist) {
 
         KeyBoardAnalogStickButtonFree analogStick = new KeyBoardAnalogStickButtonFree(controller, elementId, context, keylist);
         analogStick.setListener(new KeyBoardAnalogStickButtonFree.KeyBoardAnalogStickListener() {
@@ -399,7 +400,9 @@ public class KeyBoardControllerConfigurationLoader {
                 int keyCodeRight = obj.optInt("rightCode");
                 int keyCodeUp = obj.optInt("upCode");
                 int keyCodeDown = obj.optInt("downCode");
-                controller.addElement(createDiaitalPadButton(code, keyCodeLeft, keyCodeRight, keyCodeUp, keyCodeDown, controller, context),
+                KeyboardDigitalPadButton dpad = createDiaitalPadButton(code, keyCodeLeft, keyCodeRight, keyCodeUp, keyCodeDown, controller, context);
+                dpad.setDisplayName(context.getString(R.string.overlay_element_wasd_dpad));
+                controller.addElement(dpad,
                         screenScale(92, height) + rightDisplacement,
                         screenScale(41, height),
                         (int) (w * 2.5), (int) (w * 2.5)
@@ -416,14 +419,19 @@ public class KeyBoardControllerConfigurationLoader {
                 int keyCodeMiddle = obj.optInt("middleCode");
                 int[] keys = new int[]{keyCodeUp, keyCodeDown, keyCodeLeft, keyCodeRight, keyCodeMiddle};
 
+                String stickName = context.getString(R.string.overlay_element_wasd_stick);
                 if (config.enableNewAnalogStick) {
-                    controller.addElement(createKeyBoardAnalogStickButton2(controller, code, context, keys),
+                    KeyBoardAnalogStickButtonFree stick = createKeyBoardAnalogStickButton2(controller, code, context, keys);
+                    stick.setDisplayName(stickName);
+                    controller.addElement(stick,
                             screenScale(4, height),
                             screenScale(41, height),
                             (int) (w * 2.5), (int) (w * 2.5)
                     );
                 } else {
-                    controller.addElement(createKeyBoardAnalogStickButton(controller, code, context, keys),
+                    KeyBoardAnalogStickButton stick = createKeyBoardAnalogStickButton(controller, code, context, keys);
+                    stick.setDisplayName(stickName);
+                    controller.addElement(stick,
                             screenScale(4, height),
                             screenScale(41, height),
                             (int) (w * 2.5), (int) (w * 2.5)
@@ -546,14 +554,18 @@ public class KeyBoardControllerConfigurationLoader {
             throw new RuntimeException(e);
         }
 
+        // Keys are square, keep proportions by default when resizing
+        for (keyBoardVirtualControllerElement element : controller.getElements()) {
+            element.getEditState().defaultLockAspect = true;
+            element.getEditState().lockAspect = true;
+        }
+
         controller.setOpacity(config.oscOpacity);
     }
 
     public static void saveProfile(final KeyBoardController controller,
                                    final Context context) {
-        String name = PreferenceManager.getDefaultSharedPreferences(context).getString(OSC_PREFERENCE, OSC_PREFERENCE_VALUE);
-
-        SharedPreferences.Editor prefEditor = context.getSharedPreferences(name, Activity.MODE_PRIVATE).edit();
+        SharedPreferences.Editor prefEditor = LayoutSlots.openActive(context, LayoutSlots.Kind.KEYBOARD).edit();
 
         for (keyBoardVirtualControllerElement element : controller.getElements()) {
             String prefKey = "" + element.elementId;
@@ -567,9 +579,7 @@ public class KeyBoardControllerConfigurationLoader {
     }
 
     public static void loadFromPreferences(final KeyBoardController controller, final Context context) {
-        String name = PreferenceManager.getDefaultSharedPreferences(context).getString(OSC_PREFERENCE, OSC_PREFERENCE_VALUE);
-
-        SharedPreferences pref = context.getSharedPreferences(name, Activity.MODE_PRIVATE);
+        SharedPreferences pref = LayoutSlots.openActive(context, LayoutSlots.Kind.KEYBOARD);
 
         for (keyBoardVirtualControllerElement element : controller.getElements()) {
             String prefKey = "" + element.elementId;

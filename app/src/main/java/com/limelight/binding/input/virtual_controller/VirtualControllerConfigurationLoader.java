@@ -4,12 +4,15 @@
 
 package com.limelight.binding.input.virtual_controller;
 
-import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.DisplayMetrics;
 
 import com.limelight.R;
+import com.limelight.binding.input.overlay.ButtonStyle;
+import com.limelight.binding.input.overlay.GamepadButton;
+import com.limelight.binding.input.overlay.GamepadStyleRenderer;
+import com.limelight.binding.input.overlay.LayoutSlots;
 import com.limelight.nvstream.input.ControllerPacket;
 import com.limelight.preferences.PreferenceConfiguration;
 
@@ -17,13 +20,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public class VirtualControllerConfigurationLoader {
+    /** File of the first gamepad layout slot (kept for compatibility). */
     public static final String OSC_PREFERENCE = "OSC";
-
-    private static int getPercent(
-            int percent,
-            int total) {
-        return (int) (((float) total / (float) 100) * (float) percent);
-    }
 
     // The default controls are specified using a grid of 128*72 cells at 16:9
     private static int screenScale(int units, int height) {
@@ -35,6 +33,7 @@ public class VirtualControllerConfigurationLoader {
             final Context context) {
 
         DigitalPad digitalPad = new DigitalPad(controller, context);
+        digitalPad.setDisplayName(context.getString(R.string.overlay_element_dpad));
         digitalPad.addDigitalPadListener(new DigitalPad.DigitalPadListener() {
             @Override
             public void onDirectionChange(int direction) {
@@ -75,6 +74,7 @@ public class VirtualControllerConfigurationLoader {
 
     private static DigitalButton createDigitalButton(
             final int elementId,
+            final GamepadButton function,
             final int keyShort,
             final int keyLong,
             final int layer,
@@ -87,6 +87,8 @@ public class VirtualControllerConfigurationLoader {
         button.setText(text);
         button.setIcon(icon);
         button.setIconPress(iconPress);
+        button.setFunction(function);
+        button.setDisplayName(GamepadStyleRenderer.buttonName(controller.getButtonStyle(), function));
         button.addDigitalButtonListener(new DigitalButton.DigitalButtonListener() {
             @Override
             public void onClick() {
@@ -131,6 +133,8 @@ public class VirtualControllerConfigurationLoader {
         button.setText(text);
         button.setIcon(icon);
         button.setIconPress(iconPress);
+        button.setFunction(GamepadButton.LT);
+        button.setDisplayName(GamepadStyleRenderer.buttonName(controller.getButtonStyle(), GamepadButton.LT));
         return button;
     }
 
@@ -145,31 +149,24 @@ public class VirtualControllerConfigurationLoader {
         button.setText(text);
         button.setIcon(icon);
         button.setIconPress(iconPress);
+        button.setFunction(GamepadButton.RT);
+        button.setDisplayName(GamepadStyleRenderer.buttonName(controller.getButtonStyle(), GamepadButton.RT));
         return button;
     }
 
-    private static AnalogStick createLeftStick(
+    private static VirtualControllerElement createStick(
+            final boolean left,
+            final boolean free,
             final VirtualController controller,
             final Context context) {
-        return new LeftAnalogStick(controller, context);
-    }
-
-    private static AnalogStick createRightStick(
-            final VirtualController controller,
-            final Context context) {
-        return new RightAnalogStick(controller, context);
-    }
-
-    private static AnalogStickFree createLeftStick2(
-            final VirtualController controller,
-            final Context context) {
-        return new LeftAnalogStickFree(controller, context);
-    }
-
-    private static AnalogStickFree createRightStick2(
-            final VirtualController controller,
-            final Context context) {
-        return new RightAnalogStickFree(controller, context);
+        VirtualControllerElement stick;
+        if (free) {
+            stick = left ? new LeftAnalogStickFree(controller, context) : new RightAnalogStickFree(controller, context);
+        } else {
+            stick = left ? new LeftAnalogStick(controller, context) : new RightAnalogStick(controller, context);
+        }
+        stick.setDisplayName(context.getString(left ? R.string.overlay_element_left_stick : R.string.overlay_element_right_stick));
+        return stick;
     }
 
 
@@ -220,186 +217,152 @@ public class VirtualControllerConfigurationLoader {
         // NOTE: Some of these getPercent() expressions seem like they can be combined
         // into a single call. Due to floating point rounding, this isn't actually possible.
 
-        if (!config.onlyL3R3)
-        {
-            controller.addElement(createDigitalPad(controller, context),
-                    screenScale(DPAD_BASE_X, height),
-                    screenScale(DPAD_BASE_Y, height),
-                    screenScale(DPAD_SIZE, height),
-                    screenScale(DPAD_SIZE, height)
-            );
+        controller.addElement(createDigitalPad(controller, context),
+                screenScale(DPAD_BASE_X, height),
+                screenScale(DPAD_BASE_Y, height),
+                screenScale(DPAD_SIZE, height),
+                screenScale(DPAD_SIZE, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_A,
-                    !config.flipFaceButtons ? ControllerPacket.A_FLAG : ControllerPacket.B_FLAG, 0, 1,
-                    !config.flipFaceButtons ? "A" : "B", R.drawable.facebutton_a,R.drawable.facebutton_a_press, controller, context),
-                    screenScale(BUTTON_BASE_X, height) + rightDisplacement,
-                    screenScale(BUTTON_BASE_Y + 2 * BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_A,
+                !config.flipFaceButtons ? GamepadButton.FACE_A : GamepadButton.FACE_B,
+                !config.flipFaceButtons ? ControllerPacket.A_FLAG : ControllerPacket.B_FLAG, 0, 1,
+                !config.flipFaceButtons ? "A" : "B", R.drawable.facebutton_a,R.drawable.facebutton_a_press, controller, context),
+                screenScale(BUTTON_BASE_X, height) + rightDisplacement,
+                screenScale(BUTTON_BASE_Y + 2 * BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_B,
-                    config.flipFaceButtons ? ControllerPacket.A_FLAG : ControllerPacket.B_FLAG, 0, 1,
-                    config.flipFaceButtons ? "A" : "B", R.drawable.facebutton_b,R.drawable.facebutton_b_press, controller, context),
-                    screenScale(BUTTON_BASE_X + BUTTON_SIZE, height) + rightDisplacement,
-                    screenScale(BUTTON_BASE_Y + BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_B,
+                config.flipFaceButtons ? GamepadButton.FACE_A : GamepadButton.FACE_B,
+                config.flipFaceButtons ? ControllerPacket.A_FLAG : ControllerPacket.B_FLAG, 0, 1,
+                config.flipFaceButtons ? "A" : "B", R.drawable.facebutton_b,R.drawable.facebutton_b_press, controller, context),
+                screenScale(BUTTON_BASE_X + BUTTON_SIZE, height) + rightDisplacement,
+                screenScale(BUTTON_BASE_Y + BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_X,
-                    !config.flipFaceButtons ? ControllerPacket.X_FLAG : ControllerPacket.Y_FLAG, 0, 1,
-                    !config.flipFaceButtons ? "X" : "Y", R.drawable.facebutton_x,R.drawable.facebutton_x_press, controller, context),
-                    screenScale(BUTTON_BASE_X - BUTTON_SIZE, height) + rightDisplacement,
-                    screenScale(BUTTON_BASE_Y + BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_X,
+                !config.flipFaceButtons ? GamepadButton.FACE_X : GamepadButton.FACE_Y,
+                !config.flipFaceButtons ? ControllerPacket.X_FLAG : ControllerPacket.Y_FLAG, 0, 1,
+                !config.flipFaceButtons ? "X" : "Y", R.drawable.facebutton_x,R.drawable.facebutton_x_press, controller, context),
+                screenScale(BUTTON_BASE_X - BUTTON_SIZE, height) + rightDisplacement,
+                screenScale(BUTTON_BASE_Y + BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_Y,
-                    config.flipFaceButtons ? ControllerPacket.X_FLAG : ControllerPacket.Y_FLAG, 0, 1,
-                    config.flipFaceButtons ? "X" : "Y", R.drawable.facebutton_y,R.drawable.facebutton_y_press, controller, context),
-                    screenScale(BUTTON_BASE_X, height) + rightDisplacement,
-                    screenScale(BUTTON_BASE_Y, height),
-                    screenScale(BUTTON_SIZE, height),
-                    screenScale(BUTTON_SIZE, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_Y,
+                config.flipFaceButtons ? GamepadButton.FACE_X : GamepadButton.FACE_Y,
+                config.flipFaceButtons ? ControllerPacket.X_FLAG : ControllerPacket.Y_FLAG, 0, 1,
+                config.flipFaceButtons ? "X" : "Y", R.drawable.facebutton_y,R.drawable.facebutton_y_press, controller, context),
+                screenScale(BUTTON_BASE_X, height) + rightDisplacement,
+                screenScale(BUTTON_BASE_Y, height),
+                screenScale(BUTTON_SIZE, height),
+                screenScale(BUTTON_SIZE, height)
+        );
 
-            controller.addElement(createLeftTrigger(
-                    1, "LT", R.drawable.facebutton_zl,R.drawable.facebutton_zl_press, controller, context),
-                    screenScale(TRIGGER_L_BASE_X, height),
-                    screenScale(TRIGGER_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
+        controller.addElement(createLeftTrigger(
+                1, "LT", R.drawable.facebutton_zl,R.drawable.facebutton_zl_press, controller, context),
+                screenScale(TRIGGER_L_BASE_X, height),
+                screenScale(TRIGGER_BASE_Y, height),
+                screenScale(TRIGGER_WIDTH, height),
+                screenScale(TRIGGER_HEIGHT, height)
+        );
 
-            controller.addElement(createRightTrigger(
-                    1, "RT", R.drawable.facebutton_zr,R.drawable.facebutton_zr_press, controller, context),
-                    screenScale(TRIGGER_R_BASE_X + TRIGGER_DISTANCE, height) + rightDisplacement,
-                    screenScale(TRIGGER_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
+        controller.addElement(createRightTrigger(
+                1, "RT", R.drawable.facebutton_zr,R.drawable.facebutton_zr_press, controller, context),
+                screenScale(TRIGGER_R_BASE_X + TRIGGER_DISTANCE, height) + rightDisplacement,
+                screenScale(TRIGGER_BASE_Y, height),
+                screenScale(TRIGGER_WIDTH, height),
+                screenScale(TRIGGER_HEIGHT, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_LB,
-                    ControllerPacket.LB_FLAG, 0, 1, "LB", R.drawable.facebutton_l,R.drawable.facebutton_l_press, controller, context),
-                    screenScale(TRIGGER_L_BASE_X + TRIGGER_DISTANCE, height),
-                    screenScale(TRIGGER_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_LB, GamepadButton.LB,
+                ControllerPacket.LB_FLAG, 0, 1, "LB", R.drawable.facebutton_l,R.drawable.facebutton_l_press, controller, context),
+                screenScale(TRIGGER_L_BASE_X + TRIGGER_DISTANCE, height),
+                screenScale(TRIGGER_BASE_Y, height),
+                screenScale(TRIGGER_WIDTH, height),
+                screenScale(TRIGGER_HEIGHT, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_RB,
-                    ControllerPacket.RB_FLAG, 0, 1, "RB", R.drawable.facebutton_r,R.drawable.facebutton_r_press, controller, context),
-                    screenScale(TRIGGER_R_BASE_X, height) + rightDisplacement,
-                    screenScale(TRIGGER_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_RB, GamepadButton.RB,
+                ControllerPacket.RB_FLAG, 0, 1, "RB", R.drawable.facebutton_r,R.drawable.facebutton_r_press, controller, context),
+                screenScale(TRIGGER_R_BASE_X, height) + rightDisplacement,
+                screenScale(TRIGGER_BASE_Y, height),
+                screenScale(TRIGGER_WIDTH, height),
+                screenScale(TRIGGER_HEIGHT, height)
+        );
 
-            if(config.enableNewAnalogStick){
-                controller.addElement(createLeftStick2(controller, context),
-                        screenScale(ANALOG_L_BASE_X, height),
-                        screenScale(ANALOG_L_BASE_Y, height),
-                        screenScale(ANALOG_SIZE, height),
-                        screenScale(ANALOG_SIZE, height)
-                );
+        controller.addElement(createStick(true, config.enableNewAnalogStick, controller, context),
+                screenScale(ANALOG_L_BASE_X, height),
+                screenScale(ANALOG_L_BASE_Y, height),
+                screenScale(ANALOG_SIZE, height),
+                screenScale(ANALOG_SIZE, height)
+        );
 
-                controller.addElement(createRightStick2(controller, context),
-                        screenScale(ANALOG_R_BASE_X, height) + rightDisplacement,
-                        screenScale(ANALOG_R_BASE_Y, height),
-                        screenScale(ANALOG_SIZE, height),
-                        screenScale(ANALOG_SIZE, height)
-                );
-            }else{
-                controller.addElement(createLeftStick(controller, context),
-                        screenScale(ANALOG_L_BASE_X, height),
-                        screenScale(ANALOG_L_BASE_Y, height),
-                        screenScale(ANALOG_SIZE, height),
-                        screenScale(ANALOG_SIZE, height)
-                );
+        controller.addElement(createStick(false, config.enableNewAnalogStick, controller, context),
+                screenScale(ANALOG_R_BASE_X, height) + rightDisplacement,
+                screenScale(ANALOG_R_BASE_Y, height),
+                screenScale(ANALOG_SIZE, height),
+                screenScale(ANALOG_SIZE, height)
+        );
 
-                controller.addElement(createRightStick(controller, context),
-                        screenScale(ANALOG_R_BASE_X, height) + rightDisplacement,
-                        screenScale(ANALOG_R_BASE_Y, height),
-                        screenScale(ANALOG_SIZE, height),
-                        screenScale(ANALOG_SIZE, height)
-                );
-            }
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_BACK,
-                    ControllerPacket.BACK_FLAG, 0, 2, "BACK", R.drawable.facebutton_minus,R.drawable.facebutton_minus_press, controller, context),
-                    screenScale(BACK_X, height),
-                    screenScale(START_BACK_Y, height),
-                    screenScale(START_BACK_WIDTH, height),
-                    screenScale(START_BACK_HEIGHT, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_BACK, GamepadButton.BACK,
+                ControllerPacket.BACK_FLAG, 0, 2, "BACK", R.drawable.facebutton_minus,R.drawable.facebutton_minus_press, controller, context),
+                screenScale(BACK_X, height),
+                screenScale(START_BACK_Y, height),
+                screenScale(START_BACK_WIDTH, height),
+                screenScale(START_BACK_HEIGHT, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_START,
-                    ControllerPacket.PLAY_FLAG, 0, 3, "START", R.drawable.facebutton_plus,R.drawable.facebutton_plus_press, controller, context),
-                    screenScale(START_X, height) + rightDisplacement,
-                    screenScale(START_BACK_Y, height),
-                    screenScale(START_BACK_WIDTH, height),
-                    screenScale(START_BACK_HEIGHT, height)
-            );
+        controller.addElement(createDigitalButton(
+                VirtualControllerElement.EID_START, GamepadButton.START,
+                ControllerPacket.PLAY_FLAG, 0, 3, "START", R.drawable.facebutton_plus,R.drawable.facebutton_plus_press, controller, context),
+                screenScale(START_X, height) + rightDisplacement,
+                screenScale(START_BACK_Y, height),
+                screenScale(START_BACK_WIDTH, height),
+                screenScale(START_BACK_HEIGHT, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                            VirtualControllerElement.EID_LSB,
-                            ControllerPacket.LS_CLK_FLAG, 0, 1, "L3", R.drawable.facebutton_l3,R.drawable.facebutton_l3_press, controller, context),
-                    screenScale(TRIGGER_L_BASE_X, height),
-                    screenScale(L3_R3_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
+        controller.addElement(createDigitalButton(
+                        VirtualControllerElement.EID_LSB, GamepadButton.L3,
+                        ControllerPacket.LS_CLK_FLAG, 0, 1, "L3", R.drawable.facebutton_l3,R.drawable.facebutton_l3_press, controller, context),
+                screenScale(TRIGGER_L_BASE_X, height),
+                screenScale(L3_R3_BASE_Y, height),
+                screenScale(TRIGGER_WIDTH, height),
+                screenScale(TRIGGER_HEIGHT, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                            VirtualControllerElement.EID_RSB,
-                            ControllerPacket.RS_CLK_FLAG, 0, 1, "R3", R.drawable.facebutton_r3,R.drawable.facebutton_r3_press, controller, context),
-                    screenScale(TRIGGER_R_BASE_X + TRIGGER_DISTANCE, height) + rightDisplacement,
-                    screenScale(L3_R3_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
+        controller.addElement(createDigitalButton(
+                        VirtualControllerElement.EID_RSB, GamepadButton.R3,
+                        ControllerPacket.RS_CLK_FLAG, 0, 1, "R3", R.drawable.facebutton_r3,R.drawable.facebutton_r3_press, controller, context),
+                screenScale(TRIGGER_R_BASE_X + TRIGGER_DISTANCE, height) + rightDisplacement,
+                screenScale(L3_R3_BASE_Y, height),
+                screenScale(TRIGGER_WIDTH, height),
+                screenScale(TRIGGER_HEIGHT, height)
+        );
 
-            controller.addElement(createDigitalButton(
-                            VirtualControllerElement.EID_TOUCHPAD,
-                            ControllerPacket.TOUCHPAD_FLAG, 0, 1, "Trackpad", R.drawable.facebutton_touchpad_press,R.drawable.facebutton_touchpad, controller, context),
-                    screenScale(50, height),
-                    screenScale(50, height),
-                    screenScale(20, height),
-                    screenScale(12, height)
-            );
-        }
-        else {
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_LSB,
-                    ControllerPacket.LS_CLK_FLAG, 0, 1, "L3", -1, -1,controller, context),
-                    screenScale(TRIGGER_L_BASE_X, height),
-                    screenScale(L3_R3_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
-
-            controller.addElement(createDigitalButton(
-                    VirtualControllerElement.EID_RSB,
-                    ControllerPacket.RS_CLK_FLAG, 0, 1, "R3", -1,-1, controller, context),
-                    screenScale(TRIGGER_R_BASE_X + TRIGGER_DISTANCE, height) + rightDisplacement,
-                    screenScale(L3_R3_BASE_Y, height),
-                    screenScale(TRIGGER_WIDTH, height),
-                    screenScale(TRIGGER_HEIGHT, height)
-            );
-        }
-
+        controller.addElement(createDigitalButton(
+                        VirtualControllerElement.EID_TOUCHPAD, GamepadButton.TOUCHPAD,
+                        ControllerPacket.TOUCHPAD_FLAG, 0, 1, "Trackpad", R.drawable.facebutton_touchpad_press,R.drawable.facebutton_touchpad, controller, context),
+                screenScale(50, height),
+                screenScale(50, height),
+                screenScale(20, height),
+                screenScale(12, height)
+        );
 
         if(config.showGuideButton){
-            controller.addElement(createDigitalButton(VirtualControllerElement.EID_GDB,
+            controller.addElement(createDigitalButton(VirtualControllerElement.EID_GDB, GamepadButton.GUIDE,
                             ControllerPacket.SPECIAL_BUTTON_FLAG, 0, 1, "GUIDE", -1, -1, controller, context),
                     screenScale(GUIDE_X, height)+ rightDisplacement,
                     screenScale(GUIDE_Y, height),
@@ -408,12 +371,25 @@ public class VirtualControllerConfigurationLoader {
             );
         }
 
+        // Round controls keep their proportions by default when resized
+        for (VirtualControllerElement element : controller.getElements()) {
+            boolean round = element instanceof DigitalPad
+                    || element instanceof AnalogStick
+                    || element instanceof AnalogStickFree
+                    || element.elementId == VirtualControllerElement.EID_A
+                    || element.elementId == VirtualControllerElement.EID_B
+                    || element.elementId == VirtualControllerElement.EID_X
+                    || element.elementId == VirtualControllerElement.EID_Y;
+            element.getEditState().defaultLockAspect = round;
+            element.getEditState().lockAspect = round;
+        }
+
         controller.setOpacity(config.oscOpacity);
     }
 
     public static void saveProfile(final VirtualController controller,
                                    final Context context) {
-        SharedPreferences.Editor prefEditor = context.getSharedPreferences(OSC_PREFERENCE, Activity.MODE_PRIVATE).edit();
+        SharedPreferences.Editor prefEditor = LayoutSlots.openActive(context, LayoutSlots.Kind.GAMEPAD).edit();
 
         for (VirtualControllerElement element : controller.getElements()) {
             String prefKey = ""+element.elementId;
@@ -428,7 +404,7 @@ public class VirtualControllerConfigurationLoader {
     }
 
     public static void loadFromPreferences(final VirtualController controller, final Context context) {
-        SharedPreferences pref = context.getSharedPreferences(OSC_PREFERENCE, Activity.MODE_PRIVATE);
+        SharedPreferences pref = LayoutSlots.openActive(context, LayoutSlots.Kind.GAMEPAD);
 
         for (VirtualControllerElement element : controller.getElements()) {
             String prefKey = ""+element.elementId;

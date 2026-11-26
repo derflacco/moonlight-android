@@ -10,6 +10,9 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.view.MotionEvent;
 
+import com.limelight.binding.input.overlay.ButtonStyle;
+import com.limelight.binding.input.overlay.GamepadStyleRenderer;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -122,6 +125,7 @@ public class AnalogStick extends VirtualControllerElement {
     private float position_stick_y = 0;
 
     private final Paint paint = new Paint();
+    private final GamepadStyleRenderer renderer = new GamepadStyleRenderer();
 
     private STICK_STATE stick_state = STICK_STATE.NO_MOVEMENT;
     private CLICK_STATE click_state = CLICK_STATE.SINGLE;
@@ -221,6 +225,16 @@ public class AnalogStick extends VirtualControllerElement {
     protected void onElementDraw(Canvas canvas) {
         // set transparent background
         canvas.drawColor(Color.TRANSPARENT);
+
+        ButtonStyle style = getButtonStyle();
+        if (style.isVector()) {
+            boolean moved = stick_state != STICK_STATE.NO_MOVEMENT;
+            renderer.drawStick(canvas, style, getWidth() / 2f, getHeight() / 2f, radius_complete,
+                    moved ? position_stick_x : getWidth() / 2f,
+                    moved ? position_stick_y : getHeight() / 2f,
+                    radius_analog_stick, isPressed(), getOverlayAlpha());
+            return;
+        }
 
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(getDefaultStrokeWidth());

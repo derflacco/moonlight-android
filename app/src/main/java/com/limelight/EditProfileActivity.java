@@ -281,6 +281,11 @@ public class EditProfileActivity extends AppCompatActivity {
             if (_pref != null) {
                 _pref.setVisible(false);
             }
+            // The overlay layouts are global, not per profile
+            _pref = findPreference("category_input_overlay");
+            if (_pref != null) {
+                _pref.setVisible(false);
+            }
             _pref = findPreference("import_keyboard_file");
             if (_pref != null) {
                 _pref.setVisible(false);

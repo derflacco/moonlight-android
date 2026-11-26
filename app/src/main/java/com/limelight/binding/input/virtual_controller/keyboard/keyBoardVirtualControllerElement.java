@@ -4,24 +4,19 @@
 
 package com.limelight.binding.input.virtual_controller.keyboard;
 
-import android.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.graphics.Canvas;
-import android.graphics.Paint;
 import android.util.DisplayMetrics;
-import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
-import android.widget.FrameLayout;
 
-import com.limelight.Game;
-import com.limelight.binding.input.virtual_controller.VirtualController;
+import com.limelight.binding.input.overlay.EditableElement;
+import com.limelight.binding.input.overlay.ElementEditState;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
-public abstract class keyBoardVirtualControllerElement extends View {
+public abstract class keyBoardVirtualControllerElement extends View implements EditableElement {
     protected static boolean _PRINT_DEBUG_INFORMATION = false;
 
     public static final int EID_DPAD = 1;
@@ -43,35 +38,11 @@ public abstract class keyBoardVirtualControllerElement extends View {
     protected KeyBoardController virtualController;
     protected final String elementId;
 
-    private final Paint paint = new Paint();
-
     private int normalColor = 0xF0888888;
     protected int pressedColor = 0xA3DCDCDE;
-    private int configMoveColor = 0xF0FF0000;
-    private int configResizeColor = 0xF0FF00FF;
-    private int configSelectedColor = 0xF000FF00;
 
-    private int configDisabledColor = 0xF0AAAAAA;
-
-    protected int startSize_x;
-    protected int startSize_y;
-
-    float position_pressed_x = 0;
-    float position_pressed_y = 0;
-
-    public boolean enabled = true;
-    public boolean hidden = false;
-
-    private enum Mode {
-        Normal,
-        Resize,
-        Move
-    }
-
-    private Mode currentMode = Mode.Normal;
-
-    private int lastMoveX;
-    private int lastMoveY;
+    private final ElementEditState editState = new ElementEditState();
+    private String displayName;
 
     protected keyBoardVirtualControllerElement(KeyBoardController controller, Context context, String elementId) {
         super(context);
@@ -80,214 +51,69 @@ public abstract class keyBoardVirtualControllerElement extends View {
         this.elementId = elementId;
     }
 
-    protected void moveElement(int pressed_x, int pressed_y, int x, int y) {
-        int newPos_x = (int) getX() + x - pressed_x;
-        int newPos_y = (int) getY() + y - pressed_y;
+    // ------------------------------------------------------------------------------------
+    // EditableElement
+    // ------------------------------------------------------------------------------------
 
-        // Save last position for potential resize on ACTION_UP
-        lastMoveX = newPos_x;
-        lastMoveY = newPos_y;
-
-        // Only apply snapping in move mode
-        if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.MoveButtons) {
-            // Convert other elements to array for snapping calculation
-            View[] otherViews = new View[virtualController.getElements().size() - 1];
-            int index = 0;
-            for (keyBoardVirtualControllerElement element : virtualController.getElements()) {
-                if (element != this) {
-                    otherViews[index++] = element;
-                }
-            }
-
-            // Calculate snapped position without resize during movement
-            LayoutSnappingHelper.SnapResult snapResult = LayoutSnappingHelper.calculateSnappedPosition(
-                this, otherViews, newPos_x, newPos_y
-            );
-
-            newPos_x = snapResult.newX;
-            newPos_y = snapResult.newY;
-
-            // Provide haptic feedback if snapping occurred
-            if (snapResult.didSnap || snapResult.didAdjustSpacing) {
-                virtualController.vibrate(KeyEvent.ACTION_DOWN);
-            }
-        }
-
-        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
-
-        layoutParams.leftMargin = newPos_x > 0 ? newPos_x : 0;
-        layoutParams.topMargin = newPos_y > 0 ? newPos_y : 0;
-        layoutParams.rightMargin = 0;
-        layoutParams.bottomMargin = 0;
-
-        requestLayout();
+    @Override
+    public View getView() {
+        return this;
     }
 
-    protected void resizeElement(int pressed_x, int pressed_y, int width, int height) {
-        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
-
-        int newHeight = height + (startSize_y - pressed_y);
-        int newWidth = width + (startSize_x - pressed_x);
-
-        layoutParams.height = newHeight > 20 ? newHeight : 20;
-        layoutParams.width = newWidth > 20 ? newWidth : 20;
-
-        requestLayout();
+    @Override
+    public String getEditorKey() {
+        return elementId;
     }
 
-    protected void checkAndApplyResize() {
-        if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.MoveButtons) {
-            // Convert other elements to array for overlap check
-            View[] otherViews = new View[virtualController.getElements().size() - 1];
-            int index = 0;
-            for (keyBoardVirtualControllerElement element : virtualController.getElements()) {
-                if (element != this) {
-                    otherViews[index++] = element;
-                }
-            }
-
-            // Check final position for resize
-            LayoutSnappingHelper.SnapResult snapResult = LayoutSnappingHelper.calculateSnappedPosition(
-                this, otherViews, lastMoveX, lastMoveY
-            );
-
-            if (snapResult.didResize) {
-                FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
-                layoutParams.width = snapResult.newWidth;
-                layoutParams.height = snapResult.newHeight;
-                virtualController.vibrate(KeyEvent.ACTION_DOWN);
-                requestLayout();
-            }
-        }
+    @Override
+    public String getDisplayName() {
+        return displayName != null && !displayName.isEmpty() ? displayName : elementId;
     }
+
+    public void setDisplayName(String displayName) {
+        this.displayName = displayName;
+    }
+
+    @Override
+    public ElementEditState getEditState() {
+        return editState;
+    }
+
+    @Override
+    public boolean isRemovable() {
+        return true;
+    }
+
+    public boolean isRemoved() {
+        return editState.removed;
+    }
+
+    public boolean isShownInGame() {
+        return editState.shown && !editState.removed;
+    }
+
+    /** True while the overlay is displayed inside the layout editor. */
+    protected boolean isEditorPreview() {
+        return editState.editing;
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Drawing / input
+    // ------------------------------------------------------------------------------------
 
     @Override
     protected void onDraw(Canvas canvas) {
         onElementDraw(canvas);
-
-        if (currentMode != Mode.Normal) {
-            paint.setColor(configSelectedColor);
-            paint.setStrokeWidth(getDefaultStrokeWidth());
-            paint.setStyle(Paint.Style.STROKE);
-
-            canvas.drawRect(paint.getStrokeWidth(), paint.getStrokeWidth(),
-                    getWidth()-paint.getStrokeWidth(), getHeight()-paint.getStrokeWidth(),
-                    paint);
-        }
-
         super.onDraw(canvas);
     }
 
-    /*
-    protected void actionShowNormalColorChooser() {
-        AmbilWarnaDialog colorDialog = new AmbilWarnaDialog(getContext(), normalColor, true, new AmbilWarnaDialog.OnAmbilWarnaListener() {
-            @Override
-            public void onCancel(AmbilWarnaDialog dialog)
-            {}
-
-            @Override
-            public void onOk(AmbilWarnaDialog dialog, int color) {
-                normalColor = color;
-                invalidate();
-            }
-        });
-        colorDialog.show();
-    }
-
-    protected void actionShowPressedColorChooser() {
-        AmbilWarnaDialog colorDialog = new AmbilWarnaDialog(getContext(), normalColor, true, new AmbilWarnaDialog.OnAmbilWarnaListener() {
-            @Override
-            public void onCancel(AmbilWarnaDialog dialog) {
-            }
-
-            @Override
-            public void onOk(AmbilWarnaDialog dialog, int color) {
-                pressedColor = color;
-                invalidate();
-            }
-        });
-        colorDialog.show();
-    }
-    */
-
-    protected void actionEnableMove() {
-        currentMode = Mode.Move;
-    }
-
-    protected void actionEnableResize() {
-        currentMode = Mode.Resize;
-    }
-
-    protected void actionCancel() {
-        currentMode = Mode.Normal;
-        invalidate();
-    }
-
     protected int getDefaultColor() {
-        if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.MoveButtons)
-            return configMoveColor;
-        else if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.ResizeButtons)
-            return configResizeColor;
-        else if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.DisableEnableButtons)
-            return enabled ? configSelectedColor: configDisabledColor;
-        else
-            return normalColor;
+        return normalColor;
     }
 
     protected int getDefaultStrokeWidth() {
         DisplayMetrics screen = getResources().getDisplayMetrics();
         return (int)(screen.heightPixels*0.004f);
-    }
-
-    protected void showConfigurationDialog() {
-        AlertDialog.Builder alertBuilder = new AlertDialog.Builder(getContext());
-
-        alertBuilder.setTitle("Configuration");
-
-        CharSequence functions[] = new CharSequence[]{
-                "Move",
-                "Resize",
-            /*election
-            "Set n
-            Disable color sormal color",
-            "Set pressed color",
-            */
-                "Cancel"
-        };
-
-        alertBuilder.setItems(functions, new DialogInterface.OnClickListener() {
-
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                switch (which) {
-                    case 0: { // move
-                        actionEnableMove();
-                        break;
-                    }
-                    case 1: { // resize
-                        actionEnableResize();
-                        break;
-                    }
-                /*
-                case 2: { // set default color
-                    actionShowNormalColorChooser();
-                    break;
-                }
-                case 3: { // set pressed color
-                    actionShowPressedColorChooser();
-                    break;
-                }
-                */
-                    default: { // cancel
-                        actionCancel();
-                        break;
-                    }
-                }
-            }
-        });
-        AlertDialog alert = alertBuilder.create();
-        // show menu
-        alert.show();
     }
 
     @Override
@@ -301,61 +127,12 @@ public abstract class keyBoardVirtualControllerElement extends View {
             return true;
         }
 
-        if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.Active) {
-            return onElementTouchEvent(event);
+        // The layout editor handles every touch while it is open
+        if (editState.editing) {
+            return false;
         }
 
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN: {
-                position_pressed_x = event.getX();
-                position_pressed_y = event.getY();
-                startSize_x = getWidth();
-                startSize_y = getHeight();
-
-                if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.MoveButtons)
-                    actionEnableMove();
-                else if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.ResizeButtons)
-                    actionEnableResize();
-                else if (virtualController.getControllerMode() == KeyBoardController.ControllerMode.DisableEnableButtons)
-                    actionDisableEnableButton();
-                return true;
-            }
-            case MotionEvent.ACTION_MOVE: {
-                switch (currentMode) {
-                    case Move: {
-                        moveElement(
-                                (int) position_pressed_x,
-                                (int) position_pressed_y,
-                                (int) event.getX(),
-                                (int) event.getY());
-                        break;
-                    }
-                    case Resize: {
-                        resizeElement(
-                                (int) position_pressed_x,
-                                (int) position_pressed_y,
-                                (int) event.getX(),
-                                (int) event.getY());
-                        break;
-                    }
-                    case Normal: {
-                        break;
-                    }
-                }
-                return true;
-            }
-            case MotionEvent.ACTION_CANCEL:
-            case MotionEvent.ACTION_UP: {
-                if (currentMode == Mode.Move) {
-                    checkAndApplyResize();
-                }
-                actionCancel();
-                return true;
-            }
-            default: {
-            }
-        }
-        return true;
+        return onElementTouchEvent(event);
     }
 
     abstract protected void onElementDraw(Canvas canvas);
@@ -392,47 +169,15 @@ public abstract class keyBoardVirtualControllerElement extends View {
         return getWidth() > getHeight() ? getHeight() : getWidth();
     }
 
+    // ------------------------------------------------------------------------------------
+    // Persistence
+    // ------------------------------------------------------------------------------------
 
     public JSONObject getConfiguration() throws JSONException {
-        JSONObject configuration = new JSONObject();
-
-        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
-
-        configuration.put("LEFT", layoutParams.leftMargin);
-        configuration.put("TOP", layoutParams.topMargin);
-        configuration.put("WIDTH", layoutParams.width);
-        configuration.put("HEIGHT", layoutParams.height);
-        configuration.put("ENABLED", enabled);
-        configuration.put("HIDDEN", hidden);
-        return configuration;
+        return editState.toJson(this, getResources().getDisplayMetrics());
     }
 
     public void loadConfiguration(JSONObject configuration) throws JSONException {
-        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
-
-        layoutParams.leftMargin = configuration.getInt("LEFT");
-        layoutParams.topMargin = configuration.getInt("TOP");
-        layoutParams.width = configuration.getInt("WIDTH");
-        layoutParams.height = configuration.getInt("HEIGHT");
-        enabled = configuration.getBoolean("ENABLED");
-        hidden = configuration.optBoolean("HIDDEN", false);
-        
-        // Only hide if not in configuration mode
-        if (virtualController.getControllerMode() != KeyBoardController.ControllerMode.DisableEnableButtons) {
-            setVisibility(!hidden && enabled ? VISIBLE : GONE);
-        } else {
-            setVisibility(!hidden ? VISIBLE : GONE);
-        }
-        requestLayout();
+        editState.fromJson(this, configuration, getResources().getDisplayMetrics());
     }
-
-    protected void actionDisableEnableButton() {
-        enabled = !enabled;
-        // In configuration mode, keep the button visible
-        if (!hidden && virtualController.getControllerMode() != KeyBoardController.ControllerMode.DisableEnableButtons) {
-            setVisibility(enabled ? VISIBLE : GONE);
-        }
-        invalidate(); // Redraw to show enabled/disabled state
-    }
-
 }

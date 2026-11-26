@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="OverlayEditorAction">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:paddingLeft">6dp</item>
+        <item name="android:paddingRight">6dp</item>
+        <item name="android:paddingTop">5dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:layout_marginLeft">1dp</item>
+        <item name="android:layout_marginRight">1dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:drawablePadding">1dp</item>
+        <item name="android:textColor">#E6FFFFFF</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:background">@drawable/oe_chip_bg</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <style name="OverlayEditorTab">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:paddingLeft">14dp</item>
+        <item name="android:paddingRight">14dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:layout_marginLeft">2dp</item>
+        <item name="android:layout_marginRight">2dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:background">@drawable/oe_chip_bg</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <style name="OverlayEditorDivider">
+        <item name="android:layout_width">1dp</item>
+        <item name="android:layout_height">32dp</item>
+        <item name="android:layout_marginLeft">5dp</item>
+        <item name="android:layout_marginRight">5dp</item>
+        <item name="android:background">#33FFFFFF</item>
+    </style>
+
+    <style name="OverlayEditorLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:minWidth">64dp</item>
+        <item name="android:paddingRight">8dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">#B3FFFFFF</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:maxLines">1</item>
+    </style>
+
+    <style name="OverlayEditorValue">
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:gravity">end</item>
+        <item name="android:textColor">#E6FFFFFF</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:maxLines">1</item>
+    </style>
+
+    <style name="OverlayEditorSeekBar">
+        <item name="android:layout_width">170dp</item>
+        <item name="android:layout_height">30dp</item>
+        <item name="android:max">100</item>
+    </style>
+
+    <style name="OverlayEditorNudge">
+        <item name="android:layout_width">36dp</item>
+        <item name="android:layout_height">36dp</item>
+        <item name="android:padding">7dp</item>
+        <item name="android:src">@drawable/ic_oe_arrow_up</item>
+        <item name="android:background">@drawable/oe_chip_bg</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+</resources>

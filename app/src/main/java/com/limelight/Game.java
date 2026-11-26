@@ -21,6 +21,8 @@ import com.limelight.binding.input.driver.UsbDriverService;
 import com.limelight.binding.input.evdev.EvdevListener;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.input.touch.TrackpadContext;
+import com.limelight.binding.input.overlay.EditableOverlay;
+import com.limelight.binding.input.overlay.editor.OverlayEditorView;
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardLayoutController;
@@ -209,6 +211,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private KeyBoardController keyBoardController;
 
     private KeyBoardLayoutController keyBoardLayoutController;
+
+    // Input overlay layout editor, while it is open
+    private OverlayEditorView overlayEditor;
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -1162,6 +1167,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void initKeyboardController(){
         keyBoardController = new KeyBoardController(conn,(FrameLayout)rootView, this);
+        keyBoardController.setOnConfigureListener(() -> openOverlayEditor(keyBoardController));
         keyBoardController.refreshLayout();
         keyBoardController.show();
     }
@@ -1172,8 +1178,40 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void initVirtualController(){
         virtualController = new VirtualController(controllerHandler, (FrameLayout)rootView, this);
+        virtualController.setOnConfigureListener(() -> openOverlayEditor(virtualController));
         virtualController.refreshLayout();
         virtualController.show();
+    }
+
+    /**
+     * Opens the input overlay editor over the stream. Game input from the touch screen is
+     * blocked until it is closed.
+     */
+    public void openOverlayEditor(EditableOverlay initial) {
+        if (overlayEditor != null) {
+            return;
+        }
+        List<EditableOverlay> overlays = new ArrayList<>();
+        if (virtualController != null && virtualController.isShown()) {
+            overlays.add(virtualController);
+        }
+        if (keyBoardController != null && keyBoardController.shown) {
+            overlays.add(keyBoardController);
+        }
+        if (!overlays.contains(initial)) {
+            overlays.add(initial);
+        }
+        overlayEditor = OverlayEditorView.open((FrameLayout) rootView, overlays, initial, saved -> {
+            overlayEditor = null;
+            // Give key input back to the stream
+            if (streamContainer != null) {
+                streamContainer.requestFocus();
+            }
+        });
+    }
+
+    public boolean isOverlayEditorOpen() {
+        return overlayEditor != null;
     }
 
     private void initkeyBoardLayoutController(){
@@ -1274,6 +1312,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         if(keyBoardLayoutController != null){
             keyBoardLayoutController.refreshLayout();
+        }
+
+        if (overlayEditor != null) {
+            // Overlays were rebuilt for the new screen size
+            overlayEditor.onHostLayoutRebuilt();
         }
 
         // Hide on-screen overlays in PiP mode
@@ -3264,10 +3307,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (eventSource == InputDevice.SOURCE_TOUCHPAD) {
                     return handleTouchInput(event, trackpadContextMap, false);
                 } else {
-                    if (virtualController != null &&
-                            (virtualController.getControllerMode() == VirtualController.ControllerMode.MoveButtons ||
-                                    virtualController.getControllerMode() == VirtualController.ControllerMode.ResizeButtons)) {
-                        // Ignore presses when the virtual controller is being configured
+                    if (overlayEditor != null) {
+                        // Ignore presses while the on-screen controls are being edited
                         return true;
                     }
 
@@ -4170,7 +4211,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        // The overlay editor gets the back key while it is open
+        if (overlayEditor != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
+                overlayEditor.onBackPressed();
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     public void onBackPressed() {
+        if (overlayEditor != null) {
+            overlayEditor.onBackPressed();
+            return;
+        }
         if(prefConfig.enableBackMenu){
             showGameMenu(null);
             return;
